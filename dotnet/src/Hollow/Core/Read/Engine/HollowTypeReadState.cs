@@ -65,6 +65,15 @@ public abstract class HollowTypeReadState : IHollowTypeDataAccess
     /// <summary>An approximation of the memory this type's records occupy, in bytes.</summary>
     public abstract long ApproxHeapFootprintInBytes { get; }
 
+    /// <summary>
+    /// The number of shards this type's records are split across, or 0 before a blob has been read.
+    /// </summary>
+    /// <remarks>
+    /// A producer restoring from this state has to adopt the same shard count, because a record's
+    /// ordinal determines which shard holds it and a delta is written per shard.
+    /// </remarks>
+    public abstract int NumShards { get; }
+
     /// <summary>The listeners currently associated with this type.</summary>
     public IReadOnlyList<IHollowTypeStateListener> Listeners => _stateListeners;
 

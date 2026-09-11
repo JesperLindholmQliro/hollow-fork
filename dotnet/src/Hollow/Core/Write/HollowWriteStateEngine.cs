@@ -16,7 +16,9 @@
  */
 
 using Hollow.Api.Error;
+using Hollow.Core.Read.Engine;
 using Hollow.Core.Schema;
+using Hollow.Core.Util;
 
 namespace Hollow.Core.Write;
 
@@ -26,8 +28,7 @@ namespace Hollow.Core.Write;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <strong>Port note.</strong> Delta and reverse-delta production, restoring from a prior read state,
-/// and the parallel snapshot calculation are not ported — see <c>PORTING.md</c>.
+/// <strong>Port note.</strong> The parallel snapshot calculation is not ported — see <c>PORTING.md</c>.
 /// </para>
 /// </remarks>
 public sealed class HollowWriteStateEngine : IHollowDataset
@@ -39,6 +40,12 @@ public sealed class HollowWriteStateEngine : IHollowDataset
 
     private readonly Dictionary<string, HollowTypeWriteState> _typeStates = new(StringComparer.Ordinal);
     private readonly List<HollowTypeWriteState> _orderedTypeStates = [];
+
+    /// <summary>
+    /// Whether this engine is in the "adding records" phase rather than the "writing" phase. A fresh
+    /// engine starts in the adding phase.
+    /// </summary>
+    private bool _preparedForNextCycle = true;
 
     /// <summary>The producer header tags written into the blob.</summary>
     public Dictionary<string, string> HeaderTags { get; } = new(StringComparer.Ordinal);
@@ -121,8 +128,19 @@ public sealed class HollowWriteStateEngine : IHollowDataset
     /// <summary>
     /// Rolls every type forward to the next cycle, discarding records no longer referenced.
     /// </summary>
+    /// <remarks>
+    /// A no-op when this engine is already accepting records, so that a caller need not track which
+    /// phase of the cycle it is in. That matters after <see cref="RestoreFrom"/>, which leaves the
+    /// engine ready to accept records: rolling forward again there would discard the restored ordinal
+    /// assignment and the delta would then claim every record had changed.
+    /// </remarks>
     public void PrepareForNextCycle()
     {
+        if (_preparedForNextCycle)
+        {
+            return;
+        }
+
         PreviousRandomizedTag = RandomizedTag;
         PreviousHeaderTags = new Dictionary<string, string>(HeaderTags, StringComparer.Ordinal);
 
@@ -130,17 +148,167 @@ public sealed class HollowWriteStateEngine : IHollowDataset
         {
             typeState.PrepareForNextCycle();
         }
+
+        _preparedForNextCycle = true;
+        RestoredStates = null;
     }
 
     /// <summary>
-    /// Finalises ordinal assignment and the shard layout for every type.
+    /// Finalises ordinal assignment and the shard layout for every type, after which no more records
+    /// may be added until the next cycle.
     /// </summary>
+    /// <remarks>
+    /// A no-op when this engine is already prepared, so that writing a snapshot and a delta for the
+    /// same cycle costs the work only once.
+    /// </remarks>
     public void PrepareForWrite()
     {
+        if (!_preparedForNextCycle)
+        {
+            return;
+        }
+
         foreach (HollowTypeWriteState typeState in _orderedTypeStates)
         {
             typeState.PrepareForWrite();
         }
+
+        _preparedForNextCycle = false;
+    }
+
+    /// <summary>
+    /// Populates this engine from a published read state, so that it can continue that state's delta
+    /// chain rather than starting a new one with a fresh snapshot.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is what a producer does on restart. The data model must already be registered — through
+    /// <see cref="HollowWriteStateCreator"/>, the object mapper, or <see cref="AddTypeState"/> — and no
+    /// records may have been added yet.
+    /// </para>
+    /// <para>
+    /// After restoring, add this cycle's records as usual and write a delta: every record that has not
+    /// changed keeps the ordinal the published state gave it, so the delta carries only real changes. A
+    /// type present in the read state but not in the data model is ignored, and a type in the data
+    /// model but not in the read state simply starts empty.
+    /// </para>
+    /// <para>
+    /// <see cref="PreviousRandomizedTag"/> is taken from the read state and a fresh
+    /// <see cref="RandomizedTag"/> is minted, which is what lets the resulting delta be recognised as
+    /// applying to the published state. Assign <see cref="RandomizedTag"/> afterwards to pin it.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">
+    /// A type's shard count differs between the read state and the registered write state, or a write
+    /// state already holds records.
+    /// </exception>
+    public void RestoreFrom(HollowReadStateEngine readStateEngine)
+    {
+        ArgumentNullException.ThrowIfNull(readStateEngine);
+
+        // Check every shard count before restoring anything: a mismatch leaves the engine untouched
+        // rather than half-populated.
+        foreach (HollowTypeReadState readState in readStateEngine.TypeStates.Values)
+        {
+            if (GetTypeState(readState.TypeName) is not { } writeState)
+            {
+                continue;
+            }
+
+            if (writeState.NumShards == -1)
+            {
+                writeState.SetNumShards(readState.NumShards);
+            }
+            else if (readState.NumShards != 0 && writeState.NumShards != readState.NumShards)
+            {
+                throw new InvalidOperationException(
+                    $"Attempting to restore from a read state with {readState.NumShards.Invariant()} shards for "
+                    + $"type {readState.TypeName} into a write state with {writeState.NumShards.Invariant()} shards.");
+            }
+        }
+
+        List<string> restoredStates = [];
+
+        foreach (HollowTypeReadState readState in readStateEngine.TypeStates.Values)
+        {
+            restoredStates.Add(readState.TypeName);
+            GetTypeState(readState.TypeName)?.RestoreFrom(readState);
+        }
+
+        RestoredStates = restoredStates;
+
+        PreviousRandomizedTag = readStateEngine.RandomizedTag;
+        RandomizedTag = MintNewRandomizedTag(PreviousRandomizedTag);
+        OverridePreviousHeaderTags(readStateEngine.HeaderTags);
+    }
+
+    /// <summary>
+    /// The names of the types found in the read state the last <see cref="RestoreFrom"/> call read, or
+    /// <see langword="null"/> when this engine was never restored.
+    /// </summary>
+    public IReadOnlyList<string>? RestoredStates { get; private set; }
+
+    /// <summary>Whether this engine was restored and has not yet completed a cycle.</summary>
+    public bool IsRestored => RestoredStates is not null;
+
+    /// <summary>
+    /// Verifies that every type the restored read state held and this engine also declares was actually
+    /// restored.
+    /// </summary>
+    /// <remarks>
+    /// A type registered <em>after</em> <see cref="RestoreFrom"/> ran carries none of the published
+    /// state's ordinals, so a delta written from it would claim every one of its records is new and
+    /// would not apply to the published state. Refusing here turns that into an error at write time
+    /// rather than a corrupt delta chain.
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">Some declared type was not restored.</exception>
+    internal void EnsureAllNecessaryStatesRestored()
+    {
+        if (RestoredStates is not { } restoredStates)
+        {
+            return;
+        }
+
+        List<string> unrestored = [.. _orderedTypeStates
+            .Where(state => restoredStates.Contains(state.Schema.Name, StringComparer.Ordinal) && !state.IsRestored)
+            .Select(state => state.Schema.Name)];
+
+        if (unrestored.Count > 0)
+        {
+            throw new InvalidOperationException(
+                $"The current state was restored but holds unrestored state for the types [{string.Join(", ", unrestored)}]. "
+                + "Register every type before calling RestoreFrom.");
+        }
+    }
+
+    /// <summary>
+    /// Replaces the header tags a reverse delta will carry, without touching the tags this cycle writes.
+    /// </summary>
+    public void OverridePreviousHeaderTags(IReadOnlyDictionary<string, string> previousHeaderTags)
+    {
+        ArgumentNullException.ThrowIfNull(previousHeaderTags);
+
+        PreviousHeaderTags = new Dictionary<string, string>(previousHeaderTags, StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// Mints a tag distinguishable from <paramref name="previousRandomizedTag"/> in its high 32 bits,
+    /// which is the part the object mapper stamps into a cached ordinal to tell cycles apart.
+    /// </summary>
+    private static long MintNewRandomizedTag(long previousRandomizedTag)
+    {
+        const long cycleMask = unchecked((long)0xFFFFFFFF00000000L);
+
+        long tag;
+        do
+        {
+            tag = Random.Shared.NextInt64(long.MinValue, long.MaxValue);
+        }
+        while ((tag & cycleMask) == 0
+            || (tag & cycleMask) == cycleMask
+            || (tag & cycleMask) == (previousRandomizedTag & cycleMask));
+
+        return tag;
     }
 
     /// <summary>

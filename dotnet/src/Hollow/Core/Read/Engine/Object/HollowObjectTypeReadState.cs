@@ -68,6 +68,9 @@ public sealed partial class HollowObjectTypeReadState : HollowTypeReadState, IHo
     public override int MaxOrdinal => _maxOrdinal;
 
     /// <inheritdoc />
+    public override int NumShards => _shards.Length;
+
+    /// <inheritdoc />
     public override long ApproxHeapFootprintInBytes
     {
         get

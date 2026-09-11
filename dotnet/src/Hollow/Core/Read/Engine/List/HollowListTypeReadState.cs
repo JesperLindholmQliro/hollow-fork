@@ -103,7 +103,7 @@ public sealed partial class HollowListTypeDataElements
     /// <summary>
     /// Skips a type's records without materialising them.
     /// </summary>
-    public static void DiscardFromInput(HollowBlobInput input, int numShards)
+    public static void DiscardFromInput(HollowBlobInput input, int numShards, bool isDelta = false)
     {
         ArgumentNullException.ThrowIfNull(input);
 
@@ -115,6 +115,14 @@ public sealed partial class HollowListTypeDataElements
         for (int i = 0; i < numShards; i++)
         {
             VarInt.ReadVInt(input); // The shard's max ordinal.
+
+            if (isDelta)
+            {
+                // A delta shard begins with the ordinals it adds and removes.
+                GapEncodedVariableLengthIntegerReader.DiscardEncodedDeltaOrdinals(input);
+                GapEncodedVariableLengthIntegerReader.DiscardEncodedDeltaOrdinals(input);
+            }
+
             VarInt.ReadVInt(input); // bitsPerListPointer
             VarInt.ReadVInt(input); // bitsPerElement
             VarInt.ReadVLong(input); // totalNumberOfElements
@@ -151,6 +159,9 @@ public sealed partial class HollowListTypeReadState : HollowTypeReadState, IHoll
 
     /// <inheritdoc />
     public override int MaxOrdinal => _maxOrdinal;
+
+    /// <inheritdoc />
+    public override int NumShards => _shards.Length;
 
     /// <inheritdoc />
     public override long ApproxHeapFootprintInBytes

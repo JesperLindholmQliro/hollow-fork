@@ -122,7 +122,8 @@ public sealed partial class HollowObjectTypeDataElements
     /// <summary>
     /// Skips a type's records without materialising them, for a type excluded by the filter.
     /// </summary>
-    public static void DiscardFromInput(HollowBlobInput input, HollowObjectSchema schema, int numShards)
+    public static void DiscardFromInput(
+        HollowBlobInput input, HollowObjectSchema schema, int numShards, bool isDelta = false)
     {
         ArgumentNullException.ThrowIfNull(input);
         ArgumentNullException.ThrowIfNull(schema);
@@ -135,6 +136,13 @@ public sealed partial class HollowObjectTypeDataElements
         for (int i = 0; i < numShards; i++)
         {
             VarInt.ReadVInt(input); // The shard's max ordinal.
+
+            if (isDelta)
+            {
+                // A delta shard begins with the ordinals it adds and removes.
+                GapEncodedVariableLengthIntegerReader.DiscardEncodedDeltaOrdinals(input);
+                GapEncodedVariableLengthIntegerReader.DiscardEncodedDeltaOrdinals(input);
+            }
 
             for (int j = 0; j < schema.FieldCount; j++)
             {

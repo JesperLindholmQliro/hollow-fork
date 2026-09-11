@@ -17,7 +17,10 @@
 
 using Hollow.Core.Memory;
 using Hollow.Core.Memory.Pool;
+using Hollow.Core.Read.Engine;
 using Hollow.Core.Schema;
+using Hollow.Core.Util;
+using Hollow.Core.Write.Copy;
 
 namespace Hollow.Core.Write;
 
@@ -31,9 +34,13 @@ namespace Hollow.Core.Write;
 /// populated, which is what the snapshot writes out.
 /// </para>
 /// <para>
-/// <strong>Port note.</strong> The Java class also supports partitioned ordinal maps, restoring from a
-/// read state, delta and reverse-delta calculation, and dynamic resharding across cycles. This port is
-/// snapshot-only and uses a single ordinal map — see <c>PORTING.md</c>.
+/// A state may instead be <em>restored</em> from a published read state, which is how a producer
+/// resumes a delta chain after a restart. See <see cref="RestoreFrom"/>.
+/// </para>
+/// <para>
+/// <strong>Port note.</strong> The Java class also supports partitioned ordinal maps and dynamic
+/// resharding across cycles. This port uses a single ordinal map and a fixed shard count — see
+/// <c>PORTING.md</c>.
 /// </para>
 /// </remarks>
 public abstract class HollowTypeWriteState
@@ -42,6 +49,22 @@ public abstract class HollowTypeWriteState
         new(() => new ByteDataArray(WastefulRecycler.DefaultInstance));
 
     private int _numShards;
+
+    /// <summary>
+    /// The ordinals held by the state this one was restored from, keyed by each record's serialised
+    /// form under <see cref="_restoredSchema"/>, or <see langword="null"/> when this is not a restored
+    /// cycle. A record re-added this cycle is looked up here so that it keeps its published ordinal.
+    /// </summary>
+    private ByteArrayOrdinalMap? _restoredMap;
+
+    /// <summary>
+    /// The schema the restored records were serialised under, which is the intersection of this type's
+    /// schema and the published one when they differ.
+    /// </summary>
+    private HollowSchema? _restoredSchema;
+
+    private HollowTypeReadState? _restoredReadState;
+    private bool _wroteData;
 
     /// <summary>
     /// Initialises a write state for <paramref name="schema"/>.
@@ -84,6 +107,11 @@ public abstract class HollowTypeWriteState
     /// </summary>
     public int NumShards => _numShards;
 
+    /// <summary>
+    /// Whether this state was restored from a read state and has not yet been through a full cycle.
+    /// </summary>
+    public bool IsRestored => OrdinalMap.UnusedPreviousOrdinals is not null;
+
     /// <summary>The engine this type belongs to.</summary>
     public HollowWriteStateEngine? StateEngine { get; internal set; }
 
@@ -111,14 +139,81 @@ public abstract class HollowTypeWriteState
                 + $"Did you remember to call {nameof(HollowWriteStateEngine.PrepareForNextCycle)}()?");
         }
 
-        ByteDataArray scratch = Scratch();
-        record.WriteDataTo(scratch);
-        int ordinal = OrdinalMap.GetOrAssignOrdinal(scratch);
-        scratch.Reset();
+        int ordinal = _restoredMap is null ? AssignOrdinal(record) : ReuseOrdinalFromRestoredState(record);
 
         CurrentCyclePopulated.Set(ordinal);
 
         return ordinal;
+    }
+
+    /// <summary>
+    /// Adds a record at a caller-chosen ordinal rather than letting the ordinal map pick one.
+    /// </summary>
+    /// <param name="record">The record to add.</param>
+    /// <param name="newOrdinal">The ordinal to place it at.</param>
+    /// <param name="markPreviousCycle">Whether to mark the ordinal as populated by the previous cycle.</param>
+    /// <param name="markCurrentCycle">Whether to mark the ordinal as populated by this cycle.</param>
+    /// <remarks>
+    /// <para>
+    /// This bypasses deduplication and the free-ordinal pool, so it is only safe while populating an
+    /// empty state from a known ordinal assignment. Every caller must follow the last call with
+    /// <see cref="RecalculateFreeOrdinals"/>, or the pool will hand out ordinals that are already taken.
+    /// </para>
+    /// <para>
+    /// Not thread-safe, unlike <see cref="Add"/>.
+    /// </para>
+    /// </remarks>
+    public void MapOrdinal(IHollowWriteRecord record, int newOrdinal, bool markPreviousCycle, bool markCurrentCycle)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+
+        if (!OrdinalMap.IsReadyForAddingObjects)
+        {
+            throw new InvalidOperationException(
+                "The HollowWriteStateEngine is not ready to add more Objects. "
+                + $"Did you remember to call {nameof(HollowWriteStateEngine.PrepareForNextCycle)}()?");
+        }
+
+        ByteDataArray scratch = Scratch();
+        record.WriteDataTo(scratch);
+        OrdinalMap.Put(scratch, newOrdinal);
+        scratch.Reset();
+
+        if (markPreviousCycle)
+        {
+            PreviousCyclePopulated.Set(newOrdinal);
+        }
+
+        if (markCurrentCycle)
+        {
+            CurrentCyclePopulated.Set(newOrdinal);
+        }
+    }
+
+    /// <summary>
+    /// Rebuilds the free-ordinal pool from the ordinals actually in the map, which
+    /// <see cref="MapOrdinal"/> leaves stale.
+    /// </summary>
+    public void RecalculateFreeOrdinals() => OrdinalMap.RecalculateFreeOrdinals();
+
+    /// <summary>
+    /// Fixes the number of shards this type's records are split across.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// A different shard count is already fixed for this type.
+    /// </exception>
+    public void SetNumShards(int numShards)
+    {
+        if (_numShards == -1)
+        {
+            _numShards = numShards;
+        }
+        else if (_numShards != numShards)
+        {
+            throw new InvalidOperationException(
+                $"The number of shards for type {Schema.Name} is already fixed to {_numShards.Invariant()}. "
+                + $"Cannot reset to {numShards.Invariant()}.");
+        }
     }
 
     /// <summary>
@@ -134,6 +229,12 @@ public abstract class HollowTypeWriteState
             mapIndex: 0,
             mapIndexBits: 0);
 
+        // The restored state only governs the first cycle after a restore: from here on the ordinal map
+        // holds every record itself, so lookups go through it directly.
+        _restoredMap = null;
+        _restoredSchema = null;
+        _restoredReadState = null;
+
         (PreviousCyclePopulated, CurrentCyclePopulated) = (CurrentCyclePopulated, PreviousCyclePopulated);
         CurrentCyclePopulated.ClearAll();
     }
@@ -144,7 +245,145 @@ public abstract class HollowTypeWriteState
     /// </summary>
     public virtual void PrepareForWrite()
     {
+        // A record that the restored state held but this cycle did not re-add still has to be present
+        // in the ordinal map: the delta describes it as removed, and the matching reverse delta has to
+        // be able to add it back. Copy those ghosts across without marking them populated.
+        if (IsRestored && !_wroteData && _restoredReadState is not null)
+        {
+            HollowRecordCopier copier = HollowRecordCopier.Create(_restoredReadState, Schema);
+            BitSet unusedPreviousOrdinals = OrdinalMap.UnusedPreviousOrdinals!;
+
+            for (int ordinal = unusedPreviousOrdinals.NextSetBit(0);
+                ordinal != -1;
+                ordinal = unusedPreviousOrdinals.NextSetBit(ordinal + 1))
+            {
+                RestoreOrdinal(ordinal, copier, OrdinalMap, HashBehavior.UnmixedHashes);
+            }
+        }
+
         MaxOrdinal = OrdinalMap.PrepareForWrite();
+        _wroteData = true;
+    }
+
+    /// <summary>
+    /// Populates this state with the records of <paramref name="readState"/>, so that the producer can
+    /// continue the delta chain that read state belongs to.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Every record keeps the ordinal it holds in the published state, and those ordinals are recorded
+    /// as the previous cycle's. A record re-added during the restored cycle is matched against the
+    /// published one and gets its ordinal back, so the delta that follows contains only genuine
+    /// changes.
+    /// </para>
+    /// <para>
+    /// Matching is done on the record's serialised form under the <em>common</em> schema — the fields
+    /// this type and the published type both declare — so adding or removing a field does not make
+    /// every record look new. It also ignores the hash positions inside set and map records, since
+    /// those depend on bucket counts rather than on the record's identity.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">This state already holds records.</exception>
+    protected internal virtual void RestoreFrom(HollowTypeReadState readState)
+    {
+        ArgumentNullException.ThrowIfNull(readState);
+
+        if (PreviousCyclePopulated.Cardinality() != 0 || CurrentCyclePopulated.Cardinality() != 0)
+        {
+            throw new InvalidOperationException(
+                $"Attempting to restore into a non-empty state (type {Schema.Name})");
+        }
+
+        BitSet populatedOrdinals = readState.PopulatedOrdinals;
+
+        _restoredReadState = readState;
+        _restoredSchema = Schema is HollowObjectSchema objectSchema
+            ? objectSchema.FindCommonSchema((HollowObjectSchema)readState.Schema)
+            : readState.Schema;
+
+        HollowRecordCopier copier = HollowRecordCopier.Create(readState, _restoredSchema);
+
+        int size = populatedOrdinals.Cardinality();
+        _restoredMap = new ByteArrayOrdinalMap(size);
+
+        for (int ordinal = populatedOrdinals.NextSetBit(0);
+            ordinal != -1;
+            ordinal = populatedOrdinals.NextSetBit(ordinal + 1))
+        {
+            PreviousCyclePopulated.Set(ordinal);
+            RestoreOrdinal(ordinal, copier, _restoredMap, HashBehavior.IgnoredHashes);
+        }
+
+        OrdinalMap.Resize(size);
+        OrdinalMap.ReservePreviouslyPopulatedOrdinals(populatedOrdinals);
+    }
+
+    /// <summary>
+    /// Copies the record at <paramref name="ordinal"/> out of the restored read state and puts it into
+    /// <paramref name="destinationMap"/> at that same ordinal.
+    /// </summary>
+    private void RestoreOrdinal(
+        int ordinal, HollowRecordCopier copier, ByteArrayOrdinalMap destinationMap, HashBehavior hashBehavior)
+    {
+        IHollowWriteRecord record = copier.Copy(ordinal);
+
+        ByteDataArray scratch = Scratch();
+        WriteRecord(record, scratch, hashBehavior);
+        destinationMap.Put(scratch, ordinal);
+        scratch.Reset();
+    }
+
+    private int AssignOrdinal(IHollowWriteRecord record)
+    {
+        ByteDataArray scratch = Scratch();
+        record.WriteDataTo(scratch);
+        int ordinal = OrdinalMap.GetOrAssignOrdinal(scratch);
+        scratch.Reset();
+
+        return ordinal;
+    }
+
+    /// <summary>
+    /// Assigns an ordinal during a restored cycle, preferring the one the published state gave an
+    /// equal record.
+    /// </summary>
+    private int ReuseOrdinalFromRestoredState(IHollowWriteRecord record)
+    {
+        ByteDataArray scratch = Scratch();
+
+        // Serialise the way the restored map was built so that the lookup can match, which is under the
+        // common schema for an object record and without hash positions for a hashable one.
+        if (_restoredSchema is HollowObjectSchema restoredObjectSchema)
+        {
+            ((HollowObjectWriteRecord)record).WriteDataTo(scratch, restoredObjectSchema);
+        }
+        else
+        {
+            WriteRecord(record, scratch, HashBehavior.IgnoredHashes);
+        }
+
+        int preferredOrdinal = _restoredMap!.Get(scratch);
+
+        // That form is only for matching; what goes into the real map is the record as it stands.
+        scratch.Reset();
+        record.WriteDataTo(scratch);
+
+        int ordinal = OrdinalMap.GetOrAssignOrdinal(scratch, preferredOrdinal);
+        scratch.Reset();
+
+        return ordinal;
+    }
+
+    private static void WriteRecord(IHollowWriteRecord record, ByteDataArray buffer, HashBehavior hashBehavior)
+    {
+        if (record is IHollowHashableWriteRecord hashable)
+        {
+            hashable.WriteDataTo(buffer, hashBehavior);
+        }
+        else
+        {
+            record.WriteDataTo(buffer);
+        }
     }
 
     /// <summary>

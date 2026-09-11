@@ -173,6 +173,9 @@ public sealed class HollowMapEntryOrdinalIteratorImpl : IHollowMapEntryOrdinalIt
     /// <inheritdoc />
     public int Value { get; private set; } = HollowConstants.OrdinalNone;
 
+    /// <summary>The bucket the last returned entry came from.</summary>
+    public int CurrentBucket => _currentBucket;
+
     /// <inheritdoc />
     public bool Next()
     {

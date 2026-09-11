@@ -103,6 +103,7 @@ public sealed class HollowBlobWriter
     {
         ArgumentNullException.ThrowIfNull(output);
 
+        _stateEngine.EnsureAllNecessaryStatesRestored();
         _stateEngine.PrepareForWrite();
 
         List<HollowTypeWriteState> changedTypes =
@@ -163,6 +164,7 @@ public sealed class HollowBlobWriter
     {
         ArgumentNullException.ThrowIfNull(output);
 
+        _stateEngine.EnsureAllNecessaryStatesRestored();
         _stateEngine.PrepareForWrite();
 
         List<HollowTypeWriteState> changedTypes =

@@ -103,11 +103,16 @@ public sealed class HollowBlobReader
     /// Applies a delta blob, moving this state forward one transition.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// A delta names the state it applies to by its randomized tag; applying it to any other state
     /// would silently corrupt the data, so a mismatch is rejected.
+    /// </para>
+    /// <para>
+    /// A reverse delta is applied through this same method: the two differ only in which state each
+    /// names as its origin.
+    /// </para>
     /// </remarks>
     /// <exception cref="InvalidDataException">The delta does not apply to this state.</exception>
-    /// <exception cref="NotSupportedException">The delta changes a collection type.</exception>
     public void ApplyDelta(HollowBlobInput input)
     {
         ArgumentNullException.ThrowIfNull(input);
@@ -160,14 +165,42 @@ public sealed class HollowBlobReader
                 mapState.ApplyDelta(input, _stateEngine.MemoryRecycler);
                 break;
 
+            // A type this state does not hold — because the producer has just introduced it, or because
+            // a filter excluded it. Skipping past its bytes leaves the rest of the delta readable; the
+            // type arrives with the next snapshot.
             case null:
-                throw new InvalidDataException(
-                    $"The delta changes type {schema.Name}, which is not present in this state.");
+                DiscardTypeStateDelta(input, schema, numShards);
+                break;
 
             default:
                 throw new InvalidDataException(
                     $"The delta declares type {schema.Name} as a {schema.SchemaType} type, which does not "
                     + $"match the {typeState.Schema.SchemaType} type held in this state.");
+        }
+    }
+
+    private static void DiscardTypeStateDelta(HollowBlobInput input, HollowSchema schema, int numShards)
+    {
+        switch (schema)
+        {
+            case HollowObjectSchema objectSchema:
+                HollowObjectTypeDataElements.DiscardFromInput(input, objectSchema, numShards, isDelta: true);
+                break;
+
+            case HollowListSchema:
+                HollowListTypeDataElements.DiscardFromInput(input, numShards, isDelta: true);
+                break;
+
+            case HollowSetSchema:
+                HollowSetTypeDataElements.DiscardFromInput(input, numShards, isDelta: true);
+                break;
+
+            case HollowMapSchema:
+                HollowMapTypeDataElements.DiscardFromInput(input, numShards, isDelta: true);
+                break;
+
+            default:
+                throw new UnrecognizedSchemaTypeException(schema.Name, schema.SchemaType);
         }
     }
 
