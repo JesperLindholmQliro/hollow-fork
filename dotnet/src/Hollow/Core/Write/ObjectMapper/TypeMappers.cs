@@ -110,6 +110,9 @@ public sealed class HollowObjectTypeMapper : HollowTypeMapper
                 case FieldType.Double:
                     record.SetDouble(field.Name, Convert.ToDouble(memberValue, CultureInfo.InvariantCulture));
                     break;
+                case FieldType.Decimal:
+                    record.SetDecimal(field.Name, Convert.ToDecimal(memberValue, CultureInfo.InvariantCulture));
+                    break;
                 case FieldType.Boolean:
                     record.SetBoolean(field.Name, Convert.ToBoolean(memberValue, CultureInfo.InvariantCulture));
                     break;
@@ -213,9 +216,8 @@ public sealed class HollowObjectTypeMapper : HollowTypeMapper
 
         if (underlying == typeof(decimal))
         {
-            // Hollow has no decimal field type; Java has no equivalent either.
-            throw new HollowMappingException(
-                "decimal has no Hollow field type. Map it to a long of minor units, or to a string.");
+            // Format extension: Netflix Hollow has no decimal field type. See PORTING.md.
+            return FieldType.Decimal;
         }
 
         throw new HollowMappingException($"{underlying.Name} is not a Hollow scalar type");
@@ -230,17 +232,20 @@ public sealed class HollowObjectTypeMapper : HollowTypeMapper
     /// </summary>
     /// <remarks>
     /// A non-nullable primitive is always inlined: there is no null to represent, and a reference would
-    /// cost an indirection for nothing. Everything else follows <see cref="HollowInlineAttribute"/>,
-    /// defaulting to a reference so that repeated values deduplicate.
+    /// cost an indirection for nothing. <see cref="decimal"/> counts as one here even though the CLR
+    /// does not classify it as primitive, since it behaves like the other numeric value types.
+    /// Everything else follows <see cref="HollowInlineAttribute"/>, defaulting to a reference so that
+    /// repeated values deduplicate.
     /// </remarks>
     internal static bool IsInlinedScalar(MappedMember member)
     {
         Type memberType = member.MemberType;
         Type underlying = Nullable.GetUnderlyingType(memberType) ?? memberType;
         bool isNullableValue = Nullable.GetUnderlyingType(memberType) is not null;
+        bool isValueScalar = underlying.IsPrimitive || underlying == typeof(decimal);
 
         return IsScalarWrapper(memberType)
-            && (member.IsInlined || (underlying.IsPrimitive && !isNullableValue));
+            && (member.IsInlined || (isValueScalar && !isNullableValue));
     }
 
     private MappedFieldInfo AddField(MappedMember member)

@@ -96,6 +96,15 @@ public interface IHollowObjectTypeDataAccess : IHollowTypeDataAccess
     /// <summary>Reads a <see cref="FieldType.Bytes"/> field.</summary>
     byte[]? ReadBytes(int ordinal, int fieldIndex);
 
+    /// <summary>
+    /// Reads a <see cref="FieldType.Decimal"/> field, which may be null.
+    /// </summary>
+    /// <remarks>
+    /// <strong>Format extension.</strong> <see cref="FieldType.Decimal"/> is not part of Netflix
+    /// Hollow — see <c>PORTING.md</c>.
+    /// </remarks>
+    decimal? ReadDecimal(int ordinal, int fieldIndex);
+
     /// <summary>Reads a <see cref="FieldType.String"/> field.</summary>
     string? ReadString(int ordinal, int fieldIndex);
 

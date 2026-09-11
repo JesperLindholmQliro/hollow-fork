@@ -65,6 +65,13 @@ public sealed partial class HollowObjectTypeDataElements
             ((long)BitsPerRecord * ordinal) + BitOffsetPerField[fieldIndex], BitsPerField[fieldIndex]);
 
     /// <summary>
+    /// The raw fixed-length value of a field that may be wider than 64 bits.
+    /// </summary>
+    internal (long Low, long High) GetWideFixedFieldValue(int ordinal, int fieldIndex) =>
+        FixedLengthData!.GetWideElementValue(
+            ((long)BitsPerRecord * ordinal) + BitOffsetPerField[fieldIndex], BitsPerField[fieldIndex]);
+
+    /// <summary>
     /// The byte range of a variable-length field, and whether it is null.
     /// </summary>
     internal (long Start, long End, bool IsNull) GetVarLengthRange(int ordinal, int fieldIndex)
@@ -108,7 +115,7 @@ public sealed partial class HollowObjectTypeDataElements
             int deltaFieldIndex = delta.Schema.GetPosition(schema.GetFieldName(i));
             target.BitsPerField[i] = deltaFieldIndex == -1 ? from.BitsPerField[i] : delta.BitsPerField[deltaFieldIndex];
             target.NullValueForField[i] =
-                target.BitsPerField[i] == 64 ? -1L : (1L << target.BitsPerField[i]) - 1;
+                target.BitsPerField[i] >= 64 ? -1L : (1L << target.BitsPerField[i]) - 1;
             target.BitOffsetPerField[i] = bitsPerRecord;
             bitsPerRecord += target.BitsPerField[i];
         }
@@ -169,6 +176,17 @@ public sealed partial class HollowObjectTypeDataElements
                 {
                     CopyVarLengthField(
                         target, source, sourceOrdinal, sourceFieldIndex, fieldIndex, fieldBitOffset, varLengthWritePointers);
+                }
+                else if (schema.GetFieldType(fieldIndex) == FieldType.Decimal)
+                {
+                    // A decimal is always 128 bits, so it never has to be re-encoded at a new width --
+                    // but it does need both halves carried across.
+                    (long low, long high) = source is null || sourceFieldIndex == -1
+                        ? (DecimalBits.NullLow, DecimalBits.NullHigh)
+                        : source.GetWideFixedFieldValue(sourceOrdinal, sourceFieldIndex);
+
+                    target.FixedLengthData.SetWideElementValue(
+                        fieldBitOffset, target.BitsPerField[fieldIndex], low, high);
                 }
                 else
                 {

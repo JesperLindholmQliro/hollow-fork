@@ -151,6 +151,9 @@ public sealed partial class HollowObjectTypeReadState : HollowTypeReadState, IHo
                 return (int)fixedLengthValue == HollowObjectWriteRecord.NullFloatBits;
             case FieldType.Double:
                 return fixedLengthValue == HollowObjectWriteRecord.NullDoubleBits;
+            case FieldType.Decimal:
+                (long low, long high) = shard.ReadWideValue(ShardOrdinal(ordinal, shard), fieldIndex);
+                return DecimalBits.IsNull(low, high);
             default:
                 return fixedLengthValue == shard.DataElements.NullValueForField[fieldIndex];
         }
@@ -211,6 +214,15 @@ public sealed partial class HollowObjectTypeReadState : HollowTypeReadState, IHo
         return value == HollowObjectWriteRecord.NullDoubleBits
             ? double.NaN
             : BitConverter.Int64BitsToDouble(value);
+    }
+
+    /// <inheritdoc />
+    public decimal? ReadDecimal(int ordinal, int fieldIndex)
+    {
+        Shard shard = ShardFor(ordinal);
+        (long low, long high) = shard.ReadWideValue(ShardOrdinal(ordinal, shard), fieldIndex);
+
+        return DecimalBits.IsNull(low, high) ? null : DecimalBits.Unpack(low, high);
     }
 
     /// <inheritdoc />
@@ -383,6 +395,13 @@ public sealed partial class HollowObjectTypeReadState : HollowTypeReadState, IHo
 
         internal long ReadValue(int shardOrdinal, int fieldIndex) =>
             DataElements.FixedLengthData!.GetLargeElementValue(
+                FieldOffset(shardOrdinal, fieldIndex), DataElements.BitsPerField[fieldIndex]);
+
+        /// <summary>
+        /// Reads a field that may be wider than one element, which only a decimal is.
+        /// </summary>
+        internal (long Low, long High) ReadWideValue(int shardOrdinal, int fieldIndex) =>
+            DataElements.FixedLengthData!.GetWideElementValue(
                 FieldOffset(shardOrdinal, fieldIndex), DataElements.BitsPerField[fieldIndex]);
 
         /// <summary>

@@ -88,7 +88,9 @@ public sealed class FieldStatistics
                 _maxBitsForField[i] = BitsRequiredForRepresentation(_totalSizeOfVarLengthField[i]) + 1;
             }
 
-            _nullValueForField[i] = _maxBitsForField[i] == 64 ? -1L : (1L << _maxBitsForField[i]) - 1;
+            // A field 64 bits or wider is all-ones in its low word; only Decimal is wider, and its
+            // null is all-ones in both words.
+            _nullValueForField[i] = _maxBitsForField[i] >= 64 ? -1L : (1L << _maxBitsForField[i]) - 1;
 
             _bitOffsetForField[i] = NumBitsPerRecord;
             NumBitsPerRecord += _maxBitsForField[i];

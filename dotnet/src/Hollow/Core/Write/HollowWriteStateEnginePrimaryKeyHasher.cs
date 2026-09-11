@@ -19,6 +19,7 @@ using Hollow.Core.Index;
 using Hollow.Core.Index.Key;
 using Hollow.Core.Memory;
 using Hollow.Core.Memory.Encoding;
+using Hollow.Core.Read;
 using Hollow.Core.Schema;
 
 namespace Hollow.Core.Write;
@@ -172,6 +173,10 @@ internal sealed class HollowWriteStateEnginePrimaryKeyHasher
                     offset += 4;
                     break;
 
+                case FieldType.Decimal:
+                    offset += DecimalBits.BytesPerDecimal;
+                    break;
+
                 default:
                     break;
             }
@@ -221,6 +226,13 @@ internal sealed class HollowWriteStateEnginePrimaryKeyHasher
 
             case FieldType.Float:
                 return data.ReadInt32Bits(offset);
+
+            case FieldType.Decimal:
+                long decimalLow = data.ReadInt64Bits(offset);
+                long decimalHigh = data.ReadInt64Bits(offset + 8);
+                return DecimalBits.IsNull(decimalLow, decimalHigh)
+                    ? 0
+                    : HollowReadFieldUtils.DecimalHashCode(DecimalBits.Unpack(decimalLow, decimalHigh));
 
             default:
                 throw new ArgumentException(

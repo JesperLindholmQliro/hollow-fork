@@ -173,6 +173,22 @@ public sealed class HollowObjectWriteRecord : IHollowWriteRecord
         WriteFixedLengthLong(buffer, ToJavaBits(value));
     }
 
+    /// <summary>
+    /// Sets a <see cref="FieldType.Decimal"/> field.
+    /// </summary>
+    /// <remarks>
+    /// <strong>Format extension.</strong> <see cref="FieldType.Decimal"/> is not part of Netflix
+    /// Hollow — see <c>PORTING.md</c>.
+    /// </remarks>
+    public void SetDecimal(string fieldName, decimal value)
+    {
+        ByteDataArray buffer = GetFieldBuffer(fieldName, FieldType.Decimal);
+
+        (long low, long high) = DecimalBits.Pack(value);
+        WriteFixedLengthLong(buffer, low);
+        WriteFixedLengthLong(buffer, high);
+    }
+
     /// <summary>Sets a <see cref="FieldType.Boolean"/> field.</summary>
     public void SetBoolean(string fieldName, bool value)
     {
@@ -240,6 +256,10 @@ public sealed class HollowObjectWriteRecord : IHollowWriteRecord
                 break;
             case FieldType.Double:
                 WriteFixedLengthLong(buffer, NullDoubleBits);
+                break;
+            case FieldType.Decimal:
+                WriteFixedLengthLong(buffer, DecimalBits.NullLow);
+                WriteFixedLengthLong(buffer, DecimalBits.NullHigh);
                 break;
             default:
                 VarInt.WriteVNull(buffer);

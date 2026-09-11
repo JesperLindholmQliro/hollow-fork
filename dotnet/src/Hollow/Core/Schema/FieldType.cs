@@ -68,6 +68,25 @@ public enum FieldType
     /// record holding a fixed-length pointer to the end of its range.
     /// </summary>
     Bytes,
+
+    /// <summary>
+    /// A .NET <see cref="decimal"/>, encoded as a fixed-length sixteen-byte field holding the four
+    /// integers <see cref="decimal.GetBits(decimal)"/> returns.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <strong>This is an extension to the Hollow blob format, not part of Netflix Hollow.</strong> A
+    /// Java Hollow consumer cannot read a blob whose schema declares a field of this type, and this
+    /// port's own compatibility rule is that a dataset which uses no <c>Decimal</c> field must remain
+    /// byte-identical to what Netflix Hollow would produce. See the "Format extension: the Decimal
+    /// field type" section of <c>PORTING.md</c> before changing anything about it.
+    /// </para>
+    /// <para>
+    /// It is the only field type wider than 64 bits, so its value is read and written as two 64-bit
+    /// halves rather than as a single element.
+    /// </para>
+    /// </remarks>
+    Decimal,
 }
 
 /// <summary>
@@ -84,6 +103,7 @@ public static class FieldTypeExtensions
         FieldType.Boolean => 1,
         FieldType.Float => 4,
         FieldType.Double => 8,
+        FieldType.Decimal => 16,
         _ => -1,
     };
 
@@ -112,6 +132,7 @@ public static class FieldTypeExtensions
         FieldType.Double => "DOUBLE",
         FieldType.String => "STRING",
         FieldType.Bytes => "BYTES",
+        FieldType.Decimal => "DECIMAL",
         _ => throw new ArgumentOutOfRangeException(nameof(fieldType), fieldType, "unknown field type"),
     };
 
@@ -128,6 +149,7 @@ public static class FieldTypeExtensions
         FieldType.Double => "double",
         FieldType.String => "string",
         FieldType.Bytes => "bytes",
+        FieldType.Decimal => "decimal",
         _ => throw new ArgumentOutOfRangeException(nameof(fieldType), fieldType, "unknown field type"),
     };
 
@@ -150,6 +172,7 @@ public static class FieldTypeExtensions
             "DOUBLE" => FieldType.Double,
             "STRING" => FieldType.String,
             "BYTES" => FieldType.Bytes,
+            "DECIMAL" => FieldType.Decimal,
             _ => throw new ArgumentException($"unknown field type '{name}'", nameof(name)),
         };
     }
@@ -170,6 +193,7 @@ public static class FieldTypeExtensions
             case "DOUBLE": fieldType = FieldType.Double; return true;
             case "STRING": fieldType = FieldType.String; return true;
             case "BYTES": fieldType = FieldType.Bytes; return true;
+            case "DECIMAL": fieldType = FieldType.Decimal; return true;
             default: fieldType = default; return false;
         }
     }

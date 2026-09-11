@@ -131,3 +131,63 @@ public interface IFixedLengthData
     static int BitsRequiredToRepresentValue(long value) =>
         value == 0 ? 1 : 64 - BitOperations.LeadingZeroCount((ulong)value);
 }
+
+/// <summary>
+/// Reads and writes fields wider than the 64 bits a single element can hold.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Only <see cref="Schema.FieldType.Decimal"/> is wider than 64 bits, and only 128 bits wide, so a
+/// wide field is exactly two elements: the low half at the field's bit offset and the high half 64
+/// bits after it. These helpers exist so that code which handles fields generically — the delta
+/// applicator and the field filter — needs one path rather than two.
+/// </para>
+/// <para>
+/// A width of 64 or less reads and writes a single element, with the high half zero, so callers can
+/// use these uniformly.
+/// </para>
+/// </remarks>
+public static class FixedLengthDataExtensions
+{
+    /// <summary>
+    /// Gets a field of up to 128 bits as two 64-bit halves.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="bitsPerElement"/> exceeds 128.</exception>
+    public static (long Low, long High) GetWideElementValue(
+        this IFixedLengthData data, long index, int bitsPerElement)
+    {
+        ArgumentNullException.ThrowIfNull(data);
+
+        if (bitsPerElement <= 64)
+        {
+            return (data.GetLargeElementValue(index, bitsPerElement), 0);
+        }
+
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(bitsPerElement, 128, nameof(bitsPerElement));
+
+        return (
+            data.GetLargeElementValue(index, 64, -1L),
+            data.GetLargeElementValue(index + 64, bitsPerElement - 64));
+    }
+
+    /// <summary>
+    /// Ors a field of up to 128 bits into the bit string, as two 64-bit halves.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="bitsPerElement"/> exceeds 128.</exception>
+    public static void SetWideElementValue(
+        this IFixedLengthData data, long index, int bitsPerElement, long low, long high)
+    {
+        ArgumentNullException.ThrowIfNull(data);
+
+        if (bitsPerElement <= 64)
+        {
+            data.SetElementValue(index, bitsPerElement, low);
+            return;
+        }
+
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(bitsPerElement, 128, nameof(bitsPerElement));
+
+        data.SetElementValue(index, 64, low);
+        data.SetElementValue(index + 64, bitsPerElement - 64, high);
+    }
+}

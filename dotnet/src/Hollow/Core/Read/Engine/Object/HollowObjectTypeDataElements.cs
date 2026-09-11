@@ -183,7 +183,7 @@ public sealed partial class HollowObjectTypeDataElements
             {
                 BitsPerField[filteredFieldIndex] = readBitsPerField;
                 NullValueForField[filteredFieldIndex] =
-                    readBitsPerField == 64 ? -1L : (1L << readBitsPerField) - 1;
+                    readBitsPerField >= 64 ? -1L : (1L << readBitsPerField) - 1;
                 BitOffsetPerField[filteredFieldIndex] = BitsPerRecord;
                 BitsPerRecord += readBitsPerField;
                 filteredFieldIndex++;
@@ -214,8 +214,10 @@ public sealed partial class HollowObjectTypeDataElements
             {
                 if (_unfilteredFieldIsIncluded[j])
                 {
-                    long value = FixedLengthData!.GetLargeElementValue(currentReadBit, _bitsPerUnfilteredField[j]);
-                    filteredData.SetElementValue(currentWriteBit, _bitsPerUnfilteredField[j], value);
+                    (long low, long high) =
+                        FixedLengthData!.GetWideElementValue(currentReadBit, _bitsPerUnfilteredField[j]);
+                    filteredData.SetWideElementValue(
+                        currentWriteBit, _bitsPerUnfilteredField[j], low, high);
                     currentWriteBit += _bitsPerUnfilteredField[j];
                 }
 

@@ -287,6 +287,12 @@ public sealed class HollowObjectMapper
             return "Double";
         }
 
+        // Format extension: no Java Hollow type corresponds to this one. See PORTING.md.
+        if (underlying == typeof(decimal))
+        {
+            return "Decimal";
+        }
+
         if (underlying == typeof(byte) || underlying == typeof(sbyte))
         {
             return "Byte";

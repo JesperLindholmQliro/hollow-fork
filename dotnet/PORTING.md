@@ -12,6 +12,11 @@ Indexing is here too: field paths bind a declared key onto the schemas, `HollowP
 records up by key rather than by ordinal, and a set or map schema may declare a hash key, which the
 producer honours when laying out each record's hash table.
 
+There is **one deliberate departure from the Hollow format**: a `Decimal` field type that stores a .NET
+`decimal` exactly. It is opt-in — a dataset that declares no decimal field is byte-identical to what
+Netflix Hollow produces. Read [Format extension: the `Decimal` field
+type](#format-extension-the-decimal-field-type) before changing anything in the write or read path.
+
 What is **not** here is reverse deltas, resharding, restore, the diff/history tools, and the
 producer/consumer APIs. The status section says exactly what is and is not ported.
 
@@ -25,6 +30,88 @@ dotnet test
 Requires the .NET 10 SDK. On a machine without ICU installed, set
 `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1` — nothing in the port depends on culture-sensitive
 behaviour.
+
+## Format extension: the `Decimal` field type
+
+Everything else in this port aims to produce and consume exactly the bytes Netflix Hollow does. This
+does not: it adds a ninth field type, `FieldType.Decimal`, which Netflix Hollow has no equivalent of.
+
+It exists because Hollow's numeric field types cannot carry a .NET `decimal`. A `double` loses both
+precision and scale, and a `long` of minor units loses the scale and forces every consumer to agree on
+an exponent out of band. Money is the obvious case, but anything where `1.50` and `1.5` are meant to
+stay distinguishable has the same problem.
+
+### The compatibility rule
+
+> **A dataset that declares no `Decimal` field must serialise byte-for-byte identically to what
+> Netflix Hollow would produce. Every change to this port must preserve that.**
+
+This is what keeps the extension honest: an existing model pays nothing for it, a blob written from
+one stays readable by a Java Hollow consumer, and the extension is a decision each schema makes rather
+than something imposed on the format.
+
+`FormatCompatibilityTests` enforces the rule. It pins the SHA-256 of a snapshot and of a delta over a
+dataset that exercises every original field type, every schema kind, null values and a sharded type.
+A digest is a blunt instrument, and that is the point: it fails on *any* change to the byte stream,
+whether or not anybody thought to write a test for that part of it.
+
+**If one of those digests changes, stop.** The change under test altered the blob format. That may be
+right — but it has to be a decision, and this section has to be updated to say what changed and why.
+Do not re-baseline a digest to make a build pass.
+
+The digests currently in the test were verified against the commit immediately before the extension
+was added, so they are the pre-extension bytes rather than merely the bytes of the day they were
+written.
+
+### What a consumer without the extension sees
+
+A Java Hollow consumer reading a blob that *does* declare a decimal field will fail while parsing the
+schema: `DECIMAL` is not a field type name it knows. It fails cleanly rather than misreading the data,
+because the field type is named in the schema rather than implied by a width.
+
+### The encoding
+
+A decimal field is a fixed-length field of **16 bytes (128 bits)**, holding the four integers
+`decimal.GetBits` returns — the low, middle and high words of the 96-bit mantissa, then the flags word
+carrying the scale and the sign — each big-endian, in that order.
+
+It is the only field type wider than 64 bits, which is the one structural thing the rest of the code
+has to account for: an element of the fixed-length bit string is at most 64 bits, so a decimal occupies
+*two* elements, the low half at the field's bit offset and the high half 64 bits later.
+`FixedLengthDataExtensions.GetWideElementValue` and `SetWideElementValue` are how the code that handles
+fields generically — the field filter and the delta applicator — reads and writes a field without
+caring how wide it is. **Anything new that walks fields generically must use them, not
+`GetLargeElementValue`, which silently truncates at 64 bits.**
+
+Null is all sixteen bytes set. That is not a representable decimal — the flags word may only carry a
+scale of 0 to 28 in bits 16 to 23 and a sign in bit 31 — and it is the same all-ones convention Hollow
+already uses for its other fixed-length fields.
+
+### Scale is stored but ignored when comparing
+
+The stored form keeps the scale, so `1.50m` round-trips as `1.50m`. That is the point of the field
+type, and it means two records differing only in scale are two records, not one.
+
+.NET's own `==` on `decimal` ignores scale, though, so anything that hashes a decimal has to ignore it
+too, or a hash table keyed on one breaks: two values that compare equal would land in different
+buckets. `DecimalBits.CanonicalHashCode` strips trailing zeros before hashing, and the primary key
+index, the set and map hash keys, and `HollowReadFieldUtils` all go through it. `decimal.GetHashCode`
+would also be scale-invariant but is an implementation detail of the runtime, and a hash that decides
+where a record lands in a blob has to keep producing the same answer across runtime versions.
+
+### Where it is wired in
+
+| Concern | Where |
+| --- | --- |
+| The encoding itself | `Core/Memory/Encoding/DecimalBits.cs` |
+| Fields wider than one element | `FixedLengthDataExtensions` in `Core/Memory/IFixedLengthData.cs` |
+| Writing | `HollowObjectWriteRecord.SetDecimal`, `HollowObjectTypeWriteState` |
+| Reading | `IHollowObjectTypeDataAccess.ReadDecimal`, `HollowObjectTypeReadState` |
+| Deltas | `HollowObjectTypeDataElements.ApplyDelta` |
+| Field filtering | `HollowObjectTypeDataElements.RemoveExcludedFieldsFromFixedLengthData` |
+| Hashing and comparison | `HollowReadFieldUtils`, `SetMapKeyHasher`, `HollowWriteStateEnginePrimaryKeyHasher` |
+| Indexing | `HollowPrimaryKeyIndex`, `HollowPrimaryKeyValueDeriver` |
+| Mapping a CLR `decimal` | `HollowObjectTypeMapper.ScalarFieldType`, `HollowObjectMapper.DefaultTypeName` |
 
 ## Layout
 
@@ -111,6 +198,11 @@ member. Collection type names follow Java's convention (`ListOfString`, `SetOfIn
 `MapOfStringToInteger`), and the scalar wrapper types keep Java's names (`String`, `Integer`, `Long`
 and friends) so a .NET-produced blob describes the same types a Java-produced one would.
 
+A `decimal` member maps to the extension field type and, when non-nullable, is inlined like the other
+numeric value types — the CLR does not classify `decimal` as primitive, but it behaves like one here.
+A `decimal?` becomes a reference to a wrapper type named `Decimal`, which no Java-produced blob will
+ever contain.
+
 ### NaN bit patterns
 
 `HollowObjectWriteRecord` derives its float and double null sentinels from Java's canonical NaN
@@ -128,6 +220,16 @@ potential-match iterators probe by ordinal, so on a keyed collection they no lon
 reliably; use `FindElement`, `FindKey`, `FindValue` and `FindEntry` instead. Iteration is unaffected,
 because it walks the buckets rather than probing them.
 `HashKeyTests.ADeclaredKeyReplacesOrdinalBasedLookup` pins this.
+
+The object mapper derives a hash key for a set or map that declares none, as Java does: the element or
+key type's `[HollowPrimaryKey]` if it has one, otherwise its single field if it maps to exactly one
+non-reference field. So a mapped `HashSet<int>` or `Dictionary<string, T>` is keyed by default and
+loses ordinal-based lookup. Declare `[HollowHashKey]` with no field paths to opt one collection out,
+or set `HollowObjectMapper.UseDefaultHashKeys` to `false` to opt a whole model out.
+
+Where Java silently keeps whichever schema was registered first when two members declare different
+hash keys over the same CLR set type — both are `SetOfX`, but their records would be hashed
+differently — this port compares the schemas and reports the collision instead.
 
 ### Delta application copies record by record
 
@@ -177,7 +279,7 @@ memory modes; .NET's `Stream` covers both, so the port wraps a stream and report
 | Java package | Notes |
 | --- | --- |
 | `core.memory` | `IByteData`, `ArrayByteData`, `ByteDataArray`, `SegmentedByteArray`, `SegmentedLongArray`, `ByteArrayOrdinalMap`, `FreeOrdinalTracker`, `ThreadSafeBitSet`, `IFixedLengthData`, `IVariableLengthData`, `MemoryMode` |
-| `core.memory.encoding` | `ZigZag`, `VarInt`, `HashCodes`, `FixedLengthElementArray` |
+| `core.memory.encoding` | `ZigZag`, `VarInt`, `HashCodes`, `FixedLengthElementArray`, and `DecimalBits` (port-specific; see the format extension above) |
 | `core.memory.pool` | `IArraySegmentRecycler`, `WastefulRecycler`, `RecyclingRecycler` |
 | `core.schema` | `HollowSchema` and the object/list/set/map schemas, `FieldType`, `SchemaType`, `SimpleHollowDataset` |
 | `core.index` | `FieldPaths` and the bound `FieldPath`/`FieldSegment`/`ObjectFieldSegment`/`FieldPathException` types, `HollowPrimaryKeyIndex` |
@@ -185,7 +287,7 @@ memory modes; .NET's `Stream` covers both, so the port wraps a stream and report
 | `core` | `HollowConstants`, `IHollowDataset` |
 | `core.util` | `BitSet` (a port-specific stand-in for `java.util.BitSet`) |
 | `core.write` | The write records (object, list, set, map), `FieldStatistics`, `HollowTypeWriteState` and its four subclasses, `HollowWriteStateEngine`, `HollowBlobHeaderWriter`, `HollowBlobWriter`, `HollowBlobOutput` |
-| `core.write.objectmapper` | `HollowObjectMapper`, the four type mappers, and the `HollowTypeName`/`HollowInline`/`HollowTransient`/`HollowPrimaryKey`/`HollowShardLargeType` attributes |
+| `core.write.objectmapper` | `HollowObjectMapper`, the four type mappers, and the `HollowTypeName`/`HollowInline`/`HollowTransient`/`HollowPrimaryKey`/`HollowHashKey`/`HollowShardLargeType` attributes, including Java's default hash-key derivation |
 | `core.read` | `HollowBlobInput`, `HollowBlobHeaderReader`, `HollowBlobReader`, `HollowReadStateEngine`, `HollowTypeReadState`, `PopulatedOrdinalListener`, `SnapshotPopulatedOrdinalsReader`, the data-access interfaces, `ITypeFilter` |
 | `core.read.engine.*` | Data elements and read states for object, list, set and map |
 | `core.read.iterator` | The ordinal iterators, including the potential-match iterators used for key lookups |
@@ -214,7 +316,12 @@ plausible field by field.
 `HashKeyTests` looks elements up through the read state rather than comparing hash values, because
 producer and consumer compute the key hash from entirely different representations of the record —
 the producer from its serialised bytes, the consumer from boxed key values — and only agreement
-between them makes a lookup work.
+between them makes a lookup work. `ObjectMapperHashKeyTests` covers the same ground from the mapper's
+side, including the keys it derives when a model declares none.
+
+`DecimalFieldTests` and `DecimalBitsTests` cover the format extension, and
+`FormatCompatibilityTests` pins the bytes of a dataset that does not use it — see
+[Format extension: the `Decimal` field type](#format-extension-the-decimal-field-type).
 
 ### Ported, not yet covered by a round-trip
 
@@ -226,8 +333,6 @@ sets of `TypeFilter` exist; the recursive rule DSL is still absent.
 - **The rest of `core.index`.** `HollowHashIndex`, `HollowPrefixIndex`, `HollowUniqueKeyIndex`,
   `HollowSparseIntegerSet` and the traversal helpers. `FieldPaths` supports the hash-index and
   prefix-index binding modes those need, so they have their foundation.
-- **The `[HollowHashKey]` attribute.** A hash key declared on a schema works end to end, but the
-  object mapper has no attribute for declaring one on a CLR type; build the schema directly.
 - **Reverse deltas.** `CalculateReverseDelta` exists on the write state but nothing writes or applies
   one.
 - **Historical state creation**, which a consumer uses to serve queries against prior states.
@@ -246,6 +351,16 @@ sets of `TypeFilter` exist; the recursive rule DSL is still absent.
 - **`GarbageCollectorAwareRecycler`**, which picks a pooling strategy by inspecting the JVM's
   collector through `ManagementFactory`. The decision it encodes does not transfer to .NET; pick
   `RecyclingRecycler` or `WastefulRecycler` explicitly.
+
+### Notes for whoever picks this up next
+
+The one thing in this port that is not a faithful reproduction of Netflix Hollow is the `Decimal`
+field type. Its compatibility rule — a dataset that uses no decimal field serialises exactly as
+Netflix Hollow would serialise it — is enforced by `FormatCompatibilityTests` and has to survive every
+subsequent change. If you are touching the write path, the read path, the delta applicators or the
+field filter, read [Format extension: the `Decimal` field
+type](#format-extension-the-decimal-field-type) first; the trap is that a decimal field is 128 bits
+wide and every other fixed-length field is 64 or fewer.
 
 ### Suggested order for the remaining work
 

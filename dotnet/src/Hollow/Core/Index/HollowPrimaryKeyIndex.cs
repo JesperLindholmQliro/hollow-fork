@@ -668,6 +668,7 @@ public sealed class HollowPrimaryKeyIndex : IHollowTypeStateListener, IDisposabl
             FieldType.Reference => HashCodes.HashInt((int)key!),
             FieldType.Bytes => HashCodes.Compute((byte[])key!),
             FieldType.String => HashCodes.Compute((string?)key),
+            FieldType.Decimal => HashCodes.HashInt(HollowReadFieldUtils.DecimalHashCode((decimal?)key)),
             _ => throw new ArgumentException($"cannot hash a {fieldType} key field", nameof(fieldIndex)),
         };
     }

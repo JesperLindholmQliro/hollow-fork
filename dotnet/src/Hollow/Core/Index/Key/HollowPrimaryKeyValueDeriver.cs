@@ -160,6 +160,10 @@ public sealed class HollowPrimaryKeyValueDeriver
             case FieldType.String:
                 return dataAccess.IsStringFieldEqual(ordinal, fieldPosition, key as string);
 
+            // Compared by value, so a key of 1.5m matches a record storing 1.50m.
+            case FieldType.Decimal:
+                return key is decimal dec && dataAccess.ReadDecimal(ordinal, fieldPosition) == dec;
+
             default:
                 throw new ArgumentException($"cannot compare a {fieldType} field", nameof(fieldType));
         }

@@ -50,6 +50,7 @@ public static class HollowReadFieldUtils
             FieldType.Int => IntHashCode(typeAccess.ReadInt(ordinal, fieldPosition)),
             FieldType.Long => LongHashCode(typeAccess.ReadLong(ordinal, fieldPosition)),
             FieldType.Reference => typeAccess.ReadOrdinal(ordinal, fieldPosition),
+            FieldType.Decimal => DecimalHashCode(typeAccess.ReadDecimal(ordinal, fieldPosition)),
             _ => throw new InvalidOperationException($"cannot hash a {fieldType} field"),
         };
     }
@@ -69,6 +70,7 @@ public static class HollowReadFieldUtils
             bool b => BooleanHashCode(b),
             long l => LongHashCode(l),
             byte[] bytes => ByteArrayHashCode(bytes),
+            decimal d => DecimalHashCode(d),
             _ => throw new ArgumentException($"cannot hash a field of type {value.GetType()}", nameof(value)),
         };
 
@@ -118,6 +120,11 @@ public static class HollowReadFieldUtils
             case FieldType.String:
                 return typeAccess2.IsStringFieldEqual(
                     ordinal2, fieldPosition2, typeAccess1.ReadString(ordinal1, fieldPosition1));
+
+            // Compared by value rather than by stored form, so 1.50m equals 1.5m as it does in .NET.
+            case FieldType.Decimal:
+                return typeAccess1.ReadDecimal(ordinal1, fieldPosition1)
+                    == typeAccess2.ReadDecimal(ordinal2, fieldPosition2);
 
             // Two ordinals are only comparable when they index the same type, which is guaranteed only
             // when both sides read the same field of the same type.
@@ -170,6 +177,9 @@ public static class HollowReadFieldUtils
             case FieldType.Long:
                 long l = typeAccess.ReadLong(ordinal, fieldPosition);
                 return l == long.MinValue ? null : l;
+
+            case FieldType.Decimal:
+                return typeAccess.ReadDecimal(ordinal, fieldPosition);
 
             case FieldType.Reference:
                 int referencedOrdinal = typeAccess.ReadOrdinal(ordinal, fieldPosition);
@@ -228,6 +238,10 @@ public static class HollowReadFieldUtils
                 long storedLong = typeAccess.ReadLong(ordinal, fieldPosition);
                 return testValue is long l ? storedLong == l : testValue is null && storedLong == long.MinValue;
 
+            case FieldType.Decimal:
+                decimal? storedDecimal = typeAccess.ReadDecimal(ordinal, fieldPosition);
+                return testValue is decimal dec ? storedDecimal == dec : testValue is null && storedDecimal is null;
+
             case FieldType.Reference:
                 int storedOrdinal = typeAccess.ReadOrdinal(ordinal, fieldPosition);
                 return testValue is int referenced
@@ -257,6 +271,7 @@ public static class HollowReadFieldUtils
             FieldType.Float => typeAccess.ReadFloat(ordinal, fieldPosition).ToString(null, null),
             FieldType.Int => typeAccess.ReadInt(ordinal, fieldPosition).ToString(null, null),
             FieldType.Long => typeAccess.ReadLong(ordinal, fieldPosition).ToString(null, null),
+            FieldType.Decimal => typeAccess.ReadDecimal(ordinal, fieldPosition)?.ToString(null, null),
             _ => throw new InvalidOperationException($"cannot display a {fieldType} field"),
         };
     }
@@ -291,4 +306,13 @@ public static class HollowReadFieldUtils
     /// </remarks>
     public static int DoubleHashCode(double value) =>
         LongHashCode(double.IsNaN(value) ? 0x7FF8000000000000L : BitConverter.DoubleToInt64Bits(value));
+
+    /// <summary>Hashes a decimal as <see cref="FieldHashCode"/> would hash the stored field.</summary>
+    /// <remarks>
+    /// <strong>Format extension.</strong> The hash ignores a decimal's scale, because .NET's own
+    /// equality does — see <see cref="DecimalBits.CanonicalHashCode"/> and <c>PORTING.md</c>. A null
+    /// decimal hashes to zero, matching what the producer's key hasher computes for one.
+    /// </remarks>
+    public static int DecimalHashCode(decimal? value) =>
+        value is null ? 0 : DecimalBits.CanonicalHashCode(value.Value);
 }
