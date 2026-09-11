@@ -26,8 +26,13 @@ There is **one deliberate departure from the Hollow format**: a `Decimal` field 
 Netflix Hollow produces. Read [Format extension: the `Decimal` field
 type](#format-extension-the-decimal-field-type) before changing anything in the write or read path.
 
-What is **not** here is resharding, object longevity, code generation, the incremental producer, and
-the diff/history tools. The status section says exactly what is and is not ported.
+Type resharding is here on both sides: a producer may change how many shards a type's records are
+written in as the data grows or shrinks, and a consumer rearranges the records it already holds to
+match before applying the delta that says so. The incremental producer is here too, for a caller whose
+source of truth is a change feed rather than a table.
+
+What is **not** here is object longevity, code generation, and the diff/history tools. The status
+section says exactly what is and is not ported.
 
 ## Building and testing
 
@@ -92,6 +97,84 @@ one, drive it with `TriggerRefreshTo(version)`. Either way it follows deltas whe
 `consumer.StateEngine` keeps returning the same instance and an index told to
 `ListenForDeltaUpdates()` stays valid — register an `IRefreshListener` to hear when that stops being
 true.
+
+## Incremental cycles
+
+`RunCycle` describes the whole dataset. `RunIncrementalCycle` describes only what moved since the last
+version, and the producer carries everything else across unchanged:
+
+```csharp
+producer.RunIncrementalCycle(state =>
+{
+    foreach (Change change in QueryChangesSinceLastVersion())
+    {
+        if (change.IsDeletion)
+        {
+            state.Delete(change.Movie);
+        }
+        else
+        {
+            state.AddOrModify(change.Movie);
+        }
+    }
+});
+```
+
+Everything after population is identical: the same blobs are written, the same integrity check and
+validators run, and the same version is announced. A producer can run either kind of cycle; it need
+not be built for one.
+
+Records are named by primary key, so every type an incremental cycle touches needs one — through
+`[HollowPrimaryKey]` on the CLR type, or on the schema. `AddIfAbsent` leaves an existing record alone;
+`Delete` takes either an object or a `RecordPrimaryKey` and ignores a record that is not there.
+Reporting the same record twice is the last word winning, not both changes applying.
+
+Deleting a record also deletes what it referenced, unless something else still references it. That is
+`TransitiveSetTraverser` (in `Core/Tools/Traverse`), and it is what stops the strings of every deleted
+record accumulating in the state forever. It is public in its own right: given a selection of ordinals
+per type it can add everything the selection points at, add everything that points at the selection,
+or drop whatever something outside still needs.
+
+## Type resharding
+
+A type's records are split across a power-of-two number of shards, chosen from the data size so that
+no one allocation has to hold the whole type. By default that count is fixed the first time the type
+is written. Turning resharding on lets it follow the data:
+
+```csharp
+HollowProducer producer = new HollowProducerBuilder()
+    // ...
+    .WithTypeResharding()
+    .Build();
+```
+
+A consumer needs no configuration: when a delta declares a different count from the one it holds, it
+rearranges its records to match and then applies the delta.
+
+Three things are worth knowing before turning it on.
+
+**Every consumer of the chain has to be able to follow it.** A consumer that predates resharding
+applies the delta at the count it already has and misreads every ordinal in it. There is no
+negotiation — the producer's header tag `hollow.type.resharding.invoked` records what moved
+(`Movie:(1,2) Actor:(8,4)`, always in the forward direction) but nothing checks that consumers coped.
+
+**A count moves by at most a factor of two per cycle**, so a type that has badly outgrown its shards
+takes several cycles to get where it is going. That is what keeps each consumer's rearrangement to one
+split or one join.
+
+**A shard-count change alone is enough to put a type in a delta**, even when none of its records
+changed. The arrangement is what the delta is carrying.
+
+A reverse delta is written at the *previous* cycle's count, because that is the arrangement it takes a
+consumer back to. `HollowTypeWriteState` therefore tracks both: `NumShards` for this cycle and
+`RevNumShards` for the last.
+
+On the consumer side the rearrangement runs one shard at a time, so only one shard's worth of records
+is duplicated at any moment rather than the whole type. Each step publishes a complete new shard array
+before releasing the storage it replaced — that is what `ShardsHolder` is for, holding the shard array
+and the mask that selects one so a reader cannot pair a new array with an old mask. If a rearrangement
+fails part way through it throws `InvalidOperationException`, and the read state is then unusable:
+only a fresh snapshot recovers it.
 
 ## Culture-invariant formatting and parsing
 
@@ -280,6 +363,15 @@ type. The systematic changes are:
 - **`HollowProducer.Populator` → the `Populator` delegate.** Java declares it as a functional
   interface; a delegate is what a C# lambda binds to without ceremony. `HollowProducer.Validator` and
   the rest of the listener family stay interfaces, since an implementation carries state.
+- **`HollowProducer.Incremental.IncrementalPopulator` → the `IncrementalPopulator` delegate**, for the
+  same reason. `IncrementalWriteState` becomes `IIncrementalWriteState` under the interface rule
+  above.
+- **`HollowTypeReshardingStrategy.getInstance(typeState)` → `ForType(typeState)`**, since `GetInstance`
+  reads as a singleton accessor where this picks a strategy by record kind. `shardingFactor` →
+  `ShardingFactor`, `reshard` → `Reshard`.
+- **Java's per-kind `Hollow*TypeShardsHolder` classes become one generic `ShardsHolder<TShard>`.** Java
+  needs a class per record kind so that `getShards()` can return a covariant array; a type parameter
+  does the same job.
 
 ## Behavioural differences
 
@@ -471,6 +563,32 @@ simpler thing to write and would produce a different number for a multi-sharded 
 are only ever compared against each other, so either would work, but matching Java keeps the values
 comparable if anyone ever does transport one.
 
+One consequence is worth stating, since resharding makes it reachable: a checksum is only meaningful
+between two states at the same shard count. Rearranging a state changes the walk order and so changes
+the number, even though the data is identical. The producer's integrity check is unaffected — it
+compares states of the same cycle, which agree on the count — but a test that reshards and expects the
+checksum to hold still is asserting the wrong thing.
+
+### The incremental producer is a method, not a separate producer
+
+Java splits the incremental API into a `HollowProducer.Incremental` subclass, built through
+`HollowProducer.Builder.buildIncremental()`, and a caller has to decide up front which kind of
+producer it wants. Here `RunIncrementalCycle` sits alongside `RunCycle` on `HollowProducer`, so the
+same producer can run either kind of cycle. Nothing in the cycle distinguishes them after population —
+the incremental populator is turned into an ordinary one — so there was nothing for the split to
+protect.
+
+Java's deprecated `HollowIncrementalProducer`, the standalone class that predates
+`HollowProducer.Incremental`, is not ported.
+
+### An incremental cycle's changes are collected before any of them are applied
+
+Java's incremental write state writes into a `ConcurrentHashMap` and so does this one, which is what
+makes the populator safe to run across several threads and makes reporting the same record twice the
+last word winning. Nothing is applied to the write state until the populator returns. A populator that
+throws therefore leaves the previous version exactly as it was, and the version consumers are on is
+still announced.
+
 ### Delta application copies record by record
 
 Java's delta applicators have a fast path that bulk-copies runs of unchanged records with `copyBits`
@@ -540,12 +658,16 @@ memory modes; .NET's `Stream` covers both, so the port wraps a stream and report
 | reverse deltas | `HollowTypeWriteState.CalculateReverseDelta`, `HollowBlobWriter.WriteReverseDelta`; a consumer applies one through the same `ApplyDelta` |
 | hash keys | `HollowWriteStateEnginePrimaryKeyHasher` on the write side, `SetMapKeyHasher` and `FindElement`/`FindKey`/`FindValue`/`FindEntry` on the read side |
 | restore | `HollowWriteStateEngine.RestoreFrom` and `HollowTypeWriteState.RestoreFrom`, `HollowWriteStateCreator` |
+| resharding (read) | `ShardsHolder`, `HollowTypeDataElements`/`HollowTypeReadStateShard`, the data element splitters and joiners for all four record kinds, `HollowTypeReshardingStrategy`, `GapEncodedVariableLengthIntegerReader.Split`/`Join` |
+| resharding (write) | `HollowWriteStateEngine.AllowTypeResharding`, `GatherShardingStats` with its one-factor-of-two-per-cycle rule, `RevNumShards`/`RevMaxShardOrdinal` and the direction-aware delta writers, the `hollow.type.resharding.invoked` header tag |
+| `tools.traverse` | `TransitiveSetTraverser` — `AddTransitiveMatches`, `RemoveReferencedOutsideClosure`, `AddReferencingOutsideClosure` |
 | `api.consumer` | `HollowConsumer` and `HollowConsumerBuilder`, `Blob`/`HeaderBlob`/`BlobType`, `IBlobRetriever`, `IAnnouncementWatcher`/`VersionInfo`/`AnnouncementStatus`, `IRefreshListener`/`ITransitionAwareRefreshListener`/`IRefreshRegistrationListener`/`HollowRefreshListener`, `IDoubleSnapshotConfig`, `IUpdatePlanBlobVerifier` |
 | `api.consumer.fs` | `HollowFilesystemBlobRetriever`, `HollowFilesystemAnnouncementWatcher` |
 | `api.client` | `HollowUpdatePlan`, `HollowUpdatePlanner`, `FailedTransitionTracker`, `HollowDataHolder`, `HollowClientUpdater` |
 | `api.producer` | `HollowProducer` and `HollowProducerBuilder`, the cycle with its rollback, `Restore`, `Blob`/`HeaderBlob`/`IPublishArtifact`, `IBlobStager`, `IPublisher`, `IAnnouncer`, `IVersionMinter`/`VersionMinterWithCounter`, `IBlobCompressor`, `IWriteState`/`IReadState`/`Populator`, `Status`, `ReadStateHelper` |
 | `api.producer.listener` | The per-stage listener interfaces, `HollowProducerListener` as a no-op base, `IVetoableListener`/`ListenerVetoException` |
 | `api.producer.validation` | `IValidatorListener`, `ValidationResult` and its builder, `ValidationStatus`, `ValidationStatusException`, `DuplicateDataDetectionValidator`, `RecordCountVarianceValidator` |
+| `api.producer` (incremental) | `HollowProducer.RunIncrementalCycle`, `IIncrementalWriteState`/`IncrementalPopulator`, `IIncrementalPopulateListener`, `RecordPrimaryKey`, `HollowObjectMapper.ExtractPrimaryKey`, and the `AddAllObjectsFromPreviousCycle`/`RemoveOrdinalFromThisCycle` family on the write state |
 | `api.producer.enforcer` | `ISingleProducerEnforcer`, `BasicSingleProducerEnforcer` |
 | `api.producer.fs` | `HollowFilesystemBlobStager`, `HollowInMemoryBlobStager`, `HollowFilesystemPublisher`, `HollowFilesystemAnnouncer` |
 | `core.read` (field access) | `HollowReadFieldUtils` |
@@ -603,6 +725,21 @@ actually on. `ChecksumTests` pins what the checksum distinguishes, which is the 
 whether the integrity check is worth anything: the same records at different ordinals, a set's bucket
 layout, and both halves of a decimal all have to change it.
 
+`ReshardingTests` states resharding as an equivalence, because that is the only claim worth making:
+rearranging a state read at one shard count has to land on exactly what the producer would have
+written at the other — same ordinals, same values, same hash bucket positions — since a consumer that
+reshards then applies a delta is about to be compared, record for record, against a producer that
+never had the old count at all. That is asserted for splits and joins across all four record kinds,
+and then end to end: a consumer follows a producer that splits, one that joins, and a reverse delta
+back across a reshard. `ProducerTests` adds the case that matters most, a full producer cycle that
+reshards with its own integrity check still passing.
+
+`IncrementalProducerTests` makes the same kind of claim: an incremental cycle and a full one
+describing the same data publish the same thing. What is not obvious there is deletion, so several
+tests are about which sub-records go with a deleted record and which stay — removing the last
+reference to a string drops it, removing one of two does not. `TransitiveSetTraverserTests` covers the
+traversal underneath on its own, over object fields, list elements, set elements and map entries.
+
 `FilesystemProducerTests` is the only test where a real producer and a real consumer share a real
 directory. Everything else uses in-memory stand-ins on one side or the other, so this is what would
 catch a producer and a consumer that each work but do not agree on a file name, a staging step or the
@@ -622,8 +759,6 @@ sets of `TypeFilter` exist; the recursive rule DSL is still absent.
   here. It is also why `HollowConsumer` has no `ObjectLongevityConfig` or stale-reference detector:
   both exist to serve the proxy data access that is not ported.
 - **Historical state creation**, which a consumer uses to serve queries against prior states.
-- **Resharding.** A type's shard count is fixed when it is first written, and `RestoreFrom` refuses a
-  read state whose shard count differs from the registered write state's rather than adapting.
 - **Partitioned ordinal maps.** `HollowTypeWriteState` uses a single `ByteArrayOrdinalMap`, which is
   Java's default; the four-way partitioned variant is not ported. `RestoreFrom` and
   `HollowWriteStateCreator` are written against the single map, so adding the partitioned variant
@@ -631,10 +766,6 @@ sets of `TypeFilter` exist; the recursive rule DSL is still absent.
 - **Shared-memory mode.** `MemoryMode.SharedMemoryLazy` and the `BlobByteBuffer`, `EncodedByteBuffer`
   and `EncodedLongBuffer` types behind it. Constructing a read state engine with it throws.
 - **Optional blob parts**, which split a snapshot across several streams.
-- **The incremental producer** (`HollowProducer.Incremental`, `HollowIncrementalProducer`), which
-  applies a set of add and remove events to the previous cycle rather than re-describing the whole
-  dataset. It is a façade over the same cycle, and `HollowWriteStateEngine` would need
-  `AddAllObjectsFromPreviousCycle` and the ordinal bookkeeping around it.
 - **Producer metrics** (`api.producer.metrics`), asynchronous snapshot publishing, the blob storage
   cleaner, and the remaining validators
   (`MinimumRecordCountValidator`, `NullPrimaryKeyFieldValidator`, `ObjectModificationValidator`,
@@ -645,8 +776,9 @@ sets of `TypeFilter` exist; the recursive rule DSL is still absent.
   the ported indexes in a generated-API-typed façade.
 - **The deprecated `api.client.HollowClient`**, superseded by `HollowConsumer`; only the parts of
   `api.client` that `HollowConsumer` uses are ported.
-- **Tools** (`tools`: diff, history, combine, split, patch — `tools.checksum` is ported, because the
-  producer's integrity check needs it), **code generation** (`api.codegen`), **sampling**
+- **Tools** (`tools`: diff, history, combine, split, patch — `tools.checksum` is ported because the
+  producer's integrity check needs it, and `tools.traverse` because the incremental producer does),
+  **code generation** (`api.codegen`), **sampling**
   (`api.sampling`), and every module outside
   `hollow` — `hollow-diff-ui`, `hollow-explorer-ui`, `hollow-jsonadapter`, `hollow-protoadapter`,
   `hollow-zenoadapter`, `hollow-test`, `hollow-fakedata`.
@@ -673,11 +805,9 @@ wide and every other fixed-length field is 64 or fewer.
 The loop is closed: a producer publishes, a consumer follows, and a restarted producer stays on the
 chain. What is left is either an optimisation or a feature on top.
 
-1. Resharding, which is the largest remaining piece of the engine and touches every write state. It is
-   also the thing most likely to be missed by the tests as they stand, since nothing in the port
-   currently changes a type's shard count.
-2. The incremental producer, for a caller whose source of truth is a change feed rather than a table.
-3. `HollowPrefixIndex` and `HollowSparseIntegerSet`, the last of `core.index`.
-4. The bulk-copy fast path in the delta applicators, which is a pure optimisation the existing tests
-   already guard.
-5. The remaining validators, each a self-contained addition to the ported framework.
+1. `HollowPrefixIndex` and `HollowSparseIntegerSet`, the last of `core.index`.
+2. The bulk-copy fast path in the delta applicators, which is a pure optimisation the existing tests
+   already guard. The resharding splitters and joiners copy record by record for the same reason and
+   would benefit from the same treatment.
+3. The remaining validators, each a self-contained addition to the ported framework.
+4. Partitioned ordinal maps, which is the last write-side difference from Java's defaults.
