@@ -40,7 +40,14 @@ public sealed class HollowBlobOutput : IDisposable
         _leaveOpen = leaveOpen;
     }
 
-    private Stream Stream => _stream ?? throw new ObjectDisposedException(nameof(HollowBlobOutput));
+    /// <summary>
+    /// The underlying stream, for callers that write bulk data themselves.
+    /// </summary>
+    /// <remarks>
+    /// Java passes the raw <c>OutputStream</c> alongside its <c>DataOutputStream</c> wrapper for the
+    /// same purpose, so that a segmented byte array can be written a segment at a time.
+    /// </remarks>
+    public Stream Stream => _stream ?? throw new ObjectDisposedException(nameof(HollowBlobOutput));
 
     /// <summary>
     /// Wraps <paramref name="stream"/> for blob output.
