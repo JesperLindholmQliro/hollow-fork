@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Hollow</RootNamespace>
+    <AssemblyName>Hollow</AssemblyName>
+    <Description>
+      A .NET port of Netflix Hollow's core engine: the in-memory record layout, schema model,
+      write state engine and read state engine.
+    </Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Hollow.Tests" />
+  </ItemGroup>
+
+</Project>
