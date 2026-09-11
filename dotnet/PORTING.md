@@ -5,11 +5,14 @@ list, set and map — round-trip end to end: a `HollowWriteStateEngine` writes a
 `HollowReadStateEngine` reads back. An object mapper maps ordinary CLR types onto Hollow records, so
 callers need not build records field by field.
 
-Deltas are **partly** here: the producer can calculate and write a delta for all four record kinds,
-and a consumer can apply one for object types. Applying a collection-type delta is not implemented, so
-the writer refuses to produce one rather than emit a blob no consumer here could read.
+Deltas are here for all four record kinds: the producer calculates and writes a delta, and a consumer
+applies it to move forward one cycle without re-reading a snapshot.
 
-What is **not** here is resharding, restore, indexing, the diff/history tools, and the
+Indexing is here too: field paths bind a declared key onto the schemas, `HollowPrimaryKeyIndex` looks
+records up by key rather than by ordinal, and a set or map schema may declare a hash key, which the
+producer honours when laying out each record's hash table.
+
+What is **not** here is reverse deltas, resharding, restore, the diff/history tools, and the
 producer/consumer APIs. The status section says exactly what is and is not ported.
 
 ## Building and testing
@@ -116,6 +119,16 @@ set, so deriving the sentinel the way Java does would produce a different, incom
 sentinels are written as literals, and a NaN *value* is canonicalised to Java's pattern before being
 stored, matching `Float.floatToIntBits` rather than `floatToRawIntBits`.
 
+### A declared hash key replaces ordinal-based lookup
+
+This is inherent to the format rather than specific to the port, but it is easy to trip over. When a
+set or map schema declares a hash key, the producer places each element in the bucket a consumer
+probing by that key will look in — not the bucket its ordinal hashes to. `Contains`, `Get` and the
+potential-match iterators probe by ordinal, so on a keyed collection they no longer find anything
+reliably; use `FindElement`, `FindKey`, `FindValue` and `FindEntry` instead. Iteration is unaffected,
+because it walks the buckets rather than probing them.
+`HashKeyTests.ADeclaredKeyReplacesOrdinalBasedLookup` pins this.
+
 ### Delta application copies record by record
 
 Java's delta applicators have a fast path that bulk-copies runs of unchanged records with `copyBits`
@@ -167,7 +180,8 @@ memory modes; .NET's `Stream` covers both, so the port wraps a stream and report
 | `core.memory.encoding` | `ZigZag`, `VarInt`, `HashCodes`, `FixedLengthElementArray` |
 | `core.memory.pool` | `IArraySegmentRecycler`, `WastefulRecycler`, `RecyclingRecycler` |
 | `core.schema` | `HollowSchema` and the object/list/set/map schemas, `FieldType`, `SchemaType`, `SimpleHollowDataset` |
-| `core.index.key` | `PrimaryKey` (identity and accessors only) |
+| `core.index` | `FieldPaths` and the bound `FieldPath`/`FieldSegment`/`ObjectFieldSegment`/`FieldPathException` types, `HollowPrimaryKeyIndex` |
+| `core.index.key` | `PrimaryKey`, including its dataset-resolution helpers, and `HollowPrimaryKeyValueDeriver` |
 | `core` | `HollowConstants`, `IHollowDataset` |
 | `core.util` | `BitSet` (a port-specific stand-in for `java.util.BitSet`) |
 | `core.write` | The write records (object, list, set, map), `FieldStatistics`, `HollowTypeWriteState` and its four subclasses, `HollowWriteStateEngine`, `HollowBlobHeaderWriter`, `HollowBlobWriter`, `HollowBlobOutput` |
@@ -177,7 +191,9 @@ memory modes; .NET's `Stream` covers both, so the port wraps a stream and report
 | `core.read.iterator` | The ordinal iterators, including the potential-match iterators used for key lookups |
 | `core.memory.encoding` (delta) | `GapEncodedVariableLengthIntegerReader` |
 | delta write path | `CalculateDelta`/`WriteCalculatedDelta` on all four type write states, `HollowBlobWriter.WriteDelta` |
-| delta read path | `HollowObjectTypeDataElements.ApplyDelta`, `HollowObjectTypeReadState.ApplyDelta`, `HollowBlobReader.ApplyDelta` (object types only) |
+| delta read path | `ApplyDelta` on the data elements and read states of all four record kinds, `HollowBlobReader.ApplyDelta` |
+| hash keys | `HollowWriteStateEnginePrimaryKeyHasher` on the write side, `SetMapKeyHasher` and `FindElement`/`FindKey`/`FindValue`/`FindEntry` on the read side |
+| `core.read` (field access) | `HollowReadFieldUtils` |
 
 Test coverage is carried over from the Java tests where they exist — `VarIntTest`, `HashCodesTest`,
 `FixedLengthElementArrayTest`, `FreeOrdinalTrackerTest`, `ThreadSafeBitSetTest`,
@@ -190,6 +206,16 @@ together, which is the only way to check the blob format itself: the bit packing
 ranges, the null sentinels, the hash-table layout, the shard layout and the trailing
 populated-ordinals bit set all have to agree for a record to survive the trip.
 
+`DeltaTests` and `CollectionDeltaTests` assert whole-state equivalence rather than spot-checking
+fields: after a delta the consumer must hold exactly what a consumer that read that cycle's snapshot
+outright would hold, ordinals included. A merge that gets a record slightly wrong still looks
+plausible field by field.
+
+`HashKeyTests` looks elements up through the read state rather than comparing hash values, because
+producer and consumer compute the key hash from entirely different representations of the record —
+the producer from its serialised bytes, the consumer from boxed key values — and only agreement
+between them makes a lookup work.
+
 ### Ported, not yet covered by a round-trip
 
 `HollowObjectSchema.FilterSchema` and the read path honour a filter, but only the explicit include
@@ -197,15 +223,11 @@ sets of `TypeFilter` exist; the recursive rule DSL is still absent.
 
 ### Not ported
 
-- **Schema-declared hash keys on sets and maps.** Java re-hashes elements through
-  `HollowWriteStateEnginePrimaryKeyHasher` so a consumer can find an element by key rather than by
-  ordinal. That hasher needs the field-path machinery in `core.index`, which is not ported, so a set
-  or map schema carrying a hash key is written with ordinal hashing. Lookups by ordinal are
-  unaffected; lookups by key are not available.
-- **Collection-type delta application.** The write side produces deltas for list, set and map types,
-  but no applicator exists for them, so `HollowBlobWriter.WriteDelta` throws rather than writing one.
-  The object applicator shows the shape; the collection ones are simpler, since a collection record is
-  a run of elements rather than a set of independently sized fields.
+- **The rest of `core.index`.** `HollowHashIndex`, `HollowPrefixIndex`, `HollowUniqueKeyIndex`,
+  `HollowSparseIntegerSet` and the traversal helpers. `FieldPaths` supports the hash-index and
+  prefix-index binding modes those need, so they have their foundation.
+- **The `[HollowHashKey]` attribute.** A hash key declared on a schema works end to end, but the
+  object mapper has no attribute for declaring one on a CLR type; build the schema directly.
 - **Reverse deltas.** `CalculateReverseDelta` exists on the write state but nothing writes or applies
   one.
 - **Historical state creation**, which a consumer uses to serve queries against prior states.
@@ -216,7 +238,7 @@ sets of `TypeFilter` exist; the recursive rule DSL is still absent.
 - **Shared-memory mode.** `MemoryMode.SharedMemoryLazy` and the `BlobByteBuffer`, `EncodedByteBuffer`
   and `EncodedLongBuffer` types behind it. Constructing a read state engine with it throws.
 - **Optional blob parts**, which split a snapshot across several streams.
-- **Indexing** (`core.index` beyond `PrimaryKey`), **tools** (`core.tools`: diff, history, combine,
+- **Tools** (`core.tools`: diff, history, combine,
   split, patch, checksum), **the producer and consumer APIs** (`api.producer`, `api.consumer`),
   **code generation** (`api.codegen`), **sampling** (`api.sampling`), and every module outside
   `hollow` — `hollow-diff-ui`, `hollow-explorer-ui`, `hollow-jsonadapter`, `hollow-protoadapter`,
@@ -227,9 +249,12 @@ sets of `TypeFilter` exist; the recursive rule DSL is still absent.
 
 ### Suggested order for the remaining work
 
-1. Delta applicators for list, set and map, which completes the delta path. Each follows the object
-   applicator's shape and is simpler.
-2. `core.index` — `FieldPaths` and the primary key index — which also unlocks schema-declared hash
-   keys on sets and maps.
+1. `HollowHashIndex` and `HollowUniqueKeyIndex`, which bind through the same `FieldPaths` machinery
+   that is now in place and give a key-based lookup that survives more than two deltas.
+2. Reverse deltas, which reuse the applicators the forward path already has —
+   `CalculateReverseDelta` exists on the write state and produces the arrays; nothing writes or
+   applies them yet.
 3. Resharding and restore, which build on deltas.
-4. The consumer API, once the delta path is complete.
+4. The consumer API, now that the delta path is complete.
+5. The bulk-copy fast path in the delta applicators, which is a pure optimisation the existing tests
+   already guard.

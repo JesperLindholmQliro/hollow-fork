@@ -28,11 +28,9 @@ namespace Hollow.Core.Write;
 /// of its own, and every record's table is concatenated into one bit-packed array.
 /// </summary>
 /// <remarks>
-/// <strong>Port note.</strong> Java re-hashes elements through
-/// <c>HollowWriteStateEnginePrimaryKeyHasher</c> when the schema declares a hash key, so that a
-/// consumer can look an element up by key rather than by ordinal. That hasher depends on the field-path
-/// machinery in <c>core.index</c>, which is not ported; a schema with a hash key is written with
-/// ordinal hashing here. See <c>PORTING.md</c>.
+/// When the schema declares a hash key, elements are placed by that key's hash rather than by their
+/// ordinal's, so a consumer can look one up by key. Ordinal-based lookup then no longer works — see
+/// <c>PORTING.md</c>.
 /// </remarks>
 public sealed partial class HollowSetTypeWriteState : HollowTypeWriteState
 {
@@ -85,6 +83,11 @@ public sealed partial class HollowSetTypeWriteState : HollowTypeWriteState
         int[] bucketCounter = new int[numShards];
         int shardMask = numShards - 1;
 
+        // A declared hash key means the producer must place each element in the bucket a consumer
+        // probing by that key will look in, rather than in its ordinal's bucket.
+        HollowWriteStateEnginePrimaryKeyHasher? keyHasher =
+            HollowWriteStateEnginePrimaryKeyHasher.TryCreate(Schema.HashKey, StateEngine);
+
         for (int ordinal = 0; ordinal <= MaxOrdinal; ordinal++)
         {
             int shardNumber = ordinal & shardMask;
@@ -123,6 +126,11 @@ public sealed partial class HollowSetTypeWriteState : HollowTypeWriteState
                     readPointer += VarInt.SizeOfVInt(hashedBucket);
 
                     elementOrdinal += elementOrdinalDelta;
+
+                    if (keyHasher is not null)
+                    {
+                        hashedBucket = keyHasher.GetRecordHash(elementOrdinal) & (numBuckets - 1);
+                    }
 
                     while (_elementArray[shardNumber].GetElementValue(
                         (long)_bitsPerElement * (bucketCounter[shardNumber] + hashedBucket), _bitsPerElement)

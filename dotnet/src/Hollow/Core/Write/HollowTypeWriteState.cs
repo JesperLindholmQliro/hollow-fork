@@ -230,10 +230,10 @@ public abstract class HollowTypeWriteState
     /// <summary>
     /// The position of <paramref name="ordinal"/>'s serialised bytes within the ordinal map.
     /// </summary>
-    protected long GetPointerForData(int ordinal) => OrdinalMap.GetPointerForData(ordinal);
+    protected internal long GetPointerForData(int ordinal) => OrdinalMap.GetPointerForData(ordinal);
 
     /// <summary>The byte storage holding every record's serialised bytes.</summary>
-    protected SegmentedByteArray GetByteDataForOrdinal(int ordinal) =>
+    protected internal SegmentedByteArray GetByteDataForOrdinal(int ordinal) =>
         OrdinalMap.ByteData.UnderlyingArray;
 
     /// <summary>

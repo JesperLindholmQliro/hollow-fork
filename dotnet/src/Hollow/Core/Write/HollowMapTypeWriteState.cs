@@ -28,8 +28,8 @@ namespace Hollow.Core.Write;
 /// of its own, with the key and value ordinals packed side by side in each bucket.
 /// </summary>
 /// <remarks>
-/// <strong>Port note.</strong> As with sets, a schema-declared hash key is not honoured — see
-/// <see cref="HollowSetTypeWriteState"/> and <c>PORTING.md</c>.
+/// As with sets, a schema-declared hash key places each entry by its key's hash rather than by the key
+/// record's ordinal — see <see cref="HollowSetTypeWriteState"/>.
 /// </remarks>
 public sealed partial class HollowMapTypeWriteState : HollowTypeWriteState
 {
@@ -84,6 +84,11 @@ public sealed partial class HollowMapTypeWriteState : HollowTypeWriteState
         int[] bucketCounter = new int[numShards];
         int shardMask = numShards - 1;
 
+        // A declared hash key means the producer must place each element in the bucket a consumer
+        // probing by that key will look in, rather than in its ordinal's bucket.
+        HollowWriteStateEnginePrimaryKeyHasher? keyHasher =
+            HollowWriteStateEnginePrimaryKeyHasher.TryCreate(Schema.HashKey, StateEngine);
+
         for (int ordinal = 0; ordinal <= MaxOrdinal; ordinal++)
         {
             int shardNumber = ordinal & shardMask;
@@ -126,6 +131,11 @@ public sealed partial class HollowMapTypeWriteState : HollowTypeWriteState
                     readPointer += VarInt.SizeOfVInt(hashedBucket);
 
                     keyElementOrdinal += keyElementOrdinalDelta;
+
+                    if (keyHasher is not null)
+                    {
+                        hashedBucket = keyHasher.GetRecordHash(keyElementOrdinal) & (numBuckets - 1);
+                    }
 
                     while (_entryData[shardNumber].GetElementValue(
                         (long)bitsPerMapEntry * (bucketCounter[shardNumber] + hashedBucket), _bitsPerKeyElement)

@@ -15,6 +15,8 @@
  *
  */
 
+using Hollow.Core.Schema;
+
 namespace Hollow.Core.Index.Key;
 
 /// <summary>
@@ -26,12 +28,6 @@ namespace Hollow.Core.Index.Key;
 /// example, the field definition <c>movie.country.id</c> traverses the child record referenced by the
 /// field <c>movie</c>, then its child record referenced by the field <c>country</c>, and finally that
 /// country's field <c>id</c>.
-/// </para>
-/// <para>
-/// <strong>Port note.</strong> The Java class also resolves field paths against a dataset
-/// (<c>getFieldType</c>, <c>getFieldPathIndex</c>, <c>getCompleteFieldPathParts</c>). Those depend on
-/// <c>core/index/FieldPaths</c>, which is part of the indexing layer rather than the core engine, and
-/// are not ported here — see <c>PORTING.md</c>.
 /// </para>
 /// </remarks>
 public sealed class PrimaryKey : IEquatable<PrimaryKey>
@@ -66,6 +62,127 @@ public sealed class PrimaryKey : IEquatable<PrimaryKey>
 
     /// <summary>Gets the field path at <paramref name="index"/>.</summary>
     public string GetFieldPath(int index) => _fieldPaths[index];
+
+    /// <summary>
+    /// Creates a key over <paramref name="fieldPaths"/>, or, when none are given, the key declared on
+    /// <paramref name="type"/>'s own schema.
+    /// </summary>
+    /// <returns>
+    /// The key, or <see langword="null"/> when no paths were given and <paramref name="type"/> is not an
+    /// object type.
+    /// </returns>
+    public static PrimaryKey? Create(IHollowDataset dataset, string type, params string[]? fieldPaths)
+    {
+        if (fieldPaths is not null && fieldPaths.Length != 0)
+        {
+            return new PrimaryKey(type, fieldPaths);
+        }
+
+        ArgumentNullException.ThrowIfNull(dataset);
+
+        return (dataset.GetSchema(type) as HollowObjectSchema)?.PrimaryKey;
+    }
+
+    /// <summary>
+    /// Resolves the type of the field at <paramref name="fieldPathIndex"/> against
+    /// <paramref name="dataset"/>.
+    /// </summary>
+    public FieldType GetFieldType(IHollowDataset dataset, int fieldPathIndex) =>
+        GetFieldType(dataset, Type, _fieldPaths[fieldPathIndex]);
+
+    /// <summary>
+    /// Resolves the schema declaring the field at <paramref name="fieldPathIndex"/> against
+    /// <paramref name="dataset"/>.
+    /// </summary>
+    public HollowObjectSchema GetFieldSchema(IHollowDataset dataset, int fieldPathIndex) =>
+        GetFieldSchema(dataset, Type, _fieldPaths[fieldPathIndex]);
+
+    /// <summary>
+    /// Resolves the field at <paramref name="fieldPathIndex"/> into the schema field positions to
+    /// traverse.
+    /// </summary>
+    public int[] GetFieldPathIndex(IHollowDataset dataset, int fieldPathIndex) =>
+        GetFieldPathIndex(dataset, Type, _fieldPaths[fieldPathIndex]);
+
+    /// <summary>
+    /// Resolves the ultimate field type of <paramref name="fieldPath"/> starting from
+    /// <paramref name="type"/>.
+    /// </summary>
+    /// <exception cref="FieldPathException">The path cannot be bound.</exception>
+    public static FieldType GetFieldType(IHollowDataset dataset, string type, string fieldPath)
+    {
+        ArgumentNullException.ThrowIfNull(dataset);
+
+        HollowObjectSchema schema = (HollowObjectSchema)dataset.GetNonNullSchema(type);
+        int[] pathIndexes = GetFieldPathIndex(dataset, type, fieldPath);
+
+        for (int i = 0; i < pathIndexes.Length - 1; i++)
+        {
+            schema = (HollowObjectSchema)dataset.GetNonNullSchema(schema.GetReferencedType(pathIndexes[i])!);
+        }
+
+        return schema.GetFieldType(pathIndexes[^1]);
+    }
+
+    /// <summary>
+    /// Resolves the schema that <paramref name="fieldPath"/> ends up referring to, starting from
+    /// <paramref name="type"/>.
+    /// </summary>
+    /// <exception cref="FieldPathException">The path cannot be bound.</exception>
+    public static HollowObjectSchema GetFieldSchema(IHollowDataset dataset, string type, string fieldPath)
+    {
+        ArgumentNullException.ThrowIfNull(dataset);
+
+        HollowObjectSchema schema = (HollowObjectSchema)dataset.GetNonNullSchema(type);
+
+        foreach (int pathIndex in GetFieldPathIndex(dataset, type, fieldPath))
+        {
+            schema = (HollowObjectSchema)dataset.GetNonNullSchema(schema.GetReferencedType(pathIndex)!);
+        }
+
+        return schema;
+    }
+
+    /// <summary>
+    /// Splits <paramref name="fieldPath"/> into its field names, auto-expanded where the declared path
+    /// stopped short of a value field.
+    /// </summary>
+    /// <exception cref="FieldPathException">The path cannot be bound.</exception>
+    public static string[] GetCompleteFieldPathParts(IHollowDataset dataset, string type, string fieldPath)
+    {
+        ArgumentNullException.ThrowIfNull(dataset);
+
+        int[] pathIndexes = GetFieldPathIndex(dataset, type, fieldPath);
+        string[] parts = new string[pathIndexes.Length];
+
+        HollowObjectSchema schema = (HollowObjectSchema)dataset.GetNonNullSchema(type);
+        for (int i = 0; i < parts.Length; i++)
+        {
+            parts[i] = schema.GetFieldName(pathIndexes[i]);
+
+            string? referencedType = schema.GetReferencedType(pathIndexes[i]);
+            if (referencedType is null)
+            {
+                break;
+            }
+
+            schema = (HollowObjectSchema)dataset.GetNonNullSchema(referencedType);
+        }
+
+        return parts;
+    }
+
+    /// <summary>
+    /// Resolves <paramref name="fieldPath"/> into the schema field positions to traverse, one per
+    /// segment of the auto-expanded path.
+    /// </summary>
+    /// <exception cref="FieldPathException">The path cannot be bound.</exception>
+    public static int[] GetFieldPathIndex(IHollowDataset dataset, string type, string fieldPath) =>
+        [
+            // Qualified because this type's own FieldPaths property would otherwise shadow the class.
+            .. Index.FieldPaths.CreateFieldPathForPrimaryKey(dataset, type, fieldPath).Segments
+                .Select(segment => segment.Index),
+        ];
 
     /// <inheritdoc />
     public bool Equals(PrimaryKey? other) =>

@@ -19,6 +19,8 @@ using Hollow.Api.Error;
 using Hollow.Core.Memory;
 using Hollow.Core.Memory.Pool;
 using Hollow.Core.Read.DataAccess;
+using Hollow.Core.Read.Engine.Map;
+using Hollow.Core.Read.Engine.Set;
 using Hollow.Core.Schema;
 
 namespace Hollow.Core.Read.Engine;
@@ -33,8 +35,8 @@ namespace Hollow.Core.Read.Engine;
 /// one <see cref="HollowTypeReadState"/> per type in the dataset.
 /// </para>
 /// <para>
-/// <strong>Port note.</strong> Delta and reverse-delta transitions, header tags, and the
-/// <c>api/sampling</c> hooks present on the Java class are not ported — see <c>PORTING.md</c>.
+/// <strong>Port note.</strong> Reverse-delta transitions and the <c>api/sampling</c> hooks present on
+/// the Java class are not ported — see <c>PORTING.md</c>.
 /// </para>
 /// </remarks>
 public sealed class HollowReadStateEngine : IHollowDataAccess
@@ -159,6 +161,25 @@ public sealed class HollowReadStateEngine : IHollowDataAccess
 
                 default:
                     throw new UnrecognizedSchemaTypeException(typeState.TypeName, typeState.Schema.SchemaType);
+            }
+        }
+
+        // A second pass, because resolving a declared hash key walks the referenced type states the
+        // first pass has only just wired up.
+        foreach (HollowTypeReadState typeState in _typeStates.Values)
+        {
+            switch (typeState)
+            {
+                case HollowSetTypeReadState setState:
+                    setState.BuildKeyDeriver();
+                    break;
+
+                case HollowMapTypeReadState mapState:
+                    mapState.BuildKeyDeriver();
+                    break;
+
+                default:
+                    break;
             }
         }
     }

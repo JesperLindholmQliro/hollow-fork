@@ -73,6 +73,11 @@ public sealed partial class HollowSetTypeWriteState
         int[] previousRemovedOrdinal = new int[numShards];
         int[] previousAddedOrdinal = new int[numShards];
 
+        // A declared hash key means the producer must place each element in the bucket a consumer
+        // probing by that key will look in, rather than in its ordinal's bucket.
+        HollowWriteStateEnginePrimaryKeyHasher? keyHasher =
+            HollowWriteStateEnginePrimaryKeyHasher.TryCreate(Schema.HashKey, StateEngine);
+
         for (int ordinal = 0; ordinal <= MaxOrdinal; ordinal++)
         {
             int shardNumber = ordinal & shardMask;
@@ -112,6 +117,11 @@ public sealed partial class HollowSetTypeWriteState
                     readPointer += VarInt.SizeOfVInt(hashedBucket);
 
                     elementOrdinal += elementOrdinalDelta;
+
+                    if (keyHasher is not null)
+                    {
+                        hashedBucket = keyHasher.GetRecordHash(elementOrdinal) & (numBuckets - 1);
+                    }
 
                     while (_elementArray[shardNumber].GetElementValue(
                         (long)_bitsPerElement * (bucketCounter[shardNumber] + hashedBucket), _bitsPerElement)
