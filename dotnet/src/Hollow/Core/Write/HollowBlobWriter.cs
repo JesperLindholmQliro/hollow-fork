@@ -38,6 +38,44 @@ public sealed class HollowBlobWriter
     }
 
     /// <summary>
+    /// Writes only the header of this state — its schemas and header tags, without any records — to
+    /// <paramref name="stream"/>.
+    /// </summary>
+    public void WriteHeader(Stream stream)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+
+        using HollowBlobOutput output = HollowBlobOutput.Serial(stream, leaveOpen: true);
+        WriteHeader(output);
+    }
+
+    /// <summary>
+    /// Writes only the header of this state — its schemas and header tags, without any records.
+    /// </summary>
+    /// <remarks>
+    /// A producer publishes one of these alongside each version so that a caller can read a version's
+    /// data model without downloading its records.
+    /// </remarks>
+    public void WriteHeader(HollowBlobOutput output)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+
+        _stateEngine.PrepareForWrite();
+
+        HollowBlobHeader header = new()
+        {
+            Schemas = _stateEngine.Schemas,
+            HeaderTags = new Dictionary<string, string>(_stateEngine.HeaderTags, StringComparer.Ordinal),
+            OriginRandomizedTag = 0,
+            DestinationRandomizedTag = _stateEngine.RandomizedTag,
+        };
+
+        _headerWriter.WriteHeader(header, output);
+
+        output.Flush();
+    }
+
+    /// <summary>
     /// Writes a snapshot of the whole dataset to <paramref name="stream"/>.
     /// </summary>
     public void WriteSnapshot(Stream stream)

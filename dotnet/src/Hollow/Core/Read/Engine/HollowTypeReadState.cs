@@ -19,6 +19,7 @@ using Hollow.Core.Memory;
 using Hollow.Core.Memory.Pool;
 using Hollow.Core.Read.DataAccess;
 using Hollow.Core.Schema;
+using Hollow.Core.Tools.Checksum;
 using Hollow.Core.Util;
 
 namespace Hollow.Core.Read.Engine;
@@ -128,6 +129,29 @@ public abstract class HollowTypeReadState : IHollowTypeDataAccess
     /// Returns every segment of this type's record storage to <paramref name="memoryRecycler"/>.
     /// </summary>
     public abstract void Destroy(IArraySegmentRecycler memoryRecycler);
+
+    /// <summary>
+    /// Computes a checksum over this type's records, covering only the fields this type's schema shares
+    /// with <paramref name="withSchema"/>.
+    /// </summary>
+    /// <remarks>
+    /// The restriction to common fields is what lets two states either side of a schema change be
+    /// compared at all. For a collection type there is nothing to intersect, so the schemas must match.
+    /// </remarks>
+    public HollowChecksum GetChecksum(HollowSchema withSchema)
+    {
+        ArgumentNullException.ThrowIfNull(withSchema);
+
+        HollowChecksum checksum = new();
+        ApplyToChecksum(checksum, withSchema);
+
+        return checksum;
+    }
+
+    /// <summary>
+    /// Folds this type's records into <paramref name="checksum"/>.
+    /// </summary>
+    protected abstract void ApplyToChecksum(HollowChecksum checksum, HollowSchema withSchema);
 
     /// <summary>
     /// Notifies the attached listeners that a delta update is beginning.

@@ -222,12 +222,7 @@ public abstract class HollowTypeWriteState
     /// </summary>
     public virtual void PrepareForNextCycle()
     {
-        OrdinalMap.Compact(
-            CurrentCyclePopulated,
-            Math.Max(_numShards, 1),
-            StateEngine?.FocusHoleFillInFewestShards ?? false,
-            mapIndex: 0,
-            mapIndexBits: 0);
+        Compact(CurrentCyclePopulated);
 
         // The restored state only governs the first cycle after a restore: from here on the ordinal map
         // holds every record itself, so lookups go through it directly.
@@ -237,6 +232,32 @@ public abstract class HollowTypeWriteState
 
         (PreviousCyclePopulated, CurrentCyclePopulated) = (CurrentCyclePopulated, PreviousCyclePopulated);
         CurrentCyclePopulated.ClearAll();
+    }
+
+    /// <summary>
+    /// Discards everything added since the last <see cref="PrepareForNextCycle"/>.
+    /// </summary>
+    /// <remarks>
+    /// Compacting against the previous cycle's ordinals is what does the work: every record this cycle
+    /// added and the previous one did not hold is dropped and its ordinal returned to the pool. A
+    /// restored cycle has no previous ordinals of its own, so it is rebuilt from the read state it was
+    /// restored from instead.
+    /// </remarks>
+    public virtual void ResetToLastPrepareForNextCycle()
+    {
+        CurrentCyclePopulated.ClearAll();
+
+        if (_restoredReadState is not { } restoredReadState)
+        {
+            Compact(PreviousCyclePopulated);
+            return;
+        }
+
+        PreviousCyclePopulated.ClearAll();
+        Compact(PreviousCyclePopulated);
+
+        RestoreFrom(restoredReadState);
+        _wroteData = false;
     }
 
     /// <summary>
@@ -332,6 +353,18 @@ public abstract class HollowTypeWriteState
         destinationMap.Put(scratch, ordinal);
         scratch.Reset();
     }
+
+    /// <summary>
+    /// Drops every record whose ordinal is not in <paramref name="keep"/>, returning those ordinals to
+    /// the free pool.
+    /// </summary>
+    private void Compact(ThreadSafeBitSet keep) =>
+        OrdinalMap.Compact(
+            keep,
+            Math.Max(_numShards, 1),
+            StateEngine?.FocusHoleFillInFewestShards ?? false,
+            mapIndex: 0,
+            mapIndexBits: 0);
 
     private int AssignOrdinal(IHollowWriteRecord record)
     {

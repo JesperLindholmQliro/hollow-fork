@@ -46,4 +46,10 @@ public static class HollowHeaderTags
 
     /// <summary>How many versions this delta chain has been through.</summary>
     public const string DeltaChainVersionCounter = "hollow.delta.chain.version.counter";
+
+    /// <summary>When the producer's cycle began, as Unix milliseconds.</summary>
+    public const string MetricCycleStart = "hollow.metric.cycle.start";
+
+    /// <summary>When the producer announced the version, as Unix milliseconds.</summary>
+    public const string MetricAnnouncement = "hollow.metric.announcement";
 }

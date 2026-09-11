@@ -14,19 +14,20 @@ by value rather than by ordinal — `HollowPrimaryKeyIndex` and `HollowUniqueKey
 `HollowHashIndex` by fields that are not unique and may cross collections — and a set or map schema may
 declare a hash key, which the producer honours when laying out each record's hash table.
 
-Both ends of the publish/consume loop that a delta chain exists to serve are here as well. A producer
-that restarts calls `HollowWriteStateEngine.RestoreFrom` to rebuild its write state from the last
-published read state and carries on producing deltas, rather than starting a new chain with a fresh
-snapshot. On the other side, `HollowConsumer` keeps a local copy of the dataset up to date from a blob
-store, following deltas where it can and loading a snapshot only where it must.
+Both ends of the publish/consume loop that a delta chain exists to serve are here as well.
+`HollowProducer` runs the cycle — populate, publish, check, validate, announce — and refuses to
+announce a version it cannot vouch for; a producer that restarts calls `Restore` to pick the chain back
+up rather than starting a new one. On the other side, `HollowConsumer` keeps a local copy of the
+dataset up to date from that blob store, following deltas where it can and loading a snapshot only
+where it must.
 
 There is **one deliberate departure from the Hollow format**: a `Decimal` field type that stores a .NET
 `decimal` exactly. It is opt-in — a dataset that declares no decimal field is byte-identical to what
 Netflix Hollow produces. Read [Format extension: the `Decimal` field
 type](#format-extension-the-decimal-field-type) before changing anything in the write or read path.
 
-What is **not** here is resharding, object longevity, code generation, the diff/history tools, and the
-producer API. The status section says exactly what is and is not ported.
+What is **not** here is resharding, object longevity, code generation, the incremental producer, and
+the diff/history tools. The status section says exactly what is and is not ported.
 
 ## Building and testing
 
@@ -39,7 +40,32 @@ Requires the .NET 10 SDK. On a machine without ICU installed, set
 `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1` — nothing in the port depends on culture-sensitive
 behaviour.
 
-## Consuming a dataset
+## Producing and consuming a dataset
+
+A producer, publishing to a directory:
+
+```csharp
+HollowProducer producer = new HollowProducerBuilder()
+    .WithBlobStagingDirectory("/var/hollow/staging")
+    .WithPublisher(new HollowFilesystemPublisher("/var/hollow/blobs"))
+    .WithAnnouncer(new HollowFilesystemAnnouncer("/var/hollow/blobs"))
+    .WithValidators(new DuplicateDataDetectionValidator("Movie"))
+    .Build();
+
+producer.InitializeDataModel(typeof(Movie));
+producer.Restore(new HollowFilesystemAnnouncementWatcher("/var/hollow/blobs").GetLatestVersion(),
+    new HollowFilesystemBlobRetriever("/var/hollow/blobs"));
+
+producer.RunCycle(state =>
+{
+    foreach (Movie movie in QueryEverything())
+    {
+        state.Add(movie);
+    }
+});
+```
+
+A consumer, reading the same directory:
 
 ```csharp
 using HollowConsumer consumer = new HollowConsumerBuilder()
@@ -49,16 +75,23 @@ using HollowConsumer consumer = new HollowConsumerBuilder()
 
 consumer.TriggerRefresh();
 
-HollowPrimaryKeyIndex index = new(consumer.StateEngine!, new PrimaryKey("Movie", "id"));
+using HollowPrimaryKeyIndex index = new(consumer.StateEngine!, new PrimaryKey("Movie", "Id"));
+index.ListenForDeltaUpdates();
+
 int ordinal = index.GetMatchingOrdinal(42);
 ```
 
-With an announcement watcher the consumer follows whatever the producer announces; without one, drive
-it with `TriggerRefreshTo(version)`. Either way it follows deltas where it can, so `consumer.StateEngine`
-keeps returning the same instance and an index built over it stays valid — register an
-`IRefreshListener` to hear when that stops being true. There is no producer API yet, so the writing
-half is a `HollowWriteStateEngine` and a `HollowBlobWriter`; see `FilesystemBlobStoreTests` for the
-file names a `HollowFilesystemBlobRetriever` expects.
+A populator describes the whole dataset each cycle, not the change since last time; the producer works
+out what moved. Nothing is announced unless the cycle publishes, reads its own blobs back, finds that
+the snapshot and both deltas agree, and passes every validator. `Restore` on startup is what keeps a
+restarted producer on the chain consumers are already following — without it the first cycle after a
+restart forces every one of them to take a snapshot.
+
+On the consumer side, with an announcement watcher it follows whatever the producer announces; without
+one, drive it with `TriggerRefreshTo(version)`. Either way it follows deltas where it can, so
+`consumer.StateEngine` keeps returning the same instance and an index told to
+`ListenForDeltaUpdates()` stays valid — register an `IRefreshListener` to hear when that stops being
+true.
 
 ## Culture-invariant formatting and parsing
 
@@ -202,6 +235,8 @@ where a record lands in a blob has to keep producing the same answer across runt
 | package `com.netflix.hollow.api.error` | namespace `Hollow.Api.Error` |
 | package `com.netflix.hollow.api.consumer` | namespace `Hollow.Api.Consumer` |
 | package `com.netflix.hollow.api.client` | namespace `Hollow.Api.Client` |
+| package `com.netflix.hollow.api.producer` | namespace `Hollow.Api.Producer` |
+| package `com.netflix.hollow.tools.checksum` | namespace `Hollow.Core.Tools.Checksum` |
 
 Java packages map to .NET namespaces one for one with the `com.netflix` prefix dropped and each
 segment PascalCased. Java's one-public-type-per-file rule is not followed where a type is trivially
@@ -238,9 +273,13 @@ type. The systematic changes are:
   where Java relies on parameter order.
 - **`Blob.getInputStream()` → `OpenStream()`**, because the .NET name describes what the call does —
   it opens a new stream each time — rather than reading as a property access.
-- **`HollowConsumer.Builder.withX(...)` → `HollowConsumerBuilder.WithX(...)`.** Java makes the builder
-  generic in itself so that a subclass keeps the fluent return type; C# extension methods cover that
-  case, so the port's builder is a plain sealed class.
+- **`HollowConsumer.Builder.withX(...)` → `HollowConsumerBuilder.WithX(...)`**, and likewise
+  `HollowProducer.Builder` → `HollowProducerBuilder`. Java makes each builder generic in itself so that
+  a subclass keeps the fluent return type; C# extension methods cover that case, so the port's builders
+  are plain sealed classes.
+- **`HollowProducer.Populator` → the `Populator` delegate.** Java declares it as a functional
+  interface; a delegate is what a C# lambda binds to without ceremony. `HollowProducer.Validator` and
+  the rest of the listener family stay interfaces, since an implementation carries state.
 
 ## Behavioural differences
 
@@ -394,6 +433,44 @@ version, which also matches version 12's delta when looking for version 1's. It 
 because a real version is a fixed-width timestamp. This port matches `delta-{from}-`, so a test — or a
 deployment using small sequential versions — behaves the same way as production.
 
+### The producer's cycle refuses more than Java's does in two places
+
+A listener that throws is normally swallowed — a producer's job is to publish data, not to run other
+people's code. Java's `VetoableListener` and `ListenerVetoException` exist so that a listener which
+genuinely needs to stop a cycle can, but the dispatch in this fork catches everything regardless,
+which makes both of them dead. This port honours them. Since the port takes no logging dependency
+where Java logs a warning, a swallowed exception is surfaced through the
+`HollowProducer.ListenerFailed` event instead.
+
+A validator that throws is a separate case, and here Java and this port agree: a broken validator
+cannot vouch for the data, so it becomes an `Error` result and fails the cycle. The other validators
+still run first, so one report says everything that is wrong at once.
+
+### The blob compressor compresses staging, not the blob store
+
+`IBlobCompressor` wraps the bytes a blob is *staged* as. A publisher reads a staged blob back through
+the same compressor, so what reaches the blob store — and what a consumer downloads — is plain. The
+gain is that a large cycle's four staging files stay small while the producer holds them all at once.
+This is Java's behaviour, and it is easy to misread the name; a blob store that wants compression at
+rest does it in its own publisher, where the consumer side can be made to match.
+
+### The write state engine mints its own randomized tag
+
+A delta names the state it applies to by a randomized tag, which is what stops a consumer applying it
+to the wrong state. Java mints a fresh one in the write state engine's constructor and on every
+`prepareForNextCycle`; earlier revisions of this port left the tag at zero unless a caller set one,
+which made the check vacuous by default. It now mints as Java does. A test that compares blob bytes
+still pins the tag by assigning `RandomizedTag` after construction, which is when the tests that do
+this were already doing it.
+
+### The checksum walks shards in Java's order
+
+`HollowChecksum` folds each value into a running hash, so the order the records are visited in is part
+of the result. The walk is shard-major, as Java's is, rather than in ordinal order — which is the
+simpler thing to write and would produce a different number for a multi-sharded type. Two checksums
+are only ever compared against each other, so either would work, but matching Java keeps the values
+comparable if anyone ever does transport one.
+
 ### Delta application copies record by record
 
 Java's delta applicators have a fast path that bulk-copies runs of unchanged records with `copyBits`
@@ -450,6 +527,7 @@ memory modes; .NET's `Stream` covers both, so the port wraps a stream and report
 | `core.index.key` | `PrimaryKey`, including its dataset-resolution helpers, and `HollowPrimaryKeyValueDeriver` |
 | `core` | `HollowConstants`, `IHollowDataset`, `HollowHeaderTags` (the header tags `HollowStateEngine` declares) |
 | `core.util` | `BitSet` and `IntList` (port-specific stand-ins for `java.util.BitSet` and Hollow's `IntList`), `InvariantFormatting`, `HollowWriteStateCreator` |
+| `tools.checksum` | `HollowChecksum` and `ApplyToChecksum` on the four read states, which the producer's integrity check compares |
 | `core.write` | The write records (object, list, set, map), `FieldStatistics`, `HollowTypeWriteState` and its four subclasses, `HollowWriteStateEngine`, `HollowBlobHeaderWriter`, `HollowBlobWriter`, `HollowBlobOutput` |
 | `core.write.copy` | `HollowRecordCopier` and the object/list/set/map copiers, plus `IOrdinalRemapper`/`IdentityOrdinalRemapper` (Java puts the remapper in `tools.combine`) |
 | `core.write.objectmapper` | `HollowObjectMapper`, the four type mappers, and the `HollowTypeName`/`HollowInline`/`HollowTransient`/`HollowPrimaryKey`/`HollowHashKey`/`HollowShardLargeType` attributes, including Java's default hash-key derivation |
@@ -465,6 +543,11 @@ memory modes; .NET's `Stream` covers both, so the port wraps a stream and report
 | `api.consumer` | `HollowConsumer` and `HollowConsumerBuilder`, `Blob`/`HeaderBlob`/`BlobType`, `IBlobRetriever`, `IAnnouncementWatcher`/`VersionInfo`/`AnnouncementStatus`, `IRefreshListener`/`ITransitionAwareRefreshListener`/`IRefreshRegistrationListener`/`HollowRefreshListener`, `IDoubleSnapshotConfig`, `IUpdatePlanBlobVerifier` |
 | `api.consumer.fs` | `HollowFilesystemBlobRetriever`, `HollowFilesystemAnnouncementWatcher` |
 | `api.client` | `HollowUpdatePlan`, `HollowUpdatePlanner`, `FailedTransitionTracker`, `HollowDataHolder`, `HollowClientUpdater` |
+| `api.producer` | `HollowProducer` and `HollowProducerBuilder`, the cycle with its rollback, `Restore`, `Blob`/`HeaderBlob`/`IPublishArtifact`, `IBlobStager`, `IPublisher`, `IAnnouncer`, `IVersionMinter`/`VersionMinterWithCounter`, `IBlobCompressor`, `IWriteState`/`IReadState`/`Populator`, `Status`, `ReadStateHelper` |
+| `api.producer.listener` | The per-stage listener interfaces, `HollowProducerListener` as a no-op base, `IVetoableListener`/`ListenerVetoException` |
+| `api.producer.validation` | `IValidatorListener`, `ValidationResult` and its builder, `ValidationStatus`, `ValidationStatusException`, `DuplicateDataDetectionValidator`, `RecordCountVarianceValidator` |
+| `api.producer.enforcer` | `ISingleProducerEnforcer`, `BasicSingleProducerEnforcer` |
+| `api.producer.fs` | `HollowFilesystemBlobStager`, `HollowInMemoryBlobStager`, `HollowFilesystemPublisher`, `HollowFilesystemAnnouncer` |
 | `core.read` (field access) | `HollowReadFieldUtils` |
 
 Test coverage is carried over from the Java tests where they exist — `VarIntTest`, `HashCodesTest`,
@@ -511,6 +594,20 @@ snapshot replaces it. `Assert.Same` on the state engine is what most of those te
 which versions exist rather than by real blobs. `FilesystemBlobStoreTests` pins the on-disk layout,
 which is shared with Java.
 
+`ProducerTests` is mostly about the refusals, since that is what distinguishes a producer from writing
+blobs by hand: a failed validation, a validator that throws, a duplicate key, a record count that
+moved too far, a vetoing listener, and — through a stager that re-emits an earlier cycle's snapshot —
+a cycle whose blobs do not agree with each other. In each case the assertion is that the version was
+never announced and the producer can still publish the next one against the version consumers are
+actually on. `ChecksumTests` pins what the checksum distinguishes, which is the question that decides
+whether the integrity check is worth anything: the same records at different ordinals, a set's bucket
+layout, and both halves of a decimal all have to change it.
+
+`FilesystemProducerTests` is the only test where a real producer and a real consumer share a real
+directory. Everything else uses in-memory stand-ins on one side or the other, so this is what would
+catch a producer and a consumer that each work but do not agree on a file name, a staging step or the
+announcement format.
+
 ### Ported, not yet covered by a round-trip
 
 `HollowObjectSchema.FilterSchema` and the read path honour a filter, but only the explicit include
@@ -534,19 +631,23 @@ sets of `TypeFilter` exist; the recursive rule DSL is still absent.
 - **Shared-memory mode.** `MemoryMode.SharedMemoryLazy` and the `BlobByteBuffer`, `EncodedByteBuffer`
   and `EncodedLongBuffer` types behind it. Constructing a read state engine with it throws.
 - **Optional blob parts**, which split a snapshot across several streams.
-- **The producer API** (`api.producer`). A caller drives `HollowWriteStateEngine` and
-  `HollowBlobWriter` directly, and `RestoreFrom` covers what the producer needs to resume a chain.
-  What is missing is the cycle orchestration around it — versioning, validation, staging, publishing
-  and announcing — including `api.producer.fs`, which is what would write the file layout
-  `HollowFilesystemBlobRetriever` reads. That layout is documented on the retriever, and
-  `FilesystemBlobStoreTests` reproduces it.
+- **The incremental producer** (`HollowProducer.Incremental`, `HollowIncrementalProducer`), which
+  applies a set of add and remove events to the previous cycle rather than re-describing the whole
+  dataset. It is a façade over the same cycle, and `HollowWriteStateEngine` would need
+  `AddAllObjectsFromPreviousCycle` and the ordinal bookkeeping around it.
+- **Producer metrics** (`api.producer.metrics`), asynchronous snapshot publishing, the blob storage
+  cleaner, and the remaining validators
+  (`MinimumRecordCountValidator`, `NullPrimaryKeyFieldValidator`, `ObjectModificationValidator`,
+  `RecordCountPercentChangeValidator`). The validation framework they plug into is ported, so each is
+  a self-contained addition.
 - **The consumer's optional layers.** Object longevity, metrics collection
   (`api.consumer.metrics`), `api.consumer.data`, and `api.consumer.index` — the last of which wraps
   the ported indexes in a generated-API-typed façade.
 - **The deprecated `api.client.HollowClient`**, superseded by `HollowConsumer`; only the parts of
   `api.client` that `HollowConsumer` uses are ported.
-- **Tools** (`core.tools`: diff, history, combine, split, patch, checksum),
-  **code generation** (`api.codegen`), **sampling** (`api.sampling`), and every module outside
+- **Tools** (`tools`: diff, history, combine, split, patch — `tools.checksum` is ported, because the
+  producer's integrity check needs it), **code generation** (`api.codegen`), **sampling**
+  (`api.sampling`), and every module outside
   `hollow` — `hollow-diff-ui`, `hollow-explorer-ui`, `hollow-jsonadapter`, `hollow-protoadapter`,
   `hollow-zenoadapter`, `hollow-test`, `hollow-fakedata`.
 - **`GarbageCollectorAwareRecycler`**, which picks a pooling strategy by inspecting the JVM's
@@ -569,12 +670,14 @@ wide and every other fixed-length field is 64 or fewer.
 
 ### Suggested order for the remaining work
 
-1. The producer API. Everything it needs from the engine is now here — deltas both ways, restore, and
-   a consumer to check the result against — so what is left is the cycle orchestration: versioning,
-   validation, staging, publishing, announcing, and the filesystem implementations of each. That also
-   closes the one gap a caller trips over today, which is that nothing in the port writes the file
-   layout `HollowFilesystemBlobRetriever` reads.
-2. Resharding, which is the largest remaining piece of the engine and touches every write state.
+The loop is closed: a producer publishes, a consumer follows, and a restarted producer stays on the
+chain. What is left is either an optimisation or a feature on top.
+
+1. Resharding, which is the largest remaining piece of the engine and touches every write state. It is
+   also the thing most likely to be missed by the tests as they stand, since nothing in the port
+   currently changes a type's shard count.
+2. The incremental producer, for a caller whose source of truth is a change feed rather than a table.
 3. `HollowPrefixIndex` and `HollowSparseIntegerSet`, the last of `core.index`.
 4. The bulk-copy fast path in the delta applicators, which is a pure optimisation the existing tests
    already guard.
+5. The remaining validators, each a self-contained addition to the ported framework.

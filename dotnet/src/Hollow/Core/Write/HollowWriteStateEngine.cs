@@ -68,8 +68,15 @@ public sealed class HollowWriteStateEngine : IHollowDataset
     /// </summary>
     public bool FocusHoleFillInFewestShards { get; set; }
 
-    /// <summary>The random tag identifying the state this engine produces.</summary>
-    public long RandomizedTag { get; set; }
+    /// <summary>
+    /// The random tag identifying the state this engine produces.
+    /// </summary>
+    /// <remarks>
+    /// A fresh tag is minted for each cycle, and a delta names the tag of the state it applies to, so
+    /// that a consumer cannot apply it to the wrong state. Assign this to pin it — which is only
+    /// useful for a test that compares blob bytes.
+    /// </remarks>
+    public long RandomizedTag { get; set; } = MintNewRandomizedTag(0);
 
     /// <summary>
     /// The random tag of the state the previous cycle produced, which a delta names as its origin so
@@ -143,6 +150,7 @@ public sealed class HollowWriteStateEngine : IHollowDataset
 
         PreviousRandomizedTag = RandomizedTag;
         PreviousHeaderTags = new Dictionary<string, string>(HeaderTags, StringComparer.Ordinal);
+        RandomizedTag = MintNewRandomizedTag(PreviousRandomizedTag);
 
         foreach (HollowTypeWriteState typeState in _orderedTypeStates)
         {
@@ -151,6 +159,32 @@ public sealed class HollowWriteStateEngine : IHollowDataset
 
         _preparedForNextCycle = true;
         RestoredStates = null;
+    }
+
+    /// <summary>
+    /// Discards everything added since the last <see cref="PrepareForNextCycle"/>, leaving this engine
+    /// exactly as it was at the start of the cycle.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A producer calls this when a cycle turns out to have nothing to publish, or when one fails part
+    /// way through. Without it a failed cycle's records would linger in the ordinal map and the next
+    /// cycle would produce a delta describing changes that were never published.
+    /// </para>
+    /// <para>
+    /// A fresh <see cref="RandomizedTag"/> is minted, so that an abandoned version's blobs can never be
+    /// mistaken for the ones the retried cycle produces.
+    /// </para>
+    /// </remarks>
+    public void ResetToLastPrepareForNextCycle()
+    {
+        foreach (HollowTypeWriteState typeState in _orderedTypeStates)
+        {
+            typeState.ResetToLastPrepareForNextCycle();
+        }
+
+        RandomizedTag = MintNewRandomizedTag(PreviousRandomizedTag);
+        _preparedForNextCycle = true;
     }
 
     /// <summary>
@@ -310,6 +344,16 @@ public sealed class HollowWriteStateEngine : IHollowDataset
 
         return tag;
     }
+
+    /// <summary>
+    /// Whether any type's populated ordinals differ from the previous cycle's.
+    /// </summary>
+    /// <remarks>
+    /// A producer uses this to decide whether a cycle has anything to publish. When nothing changed,
+    /// publishing a version would cost consumers a refresh that moves them nowhere.
+    /// </remarks>
+    public bool HasChangedSinceLastCycle() =>
+        _orderedTypeStates.Any(typeState => typeState.HasChangedSinceLastCycle());
 
     /// <summary>
     /// Adds a header tag to be written into the blob.
