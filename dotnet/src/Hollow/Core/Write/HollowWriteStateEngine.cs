@@ -44,6 +44,13 @@ public sealed class HollowWriteStateEngine : IHollowDataset
     public Dictionary<string, string> HeaderTags { get; } = new(StringComparer.Ordinal);
 
     /// <summary>
+    /// The header tags as they stood at the end of the previous cycle, which a reverse delta carries
+    /// because it describes a transition back to that state.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> PreviousHeaderTags { get; private set; } =
+        new Dictionary<string, string>(StringComparer.Ordinal);
+
+    /// <summary>
     /// The size a single type shard is allowed to reach before the type is split across more shards.
     /// </summary>
     public long TargetMaxTypeShardSize { get; set; } = DefaultTargetMaxTypeShardSize;
@@ -117,6 +124,7 @@ public sealed class HollowWriteStateEngine : IHollowDataset
     public void PrepareForNextCycle()
     {
         PreviousRandomizedTag = RandomizedTag;
+        PreviousHeaderTags = new Dictionary<string, string>(HeaderTags, StringComparer.Ordinal);
 
         foreach (HollowTypeWriteState typeState in _orderedTypeStates)
         {

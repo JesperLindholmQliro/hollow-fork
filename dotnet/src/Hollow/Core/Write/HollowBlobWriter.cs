@@ -133,6 +133,66 @@ public sealed class HollowBlobWriter
     }
 
     /// <summary>
+    /// Writes a reverse delta taking a consumer from this cycle's state back to the previous one, to
+    /// <paramref name="stream"/>.
+    /// </summary>
+    public void WriteReverseDelta(Stream stream)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+
+        using HollowBlobOutput output = HollowBlobOutput.Serial(stream, leaveOpen: true);
+        WriteReverseDelta(output);
+    }
+
+    /// <summary>
+    /// Writes a reverse delta taking a consumer from this cycle's state back to the previous one.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The blob is in the same format as a forward delta, and a consumer applies it the same way. Only
+    /// the header differs: it names this cycle's state as the origin and the previous cycle's as the
+    /// destination, and carries the header tags of the state being returned to.
+    /// </para>
+    /// <para>
+    /// The records a reverse delta carries are the ones the last cycle dropped. They are still in the
+    /// ordinal map — compaction only discards what was already gone a cycle earlier — so this has to be
+    /// written before the next <see cref="HollowWriteStateEngine.PrepareForNextCycle"/>.
+    /// </para>
+    /// </remarks>
+    public void WriteReverseDelta(HollowBlobOutput output)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+
+        _stateEngine.PrepareForWrite();
+
+        List<HollowTypeWriteState> changedTypes =
+            [.. _stateEngine.OrderedTypeStates.Where(state => state.HasChangedSinceLastCycle())];
+
+        HollowBlobHeader header = new()
+        {
+            Schemas = [.. changedTypes.Select(state => state.Schema)],
+            HeaderTags = new Dictionary<string, string>(_stateEngine.PreviousHeaderTags, StringComparer.Ordinal),
+            OriginRandomizedTag = _stateEngine.RandomizedTag,
+            DestinationRandomizedTag = _stateEngine.PreviousRandomizedTag,
+        };
+
+        _headerWriter.WriteHeader(header, output);
+
+        VarInt.WriteVInt(output, changedTypes.Count);
+
+        foreach (HollowTypeWriteState typeState in changedTypes)
+        {
+            typeState.CalculateReverseDelta();
+
+            typeState.Schema.WriteTo(output);
+            WriteNumShards(output, typeState.NumShards);
+            typeState.WriteCalculatedDelta(output);
+        }
+
+        output.Flush();
+    }
+
+    /// <summary>
     /// Writes the shard count inside the forwards-compatibility envelope a pre-2.1.0 reader skips.
     /// </summary>
     private static void WriteNumShards(HollowBlobOutput output, int numShards)
