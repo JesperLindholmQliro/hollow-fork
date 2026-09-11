@@ -423,7 +423,7 @@ public sealed class HollowUniqueKeyIndex : IHollowTypeStateListener, IDisposable
         {
             throw new InvalidOperationException(
                 $"cannot hash null primary-key field \"{PrimaryKey.GetFieldPath(fieldIndex)}\" in type "
-                + $"{PrimaryKey.Type} at ordinal {ordinal}");
+                + $"{PrimaryKey.Type} at ordinal {ordinal.Invariant()}");
         }
 
         HollowHashIndexField.FieldPathSegment last = field.LastFieldPositionPathElement;

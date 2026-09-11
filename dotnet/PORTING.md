@@ -33,6 +33,55 @@ Requires the .NET 10 SDK. On a machine without ICU installed, set
 `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1` — nothing in the port depends on culture-sensitive
 behaviour.
 
+## Culture-invariant formatting and parsing
+
+> **Every conversion between a number and text in this codebase names the invariant culture. No
+> exceptions — not in data, not in schema text, not in exception messages.**
+
+A conversion that uses the ambient culture works on the machine that wrote it and fails on someone
+else's: a decimal point becomes a comma, a group separator appears, and a negative sign becomes U+2212
+MINUS SIGN rather than an ASCII hyphen. Hollow's own output is worse than merely cosmetic — schema
+text and displayed field values are formats a caller may read back.
+
+### How to comply
+
+| Situation | Write this |
+| --- | --- |
+| Formatting a number | `value.ToString(CultureInfo.InvariantCulture)` |
+| A number inside an interpolated string | `$"... {value.Invariant()} ..."` |
+| Joining numbers or boxed field values | `InvariantFormatting.JoinInvariant(", ", values)` |
+| Parsing a number | `int.Parse(text, CultureInfo.InvariantCulture)`, and likewise for the rest |
+| Converting a boxed value | `Convert.ToInt32(value, CultureInfo.InvariantCulture)` |
+
+`InvariantFormatting` (in `Core/Util`) exists only so the interpolated-string case can say what it
+means without swamping the call site. It is `internal`; nothing about it reaches a caller.
+
+### Two traps
+
+**`ToString(null, null)` looks correct and is not.** The second `null` is the format provider, and a
+null provider means the *current* culture. It also satisfies the CA1305 analyzer, because an argument
+was passed. This is exactly how the bug that prompted this section got in. Never write it.
+
+**Interpolated strings are not analyzed at all.** `$"{value}"` is a current-culture conversion and no
+analyzer will say so. That is why the `Invariant()` extensions exist and why the rule has to be
+followed by hand there.
+
+### What enforces it
+
+Three things, each of which was checked to fail when the rule is broken:
+
+1. **The analyzers.** CA1304, CA1305, CA1307, CA1310 and CA1311 are errors, set in `.editorconfig`.
+   A bare `value.ToString()` will not build.
+2. **The whole test suite runs under a hostile culture.** `HostileCulture` is a module initializer in
+   the test assembly that switches the process to a culture using a comma decimal separator, a space
+   group separator and U+2212 for negatives. Any test comparing formatted output against a literal
+   fails if the code under test used the ambient culture. The culture is built by hand rather than by
+   name, because a named culture collapses to the invariant one where
+   `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT` is set — which would quietly turn the guard off.
+3. **`CultureInvarianceTests`** pins the formatting surface directly, and its first test asserts that
+   the hostile culture really is installed — so removing the guard fails loudly rather than silently
+   making the other tests vacuous.
+
 ## Format extension: the `Decimal` field type
 
 Everything else in this port aims to produce and consume exactly the bytes Netflix Hollow does. This
@@ -309,7 +358,7 @@ memory modes; .NET's `Stream` covers both, so the port wraps a stream and report
 | `core.index.traversal` | The traversal tree and `HollowIndexerValueTraverser`, which enumerate every combination of values a record's indexed paths reach |
 | `core.index.key` | `PrimaryKey`, including its dataset-resolution helpers, and `HollowPrimaryKeyValueDeriver` |
 | `core` | `HollowConstants`, `IHollowDataset` |
-| `core.util` | `BitSet` and `IntList` (port-specific stand-ins for `java.util.BitSet` and Hollow's `IntList`) |
+| `core.util` | `BitSet` and `IntList` (port-specific stand-ins for `java.util.BitSet` and Hollow's `IntList`), and `InvariantFormatting` |
 | `core.write` | The write records (object, list, set, map), `FieldStatistics`, `HollowTypeWriteState` and its four subclasses, `HollowWriteStateEngine`, `HollowBlobHeaderWriter`, `HollowBlobWriter`, `HollowBlobOutput` |
 | `core.write.objectmapper` | `HollowObjectMapper`, the four type mappers, and the `HollowTypeName`/`HollowInline`/`HollowTransient`/`HollowPrimaryKey`/`HollowHashKey`/`HollowShardLargeType` attributes, including Java's default hash-key derivation |
 | `core.read` | `HollowBlobInput`, `HollowBlobHeaderReader`, `HollowBlobReader`, `HollowReadStateEngine`, `HollowTypeReadState`, `PopulatedOrdinalListener`, `SnapshotPopulatedOrdinalsReader`, the data-access interfaces, `ITypeFilter` |
@@ -383,6 +432,10 @@ sets of `TypeFilter` exist; the recursive rule DSL is still absent.
   `RecyclingRecycler` or `WastefulRecycler` explicitly.
 
 ### Notes for whoever picks this up next
+
+Before writing any code that turns a number into text or back, read
+[Culture-invariant formatting and parsing](#culture-invariant-formatting-and-parsing). The rule is
+absolute and the two traps in it are not obvious.
 
 The one thing in this port that is not a faithful reproduction of Netflix Hollow is the `Decimal`
 field type. Its compatibility rule — a dataset that uses no decimal field serialises exactly as

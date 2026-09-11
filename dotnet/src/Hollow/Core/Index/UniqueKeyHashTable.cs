@@ -357,8 +357,8 @@ internal sealed class UniqueKeyHashTable(
 
         throw new OrdinalNotFoundException(
             value == 0
-                ? $"ordinal not found (found empty entry): ordinal={ordinal} startBucket={startBucket}"
-                : $"ordinal not found (wrapped around table): ordinal={ordinal} startBucket={startBucket}");
+                ? $"ordinal not found (found empty entry): ordinal={ordinal.Invariant()} startBucket={startBucket.Invariant()}"
+                : $"ordinal not found (wrapped around table): ordinal={ordinal.Invariant()} startBucket={startBucket.Invariant()}");
     }
 
     /// <summary>

@@ -285,7 +285,8 @@ public sealed class BitSet : IEquatable<BitSet>
     }
 
     /// <inheritdoc />
-    public override string ToString() => $"{{{string.Join(", ", EnumerateSetBits())}}}";
+    public override string ToString() =>
+        $"{{{InvariantFormatting.JoinInvariant(", ", EnumerateSetBits())}}}";
 
     private static bool AllZeroFrom(long[] words, int start)
     {

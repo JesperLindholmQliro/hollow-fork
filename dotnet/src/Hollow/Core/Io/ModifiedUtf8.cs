@@ -15,6 +15,7 @@
  *
  */
 
+using Hollow.Core.Util;
 using System.Text;
 
 namespace Hollow.Core.Io;
@@ -121,7 +122,7 @@ internal static class ModifiedUtf8
                     int b2 = bytes[i + 1];
                     if ((b2 & 0xC0) != 0x80)
                     {
-                        throw new InvalidDataException($"malformed input around byte {i + 1}");
+                        throw new InvalidDataException($"malformed input around byte {(i + 1).Invariant()}");
                     }
 
                     sb.Append((char)(((b & 0x1F) << 6) | (b2 & 0x3F)));
@@ -139,7 +140,7 @@ internal static class ModifiedUtf8
                     int c3 = bytes[i + 2];
                     if ((c2 & 0xC0) != 0x80 || (c3 & 0xC0) != 0x80)
                     {
-                        throw new InvalidDataException($"malformed input around byte {i + 2}");
+                        throw new InvalidDataException($"malformed input around byte {(i + 2).Invariant()}");
                     }
 
                     sb.Append((char)(((b & 0x0F) << 12) | ((c2 & 0x3F) << 6) | (c3 & 0x3F)));
@@ -147,7 +148,7 @@ internal static class ModifiedUtf8
                     break;
 
                 default:
-                    throw new InvalidDataException($"malformed input around byte {i}");
+                    throw new InvalidDataException($"malformed input around byte {i.Invariant()}");
             }
         }
 

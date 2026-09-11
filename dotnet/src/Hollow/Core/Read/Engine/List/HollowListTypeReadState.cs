@@ -15,6 +15,7 @@
  *
  */
 
+using Hollow.Core.Util;
 using System.Numerics;
 using Hollow.Core.Memory;
 using Hollow.Core.Memory.Encoding;
@@ -233,7 +234,7 @@ public sealed partial class HollowListTypeReadState : HollowTypeReadState, IHoll
         if (elementIndex >= endElement)
         {
             throw new ArgumentOutOfRangeException(
-                nameof(listIndex), listIndex, $"list size is {endElement - startElement}");
+                nameof(listIndex), listIndex, $"list size is {(endElement - startElement).Invariant()}");
         }
 
         return shard.DataElements.GetElementValue(elementIndex);

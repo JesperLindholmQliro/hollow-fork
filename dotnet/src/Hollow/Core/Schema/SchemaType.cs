@@ -15,6 +15,8 @@
  *
  */
 
+using Hollow.Core.Util;
+
 namespace Hollow.Core.Schema;
 
 /// <summary>
@@ -79,7 +81,7 @@ public static class SchemaTypeExtensions
         2 => SchemaType.List,
         3 or 5 => SchemaType.Map,
         _ => throw new ArgumentException(
-            $"Cannot recognize HollowSchema type id {typeId}", nameof(typeId)),
+            $"Cannot recognize HollowSchema type id {typeId.Invariant()}", nameof(typeId)),
     };
 
     /// <summary>

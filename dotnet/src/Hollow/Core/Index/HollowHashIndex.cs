@@ -21,6 +21,7 @@ using Hollow.Core.Read.DataAccess;
 using Hollow.Core.Read.Engine;
 using Hollow.Core.Read.Engine.Object;
 using Hollow.Core.Schema;
+using Hollow.Core.Util;
 
 namespace Hollow.Core.Index;
 
@@ -136,7 +137,7 @@ public sealed class HollowHashIndex : IHollowTypeStateListener
         if (query.Length != _matchFields.Length)
         {
             throw new ArgumentException(
-                $"{this} matches on {_matchFields.Length} fields, but {query.Length} were given",
+                $"{this} matches on {_matchFields.Length.Invariant()} fields, but {query.Length.Invariant()} were given",
                 nameof(query));
         }
 
@@ -145,7 +146,7 @@ public sealed class HollowHashIndex : IHollowTypeStateListener
         {
             if (query[i] is null)
             {
-                throw new ArgumentException($"querying by null is unsupported; field {i}", nameof(query));
+                throw new ArgumentException($"querying by null is unsupported; field {i.Invariant()}", nameof(query));
             }
 
             hashCode ^= HashCodes.HashInt(KeyHashCode(hashState, query[i]!, i));

@@ -344,7 +344,7 @@ public sealed class HollowPrimaryKeyIndex : IHollowTypeStateListener, IDisposabl
         {
             throw new InvalidOperationException(
                 $"cannot hash null primary-key field \"{PrimaryKey.GetFieldPath(fieldIndex)}\" in type "
-                + $"{PrimaryKey.Type} at ordinal {rootOrdinal}");
+                + $"{PrimaryKey.Type} at ordinal {rootOrdinal.Invariant()}");
         }
 
         int hashCode = HollowReadFieldUtils.FieldHashCode(typeState, ordinal, path[^1]);
@@ -405,6 +405,7 @@ public sealed class HollowPrimaryKeyIndex : IHollowTypeStateListener, IDisposabl
         public long Count { get; } = count;
 
         /// <inheritdoc />
-        public override string ToString() => $"[{string.Join(", ", Key)}] (count={Count})";
+        public override string ToString() =>
+            $"[{InvariantFormatting.JoinInvariant(", ", Key)}] (count={Count.Invariant()})";
     }
 }

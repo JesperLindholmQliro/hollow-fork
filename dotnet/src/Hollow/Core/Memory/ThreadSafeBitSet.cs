@@ -15,6 +15,7 @@
  *
  */
 
+using Hollow.Core.Util;
 using System.Collections;
 using System.Numerics;
 using Hollow.Core.Write;
@@ -439,7 +440,8 @@ public sealed class ThreadSafeBitSet : IEquatable<ThreadSafeBitSet>
     }
 
     /// <inheritdoc />
-    public override string ToString() => $"{{{string.Join(", ", EnumerateSetBits())}}}";
+    public override string ToString() =>
+        $"{{{InvariantFormatting.JoinInvariant(", ", EnumerateSetBits())}}}";
 
     /// <summary>
     /// Gets the segment at <paramref name="segmentIndex"/>, growing the segment array if it does not

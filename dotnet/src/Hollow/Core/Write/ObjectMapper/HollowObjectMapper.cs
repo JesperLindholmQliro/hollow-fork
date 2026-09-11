@@ -383,7 +383,7 @@ public sealed class HollowObjectMapper
         /// "hash by ordinal") have to stay distinguishable.
         /// </summary>
         internal static string? HashKeyToken(string[]? hashKeyFieldPaths) =>
-            hashKeyFieldPaths is null ? null : string.Join(' ', hashKeyFieldPaths);
+            hashKeyFieldPaths is null ? null : string.Join('\0', hashKeyFieldPaths);
     }
 }
 

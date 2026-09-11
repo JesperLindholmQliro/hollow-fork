@@ -166,7 +166,7 @@ public sealed class ByteArrayOrdinalMap
             throw new ArgumentOutOfRangeException(
                 nameof(preferredOrdinal),
                 preferredOrdinal,
-                $"The given preferred ordinal is out of bounds and not within the closed interval [-1, {OrdinalMask}]");
+                $"The given preferred ordinal is out of bounds and not within the closed interval [-1, {OrdinalMask.Invariant()}]");
         }
 
         lock (_writeLock)
@@ -199,8 +199,8 @@ public sealed class ByteArrayOrdinalMap
             if (ordinal > OrdinalMask)
             {
                 throw new InvalidOperationException(
-                    $"Ordinal cannot be assigned. The to be assigned ordinal, {ordinal}, is greater than "
-                    + $"the maximum supported ordinal value of {OrdinalMask}");
+                    $"Ordinal cannot be assigned. The to be assigned ordinal, {ordinal.Invariant()}, is greater than "
+                    + $"the maximum supported ordinal value of {OrdinalMask.Invariant()}");
             }
 
             CheckSoftOrdinalLimit(ordinal);
@@ -217,8 +217,8 @@ public sealed class ByteArrayOrdinalMap
             if (_byteData.Length > MaxByteDataLength)
             {
                 throw new InvalidOperationException(
-                    $"The number of bytes for the serialized representations, {_byteData.Length}, is too "
-                    + $"large and is greater than the maximum of {MaxByteDataLength} bytes");
+                    $"The number of bytes for the serialized representations, {_byteData.Length.Invariant()}, is too "
+                    + $"large and is greater than the maximum of {MaxByteDataLength.Invariant()} bytes");
             }
 
             key = ((long)ordinal << BitsPerPointer) | pointer;
@@ -246,7 +246,7 @@ public sealed class ByteArrayOrdinalMap
             throw new ArgumentOutOfRangeException(
                 nameof(ordinal),
                 ordinal,
-                $"The given ordinal is out of bounds and not within the closed interval [0, {OrdinalMask}]");
+                $"The given ordinal is out of bounds and not within the closed interval [0, {OrdinalMask.Invariant()}]");
         }
 
         if (_size > _sizeBeforeGrow)
@@ -274,8 +274,8 @@ public sealed class ByteArrayOrdinalMap
         if (_byteData.Length > MaxByteDataLength)
         {
             throw new InvalidOperationException(
-                $"The number of bytes for the serialized representations, {_byteData.Length}, is too large "
-                + $"and is greater than the maximum of {MaxByteDataLength} bytes");
+                $"The number of bytes for the serialized representations, {_byteData.Length.Invariant()}, is too large "
+                + $"and is greater than the maximum of {MaxByteDataLength.Invariant()} bytes");
         }
 
         _size++;
@@ -523,7 +523,7 @@ public sealed class ByteArrayOrdinalMap
         }
 
         string message =
-            $"Ordinal {ordinal} exceeds the soft ordinal limit of {SoftOrdinalLimit}.";
+            $"Ordinal {ordinal.Invariant()} exceeds the soft ordinal limit of {SoftOrdinalLimit.Invariant()}.";
 
         if (!IgnoreSoftLimits)
         {
@@ -609,7 +609,7 @@ public sealed class ByteArrayOrdinalMap
             throw new InvalidOperationException(
                 "New size computed to grow the underlying array for the map is negative. This is most "
                 + "likely because the total number of keys added to the map has exceeded the maximum "
-                + $"capacity. Current array size: {_pointersAndOrdinals.Length}, size to grow: {newSize}");
+                + $"capacity. Current array size: {_pointersAndOrdinals.Length.Invariant()}, size to grow: {newSize.Invariant()}");
         }
 
         GrowKeyArray(newSize);

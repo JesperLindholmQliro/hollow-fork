@@ -133,8 +133,8 @@ internal sealed class HollowHashIndexBuilder
     internal static long GrownTableSize(long hashTableSize) =>
         hashTableSize > HollowConstants.IndexHashTableMaxSize
             ? throw new InvalidOperationException(
-                $"cannot grow the intermediate match hash table beyond {hashTableSize} buckets; a hash "
-                + $"index supports at most {HollowConstants.IndexHashTableMaxSize} matches")
+                $"cannot grow the intermediate match hash table beyond {hashTableSize.Invariant()} buckets; a hash "
+                + $"index supports at most {HollowConstants.IndexHashTableMaxSize.Invariant()} matches")
             : hashTableSize * 2;
 
     /// <summary>

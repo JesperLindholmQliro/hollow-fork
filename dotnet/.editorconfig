@@ -55,3 +55,13 @@ dotnet_naming_symbols.private_fields.required_modifiers =
 
 dotnet_naming_style.underscore_camel_case.capitalization = camel_case
 dotnet_naming_style.underscore_camel_case.required_prefix = _
+
+# Globalization. Every conversion between a number and text in this codebase must name its culture;
+# see "Culture-invariant formatting and parsing" in PORTING.md. These are errors rather than
+# warnings because a culture-dependent conversion usually passes its tests on the machine that wrote
+# it and fails somewhere else.
+dotnet_diagnostic.CA1304.severity = error
+dotnet_diagnostic.CA1305.severity = error
+dotnet_diagnostic.CA1307.severity = error
+dotnet_diagnostic.CA1310.severity = error
+dotnet_diagnostic.CA1311.severity = error

@@ -22,6 +22,7 @@ using Hollow.Core.Read.Engine.Object;
 using Hollow.Core.Read.Engine.Set;
 using Hollow.Core.Read.Filter;
 using Hollow.Core.Schema;
+using Hollow.Core.Util;
 
 namespace Hollow.Core.Read.Engine;
 
@@ -116,8 +117,8 @@ public sealed class HollowBlobReader
         if (_stateEngine.RandomizedTag != 0 && header.OriginRandomizedTag != _stateEngine.RandomizedTag)
         {
             throw new InvalidDataException(
-                $"This delta originates from a state with randomized tag {header.OriginRandomizedTag}, "
-                + $"but the current state's tag is {_stateEngine.RandomizedTag}.");
+                $"This delta originates from a state with randomized tag {header.OriginRandomizedTag.Invariant()}, "
+                + $"but the current state's tag is {_stateEngine.RandomizedTag.Invariant()}.");
         }
 
         _stateEngine.HeaderTags = header.HeaderTags;

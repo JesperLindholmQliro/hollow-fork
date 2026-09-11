@@ -17,6 +17,7 @@
 
 using Hollow.Core.Memory.Encoding;
 using Hollow.Core.Schema;
+using Hollow.Core.Util;
 
 namespace Hollow.Core.Read.Engine;
 
@@ -38,7 +39,7 @@ public sealed class HollowBlobHeaderReader
         {
             throw new InvalidDataException(
                 "The HollowBlob you are trying to read is incompatible. The expected Hollow blob version "
-                + $"was {HollowBlobHeader.HollowBlobVersionHeader} but the actual version was {headerVersion}.");
+                + $"was {HollowBlobHeader.HollowBlobVersionHeader.Invariant()} but the actual version was {headerVersion.Invariant()}.");
         }
 
         HollowBlobHeader header = new()

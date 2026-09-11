@@ -15,6 +15,7 @@
  *
  */
 
+using Hollow.Core.Util;
 using System.Buffers;
 using System.Buffers.Binary;
 using Hollow.Core.Io;
@@ -111,7 +112,7 @@ public sealed class HollowBlobOutput : IDisposable
         if (byteCount > ushort.MaxValue)
         {
             throw new ArgumentException(
-                $"encoded string too long: {byteCount} bytes", nameof(value));
+                $"encoded string too long: {byteCount.Invariant()} bytes", nameof(value));
         }
 
         byte[] rented = ArrayPool<byte>.Shared.Rent(byteCount + sizeof(ushort));

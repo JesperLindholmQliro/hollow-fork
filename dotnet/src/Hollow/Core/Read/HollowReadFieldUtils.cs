@@ -18,6 +18,7 @@
 using Hollow.Core.Memory.Encoding;
 using Hollow.Core.Read.DataAccess;
 using Hollow.Core.Schema;
+using Hollow.Core.Util;
 
 namespace Hollow.Core.Read;
 
@@ -187,7 +188,7 @@ public static class HollowReadFieldUtils
 
             default:
                 throw new InvalidOperationException(
-                    $"cannot read a {fieldType} field as a value (schema {schema.Name}, field {fieldPosition})");
+                    $"cannot read a {fieldType} field as a value (schema {schema.Name}, field {fieldPosition.Invariant()})");
         }
     }
 
@@ -267,11 +268,11 @@ public static class HollowReadFieldUtils
         {
             FieldType.Boolean => typeAccess.ReadBoolean(ordinal, fieldPosition)?.ToString(),
             FieldType.Bytes or FieldType.String => typeAccess.ReadString(ordinal, fieldPosition),
-            FieldType.Double => typeAccess.ReadDouble(ordinal, fieldPosition).ToString(null, null),
-            FieldType.Float => typeAccess.ReadFloat(ordinal, fieldPosition).ToString(null, null),
-            FieldType.Int => typeAccess.ReadInt(ordinal, fieldPosition).ToString(null, null),
-            FieldType.Long => typeAccess.ReadLong(ordinal, fieldPosition).ToString(null, null),
-            FieldType.Decimal => typeAccess.ReadDecimal(ordinal, fieldPosition)?.ToString(null, null),
+            FieldType.Double => typeAccess.ReadDouble(ordinal, fieldPosition).Invariant(),
+            FieldType.Float => typeAccess.ReadFloat(ordinal, fieldPosition).Invariant(),
+            FieldType.Int => typeAccess.ReadInt(ordinal, fieldPosition).Invariant(),
+            FieldType.Long => typeAccess.ReadLong(ordinal, fieldPosition).Invariant(),
+            FieldType.Decimal => typeAccess.ReadDecimal(ordinal, fieldPosition)?.Invariant(),
             _ => throw new InvalidOperationException($"cannot display a {fieldType} field"),
         };
     }

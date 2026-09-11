@@ -16,6 +16,7 @@
  */
 
 using Hollow.Core.Memory.Encoding;
+using Hollow.Core.Util;
 using Hollow.Core.Read;
 using Hollow.Core.Write;
 
@@ -109,7 +110,7 @@ public abstract class HollowSchema
             SchemaType.List => ReadListSchemaFrom(input, schemaName),
             SchemaType.Set => ReadSetSchemaFrom(input, schemaName, SchemaTypeExtensions.HasKey(schemaTypeId)),
             SchemaType.Map => ReadMapSchemaFrom(input, schemaName, SchemaTypeExtensions.HasKey(schemaTypeId)),
-            _ => throw new InvalidDataException($"unrecognised schema type id {schemaTypeId}"),
+            _ => throw new InvalidDataException($"unrecognised schema type id {schemaTypeId.Invariant()}"),
         };
     }
 
