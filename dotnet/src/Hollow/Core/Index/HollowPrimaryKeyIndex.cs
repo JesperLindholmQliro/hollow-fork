@@ -15,7 +15,6 @@
  *
  */
 
-using System.Numerics;
 using Hollow.Core.Index.Key;
 using Hollow.Core.Memory.Encoding;
 using Hollow.Core.Memory.Pool;
@@ -36,22 +35,18 @@ namespace Hollow.Core.Index;
 /// The key indexed need not be the one declared on the type's schema.
 /// </para>
 /// <para>
-/// <strong>Port note.</strong> Java's <c>getDuplicateKeys</c> pair, the incremental delta update of the
-/// hash table and the <c>allowDeltaUpdate</c> system property are ported; object longevity, on which
-/// Java's own docs warn this class is unsafe, is not part of this port at all.
+/// This index resolves each step of a key's path through the schema's referenced type states, which
+/// are shared mutable state. <see cref="HollowUniqueKeyIndex"/> serves the same purpose but binds its
+/// type accesses once, at construction, which is what Java relies on for object longevity.
 /// </para>
 /// </remarks>
-public sealed class HollowPrimaryKeyIndex : IHollowTypeStateListener, IDisposable
+public sealed class HollowPrimaryKeyIndex : IHollowTypeStateListener, IDisposable, IUniqueKeyRecords
 {
     private readonly HollowObjectTypeReadState? _typeState;
     private readonly int[][] _fieldPathIndexes;
     private readonly FieldType[] _fieldTypes;
     private readonly HollowPrimaryKeyValueDeriver? _keyDeriver;
-    private readonly IArraySegmentRecycler _memoryRecycler;
-    private readonly BitSet? _specificOrdinalsToIndex;
-    private readonly Lock _lock = new();
-
-    private volatile HashTable? _hashTable;
+    private readonly UniqueKeyHashTable _hashTable;
 
     /// <summary>
     /// Indexes <paramref name="type"/> of <paramref name="stateEngine"/> by
@@ -86,10 +81,12 @@ public sealed class HollowPrimaryKeyIndex : IHollowTypeStateListener, IDisposabl
         ArgumentNullException.ThrowIfNull(primaryKey);
 
         PrimaryKey = primaryKey;
-        _memoryRecycler = memoryRecycler ?? WastefulRecycler.DefaultInstance;
-        _specificOrdinalsToIndex = specificOrdinalsToIndex;
+        SpecificOrdinalsToIndex = specificOrdinalsToIndex;
+
         _fieldPathIndexes = new int[primaryKey.FieldCount][];
         _fieldTypes = new FieldType[primaryKey.FieldCount];
+        _hashTable = new UniqueKeyHashTable(
+            this, memoryRecycler ?? WastefulRecycler.DefaultInstance, specificOrdinalsToIndex);
 
         _typeState = stateEngine.GetTypeState(primaryKey.Type) as HollowObjectTypeReadState;
         if (_typeState is null)
@@ -115,7 +112,7 @@ public sealed class HollowPrimaryKeyIndex : IHollowTypeStateListener, IDisposabl
         }
 
         _keyDeriver = new HollowPrimaryKeyValueDeriver(_typeState, _fieldPathIndexes, _fieldTypes);
-        Reindex();
+        _hashTable.Reindex();
     }
 
     /// <summary>The key this index is built on.</summary>
@@ -128,7 +125,7 @@ public sealed class HollowPrimaryKeyIndex : IHollowTypeStateListener, IDisposabl
     public IReadOnlyList<FieldType> FieldTypes => _fieldTypes;
 
     /// <summary>Whether the index found a type to index and bound every field path.</summary>
-    public bool IsInitialized => _hashTable is not null;
+    public bool IsInitialized => _hashTable.Current is not null;
 
     /// <summary>
     /// Whether delta updates rebuild the hash table incrementally rather than from scratch.
@@ -137,10 +134,26 @@ public sealed class HollowPrimaryKeyIndex : IHollowTypeStateListener, IDisposabl
     /// Off by default, as in Java: an incremental rebuild that goes wrong corrupts the index silently,
     /// and queries then return no match rather than failing.
     /// </remarks>
-    public bool AllowDeltaUpdate { get; set; }
+    public bool AllowDeltaUpdate
+    {
+        get => _hashTable.AllowDeltaUpdate;
+        set => _hashTable.AllowDeltaUpdate = value;
+    }
 
     /// <summary>An approximation of the memory the hash table occupies, in bytes.</summary>
-    public long ApproxHeapFootprintInBytes => _hashTable?.Table.ApproxHeapFootprintInBytes ?? 0;
+    public long ApproxHeapFootprintInBytes => _hashTable.ApproxHeapFootprintInBytes;
+
+    /// <summary>The ordinals this index covers, or null when it covers every populated record.</summary>
+    internal BitSet? SpecificOrdinalsToIndex { get; }
+
+    /// <inheritdoc />
+    int IUniqueKeyRecords.MaxOrdinal => _typeState!.MaxOrdinal;
+
+    /// <inheritdoc />
+    BitSet IUniqueKeyRecords.PopulatedOrdinals => _typeState!.PopulatedOrdinals;
+
+    /// <inheritdoc />
+    BitSet IUniqueKeyRecords.PreviousOrdinals => _typeState!.PreviousOrdinals;
 
     /// <summary>
     /// Keeps this index up to date as deltas are applied to the indexed state.
@@ -158,7 +171,7 @@ public sealed class HollowPrimaryKeyIndex : IHollowTypeStateListener, IDisposabl
             return;
         }
 
-        if (_specificOrdinalsToIndex is not null)
+        if (SpecificOrdinalsToIndex is not null)
         {
             throw new InvalidOperationException(
                 "cannot listen for delta updates when indexing only specific ordinals");
@@ -183,10 +196,10 @@ public sealed class HollowPrimaryKeyIndex : IHollowTypeStateListener, IDisposabl
     {
         ArgumentNullException.ThrowIfNull(keys);
 
-        HashTable hashTable = _hashTable
+        UniqueKeyHashTable.Generation generation = _hashTable.Current
             ?? throw new InvalidOperationException($"index {PrimaryKey} was not initialized");
 
-        if (_fieldPathIndexes.Length != keys.Length || hashTable.BitsPerElement == 0)
+        if (_fieldPathIndexes.Length != keys.Length || generation.BitsPerElement == 0)
         {
             return HollowConstants.OrdinalNone;
         }
@@ -203,10 +216,10 @@ public sealed class HollowPrimaryKeyIndex : IHollowTypeStateListener, IDisposabl
         // the new table rather than reading a mix of the two.
         do
         {
-            hashTable = _hashTable!;
+            generation = _hashTable.Current!;
 
-            long bucket = hashCode & hashTable.HashMask;
-            ordinal = ReadOrdinal(hashTable, bucket);
+            long bucket = hashCode & generation.HashMask;
+            ordinal = generation.ReadOrdinal(bucket);
 
             while (ordinal != HollowConstants.OrdinalNone)
             {
@@ -215,11 +228,11 @@ public sealed class HollowPrimaryKeyIndex : IHollowTypeStateListener, IDisposabl
                     break;
                 }
 
-                bucket = (bucket + 1) & hashTable.HashMask;
-                ordinal = ReadOrdinal(hashTable, bucket);
+                bucket = (bucket + 1) & generation.HashMask;
+                ordinal = generation.ReadOrdinal(bucket);
             }
         }
-        while (!ReferenceEquals(_hashTable, hashTable));
+        while (!ReferenceEquals(_hashTable.Current, generation));
 
         return ordinal;
     }
@@ -240,98 +253,39 @@ public sealed class HollowPrimaryKeyIndex : IHollowTypeStateListener, IDisposabl
     /// <summary>
     /// The keys held by two or more records.
     /// </summary>
-    public IReadOnlyList<object?[]> GetDuplicateKeys()
-    {
-        lock (_lock)
-        {
-            HashTable? hashTable = _hashTable;
-            if (hashTable is null || hashTable.BitsPerElement == 0)
-            {
-                return [];
-            }
-
-            List<object?[]> duplicateKeys = [];
-
-            for (long i = 0; i < hashTable.Size; i++)
-            {
-                int ordinal = ReadOrdinal(hashTable, i);
-                if (ordinal == HollowConstants.OrdinalNone)
-                {
-                    continue;
-                }
-
-                // A duplicate always lands in the run of occupied buckets following its twin, because
-                // both hash to the same bucket and probe linearly from there.
-                long compareBucket = (i + 1) & hashTable.HashMask;
-                int compareOrdinal = ReadOrdinal(hashTable, compareBucket);
-
-                while (compareOrdinal != HollowConstants.OrdinalNone)
-                {
-                    if (RecordsHaveEqualKeys(ordinal, compareOrdinal))
-                    {
-                        duplicateKeys.Add(_keyDeriver!.GetRecordKey(ordinal));
-                    }
-
-                    compareBucket = (compareBucket + 1) & hashTable.HashMask;
-                    compareOrdinal = ReadOrdinal(hashTable, compareBucket);
-                }
-            }
-
-            return duplicateKeys;
-        }
-    }
+    public IReadOnlyList<object?[]> GetDuplicateKeys() => _hashTable.GetDuplicateKeys();
 
     /// <summary>
     /// The keys held by two or more records, with the number of records sharing each, up to
     /// <paramref name="maxDuplicateKeys"/> of them.
     /// </summary>
-    public IReadOnlyList<DuplicateKeyInfo> GetDuplicateKeys(int maxDuplicateKeys)
+    public IReadOnlyList<DuplicateKeyInfo> GetDuplicateKeys(int maxDuplicateKeys) =>
+        _hashTable.GetDuplicateKeys(maxDuplicateKeys);
+
+    /// <inheritdoc />
+    bool IUniqueKeyRecords.RecordsHaveEqualKeys(int ordinal1, int ordinal2)
     {
-        lock (_lock)
+        for (int i = 0; i < _fieldPathIndexes.Length; i++)
         {
-            HashTable? hashTable = _hashTable;
-            if (hashTable is null || hashTable.BitsPerElement == 0 || maxDuplicateKeys <= 0)
+            if (!FieldsAreEqual(ordinal1, ordinal2, i))
             {
-                return [];
+                return false;
             }
-
-            BitSet counted = new();
-            List<DuplicateKeyInfo> duplicateKeys = [];
-
-            for (long i = 0; i < hashTable.Size && duplicateKeys.Count < maxDuplicateKeys; i++)
-            {
-                int ordinal = ReadOrdinal(hashTable, i);
-                if (ordinal == HollowConstants.OrdinalNone || counted.Get(ordinal))
-                {
-                    continue;
-                }
-
-                long count = 1;
-                counted.Set(ordinal);
-
-                long compareBucket = (i + 1) & hashTable.HashMask;
-                int compareOrdinal = ReadOrdinal(hashTable, compareBucket);
-
-                while (compareOrdinal != HollowConstants.OrdinalNone)
-                {
-                    if (RecordsHaveEqualKeys(ordinal, compareOrdinal))
-                    {
-                        count++;
-                        counted.Set(compareOrdinal);
-                    }
-
-                    compareBucket = (compareBucket + 1) & hashTable.HashMask;
-                    compareOrdinal = ReadOrdinal(hashTable, compareBucket);
-                }
-
-                if (count > 1)
-                {
-                    duplicateKeys.Add(new DuplicateKeyInfo(_keyDeriver!.GetRecordKey(ordinal), count));
-                }
-            }
-
-            return duplicateKeys;
         }
+
+        return true;
+    }
+
+    /// <inheritdoc />
+    int IUniqueKeyRecords.RecordHash(int ordinal)
+    {
+        int hashCode = 0;
+        for (int i = 0; i < _fieldPathIndexes.Length; i++)
+        {
+            hashCode ^= FieldHash(ordinal, i);
+        }
+
+        return hashCode;
     }
 
     /// <inheritdoc />
@@ -353,40 +307,7 @@ public sealed class HollowPrimaryKeyIndex : IHollowTypeStateListener, IDisposabl
     }
 
     /// <inheritdoc />
-    void IHollowTypeStateListener.EndUpdate()
-    {
-        lock (_lock)
-        {
-            if (_hashTable is not { } hashTable)
-            {
-                return;
-            }
-
-            BitSet ordinals = _typeState!.PopulatedOrdinals;
-
-            long hashTableSize = HashCodes.IndexHashTableSize(ordinals.Cardinality());
-            int bitsPerElement = 32 - BitOperations.LeadingZeroCount((uint)(_typeState.MaxOrdinal + 1));
-
-            if (AllowDeltaUpdate
-                && hashTableSize == hashTable.Size
-                && bitsPerElement == hashTable.BitsPerElement
-                && ShouldPerformDeltaUpdate())
-            {
-                try
-                {
-                    DeltaUpdate(hashTableSize, bitsPerElement);
-                    return;
-                }
-                catch (OrdinalNotFoundException)
-                {
-                    // The incremental path could not find an ordinal it expected to remove. Rather than
-                    // leave a corrupt table behind, fall through to a full rebuild.
-                }
-            }
-
-            Reindex();
-        }
-    }
+    void IHollowTypeStateListener.EndUpdate() => _hashTable.EndUpdate();
 
     /// <summary>
     /// Returns the hash table's storage to the recycler and stops listening for delta updates.
@@ -394,12 +315,7 @@ public sealed class HollowPrimaryKeyIndex : IHollowTypeStateListener, IDisposabl
     public void Dispose()
     {
         DetachFromDeltaUpdates();
-
-        lock (_lock)
-        {
-            _hashTable?.Table.Destroy(_memoryRecycler);
-            _hashTable = null;
-        }
+        _hashTable.Destroy();
     }
 
     private static PrimaryKey ResolveKey(HollowReadStateEngine stateEngine, string type, string[] fieldPaths)
@@ -409,189 +325,6 @@ public sealed class HollowPrimaryKeyIndex : IHollowTypeStateListener, IDisposabl
         return PrimaryKey.Create(stateEngine, type, fieldPaths)
             ?? throw new ArgumentException(
                 $"no field paths were given and type {type} declares no primary key", nameof(fieldPaths));
-    }
-
-    private static int ReadOrdinal(HashTable hashTable, long bucket) =>
-        (int)hashTable.Table.GetElementValue(bucket * hashTable.BitsPerElement, hashTable.BitsPerElement) - 1;
-
-    /// <summary>
-    /// Rebuilds the whole hash table from the ordinals currently populated.
-    /// </summary>
-    private void Reindex()
-    {
-        lock (_lock)
-        {
-            _hashTable?.Table.Destroy(_memoryRecycler);
-
-            BitSet ordinals = _specificOrdinalsToIndex ?? _typeState!.PopulatedOrdinals;
-
-            long hashTableSize = HashCodes.IndexHashTableSize(ordinals.Cardinality());
-            int bitsPerElement = 32 - BitOperations.LeadingZeroCount((uint)(_typeState!.MaxOrdinal + 1));
-
-            FixedLengthElementArray table = new(_memoryRecycler, hashTableSize * bitsPerElement);
-            long hashMask = hashTableSize - 1;
-
-            // Zero means "empty", so an ordinal is stored one higher than it is.
-            foreach (int ordinal in ordinals.EnumerateSetBits())
-            {
-                long bucket = RecordHash(ordinal) & hashMask;
-
-                while (table.GetElementValue(bucket * bitsPerElement, bitsPerElement) != 0)
-                {
-                    bucket = (bucket + 1) & hashMask;
-                }
-
-                table.SetElementValue(bucket * bitsPerElement, bitsPerElement, ordinal + 1);
-            }
-
-            _hashTable = new HashTable(table, hashTableSize, hashMask, bitsPerElement);
-            _memoryRecycler.Swap();
-        }
-    }
-
-    /// <summary>
-    /// Rebuilds the hash table by removing only the ordinals the transition dropped and adding only
-    /// those it introduced, which is cheaper than a full rebuild when little changed.
-    /// </summary>
-    /// <exception cref="OrdinalNotFoundException">
-    /// An ordinal that should have been in the table was not, which means the table no longer reflects
-    /// the data.
-    /// </exception>
-    private void DeltaUpdate(long hashTableSize, int bitsPerElement)
-    {
-        HashTable hashTable = _hashTable!;
-        hashTable.Table.Destroy(_memoryRecycler);
-
-        BitSet previousOrdinals = _typeState!.PreviousOrdinals;
-        BitSet ordinals = _typeState.PopulatedOrdinals;
-
-        long totalBits = hashTableSize * bitsPerElement;
-        FixedLengthElementArray table = new(_memoryRecycler, totalBits);
-        table.CopyBits(hashTable.Table, 0, 0, totalBits);
-
-        long hashMask = hashTableSize - 1;
-
-        foreach (int previousOrdinal in previousOrdinals.EnumerateSetBits())
-        {
-            if (ordinals.Get(previousOrdinal))
-            {
-                continue;
-            }
-
-            long bucket = FindOrdinalBucket(bitsPerElement, table, RecordHash(previousOrdinal), hashMask, previousOrdinal);
-
-            table.ClearElementValue(bucket * bitsPerElement, bitsPerElement);
-
-            // Clearing a bucket breaks the probe run through it, so every following entry that hashed
-            // at or before the hole has to move back into it.
-            long emptyBucket = bucket;
-            bucket = (bucket + 1) & hashMask;
-            int moveOrdinal = (int)table.GetElementValue(bucket * bitsPerElement, bitsPerElement) - 1;
-
-            while (moveOrdinal != HollowConstants.OrdinalNone)
-            {
-                long naturalBucket = RecordHash(moveOrdinal) & hashMask;
-
-                if (!BucketInRange(emptyBucket, bucket, naturalBucket))
-                {
-                    table.SetElementValue(emptyBucket * bitsPerElement, bitsPerElement, moveOrdinal + 1);
-                    table.ClearElementValue(bucket * bitsPerElement, bitsPerElement);
-                    emptyBucket = bucket;
-                }
-
-                bucket = (bucket + 1) & hashMask;
-                moveOrdinal = (int)table.GetElementValue(bucket * bitsPerElement, bitsPerElement) - 1;
-            }
-        }
-
-        foreach (int ordinal in ordinals.EnumerateSetBits())
-        {
-            if (previousOrdinals.Get(ordinal))
-            {
-                continue;
-            }
-
-            long bucket = RecordHash(ordinal) & hashMask;
-
-            while (table.GetElementValue(bucket * bitsPerElement, bitsPerElement) != 0)
-            {
-                bucket = (bucket + 1) & hashMask;
-            }
-
-            table.SetElementValue(bucket * bitsPerElement, bitsPerElement, ordinal + 1);
-        }
-
-        _hashTable = new HashTable(table, hashTableSize, hashMask, bitsPerElement);
-        _memoryRecycler.Swap();
-    }
-
-    private static long FindOrdinalBucket(
-        int bitsPerElement, FixedLengthElementArray table, int hashCode, long hashMask, int ordinal)
-    {
-        long startBucket = hashCode & hashMask;
-        long bucket = startBucket;
-        long value;
-
-        do
-        {
-            value = table.GetElementValue(bucket * bitsPerElement, bitsPerElement);
-            if (value == ordinal + 1)
-            {
-                return bucket;
-            }
-
-            bucket = (bucket + 1) & hashMask;
-        }
-        while (value != 0 && bucket != startBucket);
-
-        throw new OrdinalNotFoundException(
-            value == 0
-                ? $"ordinal not found (found empty entry): ordinal={ordinal} startBucket={startBucket}"
-                : $"ordinal not found (wrapped around table): ordinal={ordinal} startBucket={startBucket}");
-    }
-
-    /// <summary>
-    /// Whether <paramref name="testBucket"/> falls in the probe run from <paramref name="fromBucket"/>
-    /// to <paramref name="toBucket"/>, which may wrap past the end of the table.
-    /// </summary>
-    private static bool BucketInRange(long fromBucket, long toBucket, long testBucket) =>
-        toBucket > fromBucket
-            ? testBucket > fromBucket && testBucket <= toBucket
-            : testBucket > fromBucket || testBucket <= toBucket;
-
-    /// <summary>
-    /// A full rebuild is cheaper once a sizeable share of the previous records has gone, because each
-    /// removal has to repair the probe run it breaks.
-    /// </summary>
-    private bool ShouldPerformDeltaUpdate()
-    {
-        BitSet previousOrdinals = _typeState!.PreviousOrdinals;
-        BitSet ordinals = _typeState.PopulatedOrdinals;
-
-        int previousCardinality = 0;
-        int removedRecords = 0;
-
-        foreach (int previousOrdinal in previousOrdinals.EnumerateSetBits())
-        {
-            previousCardinality++;
-            if (!ordinals.Get(previousOrdinal))
-            {
-                removedRecords++;
-            }
-        }
-
-        return removedRecords <= previousCardinality * 0.1d;
-    }
-
-    private int RecordHash(int ordinal)
-    {
-        int hashCode = 0;
-        for (int i = 0; i < _fieldPathIndexes.Length; i++)
-        {
-            hashCode ^= FieldHash(ordinal, i);
-        }
-
-        return hashCode;
     }
 
     /// <exception cref="InvalidOperationException">A key field traverses a null reference.</exception>
@@ -621,19 +354,6 @@ public sealed class HollowPrimaryKeyIndex : IHollowTypeStateListener, IDisposabl
         return _fieldTypes[fieldIndex] is FieldType.String or FieldType.Bytes
             ? hashCode
             : HashCodes.HashInt(hashCode);
-    }
-
-    private bool RecordsHaveEqualKeys(int ordinal1, int ordinal2)
-    {
-        for (int i = 0; i < _fieldPathIndexes.Length; i++)
-        {
-            if (!FieldsAreEqual(ordinal1, ordinal2, i))
-            {
-                return false;
-            }
-        }
-
-        return true;
     }
 
     private bool FieldsAreEqual(int ordinal1, int ordinal2, int fieldIndex)
@@ -686,26 +406,5 @@ public sealed class HollowPrimaryKeyIndex : IHollowTypeStateListener, IDisposabl
 
         /// <inheritdoc />
         public override string ToString() => $"[{string.Join(", ", Key)}] (count={Count})";
-    }
-
-    /// <summary>
-    /// Thrown when an incremental delta update cannot find an ordinal the table should contain.
-    /// </summary>
-    private sealed class OrdinalNotFoundException(string message) : InvalidOperationException(message);
-
-    /// <summary>
-    /// One immutable generation of the hash table. Replaced wholesale rather than mutated, so a query
-    /// running concurrently with an update sees one generation or the other.
-    /// </summary>
-    private sealed class HashTable(
-        FixedLengthElementArray table, long size, long hashMask, int bitsPerElement)
-    {
-        internal FixedLengthElementArray Table { get; } = table;
-
-        internal long Size { get; } = size;
-
-        internal long HashMask { get; } = hashMask;
-
-        internal int BitsPerElement { get; } = bitsPerElement;
     }
 }

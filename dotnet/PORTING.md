@@ -5,19 +5,21 @@ list, set and map — round-trip end to end: a `HollowWriteStateEngine` writes a
 `HollowReadStateEngine` reads back. An object mapper maps ordinary CLR types onto Hollow records, so
 callers need not build records field by field.
 
-Deltas are here for all four record kinds: the producer calculates and writes a delta, and a consumer
-applies it to move forward one cycle without re-reading a snapshot.
+Deltas are here for all four record kinds, in both directions: the producer calculates and writes a
+delta or a reverse delta, and a consumer applies it to move a cycle forward or back without re-reading
+a snapshot.
 
-Indexing is here too: field paths bind a declared key onto the schemas, `HollowPrimaryKeyIndex` looks
-records up by key rather than by ordinal, and a set or map schema may declare a hash key, which the
-producer honours when laying out each record's hash table.
+Indexing is here too: field paths bind a declared key onto the schemas, three indexes look records up
+by value rather than by ordinal — `HollowPrimaryKeyIndex` and `HollowUniqueKeyIndex` by a unique key,
+`HollowHashIndex` by fields that are not unique and may cross collections — and a set or map schema may
+declare a hash key, which the producer honours when laying out each record's hash table.
 
 There is **one deliberate departure from the Hollow format**: a `Decimal` field type that stores a .NET
 `decimal` exactly. It is opt-in — a dataset that declares no decimal field is byte-identical to what
 Netflix Hollow produces. Read [Format extension: the `Decimal` field
 type](#format-extension-the-decimal-field-type) before changing anything in the write or read path.
 
-What is **not** here is reverse deltas, resharding, restore, the diff/history tools, and the
+What is **not** here is resharding, restore, object longevity, the diff/history tools, and the
 producer/consumer APIs. The status section says exactly what is and is not ported.
 
 ## Building and testing
@@ -211,6 +213,27 @@ set, so deriving the sentinel the way Java does would produce a different, incom
 sentinels are written as literals, and a NaN *value* is canonicalised to Java's pattern before being
 stored, matching `Float.floatToIntBits` rather than `floatToRawIntBits`.
 
+### The two unique-key indexes
+
+Java has `HollowPrimaryKeyIndex` and `HollowUniqueKeyIndex`, which answer the same questions. The
+difference is where they get their type accesses: the primary key index walks the schema's referenced
+type states on every lookup, while the unique key index resolves them through the data access it was
+given and keeps them.
+
+In Java that is what lets the unique key index survive more than two deltas without being rebuilt when
+object longevity is on. Object longevity is not ported, so here the difference is narrower: the unique
+key index works against any `IHollowDataAccess` rather than requiring a `HollowReadStateEngine`, and
+does not depend on the schema's mutable type-state wiring. Both are ported because the distinction is
+real and a caller may want either; they share their hash table through `UniqueKeyHashTable`, where Java
+duplicates it.
+
+### An index that matches on nothing is refused
+
+`HollowHashIndex` requires at least one match field. With none, every record has a zero-bit key, and
+the tables use a bit of the key to tell an occupied bucket from an empty one — so Java builds such an
+index without complaint and then finds only some of the records. This port rejects it at construction.
+`HashIndexTests.AnIndexWithNoMatchFieldsIsRejected` pins that.
+
 ### A declared hash key replaces ordinal-based lookup
 
 This is inherent to the format rather than specific to the port, but it is easy to trip over. When a
@@ -282,10 +305,11 @@ memory modes; .NET's `Stream` covers both, so the port wraps a stream and report
 | `core.memory.encoding` | `ZigZag`, `VarInt`, `HashCodes`, `FixedLengthElementArray`, and `DecimalBits` (port-specific; see the format extension above) |
 | `core.memory.pool` | `IArraySegmentRecycler`, `WastefulRecycler`, `RecyclingRecycler` |
 | `core.schema` | `HollowSchema` and the object/list/set/map schemas, `FieldType`, `SchemaType`, `SimpleHollowDataset` |
-| `core.index` | `FieldPaths` and the bound `FieldPath`/`FieldSegment`/`ObjectFieldSegment`/`FieldPathException` types, `HollowPrimaryKeyIndex` |
+| `core.index` | `FieldPaths` and the bound `FieldPath`/`FieldSegment`/`ObjectFieldSegment`/`FieldPathException` types, `HollowPrimaryKeyIndex`, `HollowUniqueKeyIndex`, `HollowHashIndex` and its builder, preindexer, field and result types, `GrowingSegmentedLongArray`, `MultiLinkedElementArray` |
+| `core.index.traversal` | The traversal tree and `HollowIndexerValueTraverser`, which enumerate every combination of values a record's indexed paths reach |
 | `core.index.key` | `PrimaryKey`, including its dataset-resolution helpers, and `HollowPrimaryKeyValueDeriver` |
 | `core` | `HollowConstants`, `IHollowDataset` |
-| `core.util` | `BitSet` (a port-specific stand-in for `java.util.BitSet`) |
+| `core.util` | `BitSet` and `IntList` (port-specific stand-ins for `java.util.BitSet` and Hollow's `IntList`) |
 | `core.write` | The write records (object, list, set, map), `FieldStatistics`, `HollowTypeWriteState` and its four subclasses, `HollowWriteStateEngine`, `HollowBlobHeaderWriter`, `HollowBlobWriter`, `HollowBlobOutput` |
 | `core.write.objectmapper` | `HollowObjectMapper`, the four type mappers, and the `HollowTypeName`/`HollowInline`/`HollowTransient`/`HollowPrimaryKey`/`HollowHashKey`/`HollowShardLargeType` attributes, including Java's default hash-key derivation |
 | `core.read` | `HollowBlobInput`, `HollowBlobHeaderReader`, `HollowBlobReader`, `HollowReadStateEngine`, `HollowTypeReadState`, `PopulatedOrdinalListener`, `SnapshotPopulatedOrdinalsReader`, the data-access interfaces, `ITypeFilter` |
@@ -294,6 +318,7 @@ memory modes; .NET's `Stream` covers both, so the port wraps a stream and report
 | `core.memory.encoding` (delta) | `GapEncodedVariableLengthIntegerReader` |
 | delta write path | `CalculateDelta`/`WriteCalculatedDelta` on all four type write states, `HollowBlobWriter.WriteDelta` |
 | delta read path | `ApplyDelta` on the data elements and read states of all four record kinds, `HollowBlobReader.ApplyDelta` |
+| reverse deltas | `HollowTypeWriteState.CalculateReverseDelta`, `HollowBlobWriter.WriteReverseDelta`; a consumer applies one through the same `ApplyDelta` |
 | hash keys | `HollowWriteStateEnginePrimaryKeyHasher` on the write side, `SetMapKeyHasher` and `FindElement`/`FindKey`/`FindValue`/`FindEntry` on the read side |
 | `core.read` (field access) | `HollowReadFieldUtils` |
 
@@ -323,6 +348,11 @@ side, including the keys it derives when a model declares none.
 `FormatCompatibilityTests` pins the bytes of a dataset that does not use it — see
 [Format extension: the `Decimal` field type](#format-extension-the-decimal-field-type).
 
+`ReverseDeltaTests` unwinds five chained generations one at a time and checks that going back and
+forward again along the same transition lands on the same state. `UniqueKeyIndexTests` asserts that the
+two unique-key indexes agree on every query, which is the useful check given they exist to answer the
+same questions differently.
+
 ### Ported, not yet covered by a round-trip
 
 `HollowObjectSchema.FilterSchema` and the read path honour a filter, but only the explicit include
@@ -330,11 +360,11 @@ sets of `TypeFilter` exist; the recursive rule DSL is still absent.
 
 ### Not ported
 
-- **The rest of `core.index`.** `HollowHashIndex`, `HollowPrefixIndex`, `HollowUniqueKeyIndex`,
-  `HollowSparseIntegerSet` and the traversal helpers. `FieldPaths` supports the hash-index and
-  prefix-index binding modes those need, so they have their foundation.
-- **Reverse deltas.** `CalculateReverseDelta` exists on the write state but nothing writes or applies
-  one.
+- **The rest of `core.index`.** `HollowPrefixIndex` and `HollowSparseIntegerSet`. `FieldPaths`
+  supports the prefix-index binding mode the former needs, so it has its foundation.
+- **Object longevity**, which serves reads of an older version from a live state. This is why Java has
+  both `HollowPrimaryKeyIndex` and `HollowUniqueKeyIndex`; see the note below on what separates them
+  here.
 - **Historical state creation**, which a consumer uses to serve queries against prior states.
 - **Restore and resharding.** Restoring a write state from a read state, and changing a type's shard
   count across cycles. A type's shard count is fixed when it is first written.
@@ -364,12 +394,10 @@ wide and every other fixed-length field is 64 or fewer.
 
 ### Suggested order for the remaining work
 
-1. `HollowHashIndex` and `HollowUniqueKeyIndex`, which bind through the same `FieldPaths` machinery
-   that is now in place and give a key-based lookup that survives more than two deltas.
-2. Reverse deltas, which reuse the applicators the forward path already has —
-   `CalculateReverseDelta` exists on the write state and produces the arrays; nothing writes or
-   applies them yet.
-3. Resharding and restore, which build on deltas.
-4. The consumer API, now that the delta path is complete.
+1. Restore — building a write state from a read state — which is what a producer needs to resume from
+   a published state rather than republishing a snapshot.
+2. The consumer API, now that both delta directions and the indexes are in place.
+3. Resharding, which is the largest remaining piece of the engine and touches every write state.
+4. `HollowPrefixIndex` and `HollowSparseIntegerSet`, the last of `core.index`.
 5. The bulk-copy fast path in the delta applicators, which is a pure optimisation the existing tests
    already guard.
