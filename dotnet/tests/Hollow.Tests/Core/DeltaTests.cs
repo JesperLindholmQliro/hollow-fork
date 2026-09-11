@@ -15,6 +15,8 @@
  *
  */
 
+using Hollow.Core;
+using Hollow.Core.Read;
 using Hollow.Core.Read.Engine;
 using Hollow.Core.Read.Engine.Object;
 using Hollow.Core.Schema;
@@ -277,26 +279,54 @@ public class DeltaTests
         Assert.Throws<InvalidDataException>(() => new HollowBlobReader(consumer).ApplyDelta(deltaStream));
     }
 
+    /// <summary>
+    /// A delta only carries the types whose records changed, so a type left alone in a cycle must not
+    /// appear in the blob at all — and must survive the transition untouched.
+    /// </summary>
     [Fact]
-    public void WritingACollectionTypeDeltaIsRefusedRatherThanProducingAnUnreadableBlob()
+    public void UnchangedTypesAreLeftOutOfTheDelta()
     {
-        HollowObjectSchema valueSchema = new("Value", 1);
-        valueSchema.AddField("id", FieldType.Int);
-        HollowListSchema listSchema = new("Values", "Value");
+        HollowObjectSchema movieSchema = MovieSchema();
+        HollowObjectSchema studioSchema = new("Studio", 1);
+        studioSchema.AddField("name", FieldType.String);
 
-        HollowWriteStateEngine engine = new();
-        engine.AddTypeState(new HollowObjectTypeWriteState(valueSchema));
-        engine.AddTypeState(new HollowListTypeWriteState(listSchema));
+        HollowWriteStateEngine engine = new() { RandomizedTag = 1 };
+        engine.AddTypeState(new HollowObjectTypeWriteState(movieSchema));
+        engine.AddTypeState(new HollowObjectTypeWriteState(studioSchema));
 
-        HollowObjectWriteRecord value = new(valueSchema);
-        value.SetInt("id", 1);
-        int valueOrdinal = engine.Add("Value", value);
+        HollowObjectWriteRecord studio = new(studioSchema);
+        studio.SetString("name", "Svensk Filmindustri");
 
-        HollowListWriteRecord list = new();
-        list.AddElement(valueOrdinal);
-        engine.Add("Values", list);
+        AddMovies(engine, movieSchema, [new Movie(1, "A", 1, "a")]);
+        engine.Add("Studio", studio);
 
-        using MemoryStream stream = new();
-        Assert.Throws<NotSupportedException>(() => new HollowBlobWriter(engine).WriteDelta(stream));
+        HollowReadStateEngine consumer = ReadSnapshot(engine);
+
+        engine.PrepareForNextCycle();
+        engine.RandomizedTag = 2;
+        AddMovies(engine, movieSchema, [new Movie(2, "B", 2, "b")]);
+        studio.Reset();
+        studio.SetString("name", "Svensk Filmindustri");
+        engine.Add("Studio", studio);
+
+        using MemoryStream deltaStream = new();
+        new HollowBlobWriter(engine).WriteDelta(deltaStream);
+        deltaStream.Position = 0;
+
+        using (HollowBlobInput input = HollowBlobInput.Serial(deltaStream, leaveOpen: true))
+        {
+            HollowBlobHeader header = new HollowBlobHeaderReader().ReadHeader(input);
+            Assert.Equal(["Movie"], header.Schemas.Select(s => s.Name));
+        }
+
+        deltaStream.Position = 0;
+        new HollowBlobReader(consumer).ApplyDelta(deltaStream);
+
+        HollowObjectTypeReadState studioState =
+            Assert.IsType<HollowObjectTypeReadState>(consumer.GetTypeState("Studio"));
+
+        Assert.Equal("Svensk Filmindustri", studioState.ReadString(0, studioSchema.GetPosition("name")));
+        Assert.Equal(0, studioState.MaxOrdinal);
+        Assert.Equal(new Movie(2, "B", 2, "b"), Assert.Single(ReadAll(consumer)).Value);
     }
 }

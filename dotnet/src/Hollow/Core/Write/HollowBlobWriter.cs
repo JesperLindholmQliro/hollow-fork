@@ -99,10 +99,6 @@ public sealed class HollowBlobWriter
     /// <remarks>
     /// Only the types whose records changed appear in a delta, so a consumer leaves the rest alone.
     /// </remarks>
-    /// <exception cref="NotSupportedException">
-    /// A changed type is not an object type. The .NET port can produce collection-type deltas but
-    /// cannot yet apply them, so writing one would produce a blob no consumer here could read.
-    /// </exception>
     public void WriteDelta(HollowBlobOutput output)
     {
         ArgumentNullException.ThrowIfNull(output);
@@ -111,17 +107,6 @@ public sealed class HollowBlobWriter
 
         List<HollowTypeWriteState> changedTypes =
             [.. _stateEngine.OrderedTypeStates.Where(state => state.HasChangedSinceLastCycle())];
-
-        foreach (HollowTypeWriteState typeState in changedTypes)
-        {
-            if (typeState.Schema.SchemaType != SchemaType.Object)
-            {
-                throw new NotSupportedException(
-                    $"Type {typeState.Schema.Name} is a {typeState.Schema.SchemaType} type. The .NET port "
-                    + "cannot yet apply a delta for collection types, so it will not write one; see "
-                    + "PORTING.md.");
-            }
-        }
 
         HollowBlobHeader header = new()
         {

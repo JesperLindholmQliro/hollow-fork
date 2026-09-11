@@ -29,8 +29,8 @@ namespace Hollow.Core.Read.Engine;
 /// Populates a <see cref="HollowReadStateEngine"/> from a snapshot blob.
 /// </summary>
 /// <remarks>
-/// <strong>Port note.</strong> Delta and reverse-delta application, and optional blob parts, are not
-/// ported — see <c>PORTING.md</c>.
+/// <strong>Port note.</strong> Reverse-delta application and optional blob parts are not ported — see
+/// <c>PORTING.md</c>.
 /// </remarks>
 public sealed class HollowBlobReader
 {
@@ -147,14 +147,26 @@ public sealed class HollowBlobReader
                 objectState.ApplyDelta(input, objectSchema, _stateEngine.MemoryRecycler);
                 break;
 
+            case HollowListTypeReadState listState when schema is HollowListSchema:
+                listState.ApplyDelta(input, _stateEngine.MemoryRecycler);
+                break;
+
+            case HollowSetTypeReadState setState when schema is HollowSetSchema:
+                setState.ApplyDelta(input, _stateEngine.MemoryRecycler);
+                break;
+
+            case HollowMapTypeReadState mapState when schema is HollowMapSchema:
+                mapState.ApplyDelta(input, _stateEngine.MemoryRecycler);
+                break;
+
             case null:
                 throw new InvalidDataException(
                     $"The delta changes type {schema.Name}, which is not present in this state.");
 
             default:
-                throw new NotSupportedException(
-                    $"Type {schema.Name} is a {schema.SchemaType} type. The .NET port cannot yet apply a "
-                    + "delta for collection types; see PORTING.md.");
+                throw new InvalidDataException(
+                    $"The delta declares type {schema.Name} as a {schema.SchemaType} type, which does not "
+                    + $"match the {typeState.Schema.SchemaType} type held in this state.");
         }
     }
 
