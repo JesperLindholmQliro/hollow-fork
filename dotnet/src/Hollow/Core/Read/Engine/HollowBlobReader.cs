@@ -27,11 +27,11 @@ using Hollow.Core.Util;
 namespace Hollow.Core.Read.Engine;
 
 /// <summary>
-/// Populates a <see cref="HollowReadStateEngine"/> from a snapshot blob.
+/// Populates a <see cref="HollowReadStateEngine"/> from a snapshot blob, and moves it along the delta
+/// chain in either direction.
 /// </summary>
 /// <remarks>
-/// <strong>Port note.</strong> Reverse-delta application and optional blob parts are not ported — see
-/// <c>PORTING.md</c>.
+/// <strong>Port note.</strong> Optional blob parts are not ported — see <c>PORTING.md</c>.
 /// </remarks>
 public sealed class HollowBlobReader
 {
