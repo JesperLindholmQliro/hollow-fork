@@ -69,6 +69,24 @@ public sealed class HollowWriteStateEngine : IHollowDataset
     public bool FocusHoleFillInFewestShards { get; set; }
 
     /// <summary>
+    /// Whether a type may change its shard count from one cycle to the next as its data grows or
+    /// shrinks past <see cref="TargetMaxTypeShardSize"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Off by default. With it off a type's shard count is fixed the first time it is written and every
+    /// later delta keeps it, which is what a consumer built before resharding existed expects. With it
+    /// on a delta may declare a different count, and a consumer rearranges its records to match before
+    /// applying that delta — so only turn it on once every consumer of the chain can do that.
+    /// </para>
+    /// <para>
+    /// A count changes by at most a factor of two per cycle, so a type that has badly outgrown its
+    /// shards takes several cycles to get where it is going.
+    /// </para>
+    /// </remarks>
+    public bool AllowTypeResharding { get; set; }
+
+    /// <summary>
     /// The random tag identifying the state this engine produces.
     /// </summary>
     /// <remarks>
@@ -195,7 +213,13 @@ public sealed class HollowWriteStateEngine : IHollowDataset
     /// A no-op when this engine is already prepared, so that writing a snapshot and a delta for the
     /// same cycle costs the work only once.
     /// </remarks>
-    public void PrepareForWrite()
+    /// <param name="canReshard">
+    /// Whether this write may change a type's shard count, which it does only when
+    /// <see cref="AllowTypeResharding"/> is also set. A caller preparing for something other than a
+    /// blob — measuring the state, say — passes <see langword="false"/> so that the decision is left to
+    /// the write that follows.
+    /// </param>
+    public void PrepareForWrite(bool canReshard = false)
     {
         if (!_preparedForNextCycle)
         {
@@ -204,7 +228,7 @@ public sealed class HollowWriteStateEngine : IHollowDataset
 
         foreach (HollowTypeWriteState typeState in _orderedTypeStates)
         {
-            typeState.PrepareForWrite();
+            typeState.PrepareForWrite(canReshard);
         }
 
         _preparedForNextCycle = false;

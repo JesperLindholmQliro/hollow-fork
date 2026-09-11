@@ -15,6 +15,7 @@
  *
  */
 
+using System.Globalization;
 using Hollow.Core.Memory;
 using Hollow.Core.Memory.Pool;
 using Hollow.Core.Read.Engine;
@@ -48,7 +49,10 @@ public abstract class HollowTypeWriteState
     private readonly ThreadLocal<ByteDataArray> _serializedScratchSpace =
         new(() => new ByteDataArray(WastefulRecycler.DefaultInstance));
 
+    private readonly bool _isNumShardsPinned;
+
     private int _numShards;
+    private int _resetToLastNumShards;
 
     /// <summary>
     /// The ordinals held by the state this one was restored from, keyed by each record's serialised
@@ -87,6 +91,8 @@ public abstract class HollowTypeWriteState
 
         Schema = schema;
         _numShards = numShards;
+        _resetToLastNumShards = numShards;
+        _isNumShardsPinned = numShards != -1;
         OrdinalMap = new ByteArrayOrdinalMap();
         CurrentCyclePopulated = new ThreadSafeBitSet();
         PreviousCyclePopulated = new ThreadSafeBitSet();
@@ -108,6 +114,25 @@ public abstract class HollowTypeWriteState
     public int NumShards => _numShards;
 
     /// <summary>
+    /// The number of shards the previous cycle's records are laid out in, or 0 before this type has
+    /// been written at all.
+    /// </summary>
+    /// <remarks>
+    /// A reverse delta takes a consumer back to the previous cycle, so it is written at that cycle's
+    /// shard count rather than this one's. The two differ only when this cycle resharded.
+    /// </remarks>
+    public int RevNumShards { get; private set; }
+
+    /// <summary>
+    /// Whether the shard count was fixed by the caller rather than derived from the data size.
+    /// </summary>
+    /// <remarks>
+    /// Java pins a count through the <c>@HollowShardLargeType</c> annotation on the data model; this
+    /// port takes it as a constructor argument.
+    /// </remarks>
+    public bool IsNumShardsPinned => _isNumShardsPinned;
+
+    /// <summary>
     /// Whether this state was restored from a read state and has not yet been through a full cycle.
     /// </summary>
     public bool IsRestored => OrdinalMap.UnusedPreviousOrdinals is not null;
@@ -120,6 +145,12 @@ public abstract class HollowTypeWriteState
 
     /// <summary>The highest ordinal within each shard.</summary>
     protected int[] MaxShardOrdinal { get; private set; } = [];
+
+    /// <summary>
+    /// The highest ordinal within each shard at <see cref="RevNumShards"/>, which is what a reverse
+    /// delta is written against.
+    /// </summary>
+    protected int[] RevMaxShardOrdinal { get; private set; } = [];
 
     /// <summary>The map assigning ordinals to distinct serialised records.</summary>
     protected ByteArrayOrdinalMap OrdinalMap { get; }
@@ -207,6 +238,7 @@ public abstract class HollowTypeWriteState
         if (_numShards == -1)
         {
             _numShards = numShards;
+            _resetToLastNumShards = numShards;
         }
         else if (_numShards != numShards)
         {
@@ -232,6 +264,10 @@ public abstract class HollowTypeWriteState
 
         (PreviousCyclePopulated, CurrentCyclePopulated) = (CurrentCyclePopulated, PreviousCyclePopulated);
         CurrentCyclePopulated.ClearAll();
+
+        // Abandoning the next cycle has to put the shard count back to what the cycle just closed was
+        // written at, not to whatever that cycle's resharding decision made of it.
+        _resetToLastNumShards = _numShards;
     }
 
     /// <summary>
@@ -245,6 +281,9 @@ public abstract class HollowTypeWriteState
     /// </remarks>
     public virtual void ResetToLastPrepareForNextCycle()
     {
+        // The abandoned cycle may have decided to reshard. That decision goes with it.
+        _numShards = _resetToLastNumShards;
+
         CurrentCyclePopulated.ClearAll();
 
         if (_restoredReadState is not { } restoredReadState)
@@ -264,7 +303,11 @@ public abstract class HollowTypeWriteState
     /// Finalises the ordinal assignment and derives the shard layout, after which no more records may
     /// be added until the next cycle.
     /// </summary>
-    public virtual void PrepareForWrite()
+    /// <param name="canReshard">
+    /// Whether this write may change the shard count, which it does only when the engine also allows
+    /// it and the count was not fixed by the caller.
+    /// </param>
+    public virtual void PrepareForWrite(bool canReshard)
     {
         // A record that the restored state held but this cycle did not re-add still has to be present
         // in the ordinal map: the delta describes it as removed, and the matching reverse delta has to
@@ -432,29 +475,65 @@ public abstract class HollowTypeWriteState
     /// <summary>
     /// Builds the in-memory representation of the change from the previous cycle to this one.
     /// </summary>
-    public void CalculateDelta() => CalculateDelta(PreviousCyclePopulated, CurrentCyclePopulated);
+    public void CalculateDelta() =>
+        CalculateDelta(PreviousCyclePopulated, CurrentCyclePopulated, isReverse: false);
 
     /// <summary>
     /// Builds the in-memory representation of the change from this cycle back to the previous one.
     /// </summary>
-    public void CalculateReverseDelta() => CalculateDelta(CurrentCyclePopulated, PreviousCyclePopulated);
+    public void CalculateReverseDelta() =>
+        CalculateDelta(CurrentCyclePopulated, PreviousCyclePopulated, isReverse: true);
 
     /// <summary>
     /// Builds the in-memory representation of the change between two cycles' populated ordinals.
     /// </summary>
     /// <param name="fromCyclePopulated">The ordinals populated by the cycle being moved away from.</param>
     /// <param name="toCyclePopulated">The ordinals populated by the cycle being moved to.</param>
-    public abstract void CalculateDelta(ThreadSafeBitSet fromCyclePopulated, ThreadSafeBitSet toCyclePopulated);
+    /// <param name="isReverse">
+    /// Whether this is a reverse delta, which is laid out at <see cref="RevNumShards"/> because that is
+    /// the arrangement the consumer it takes back will be holding.
+    /// </param>
+    public abstract void CalculateDelta(
+        ThreadSafeBitSet fromCyclePopulated, ThreadSafeBitSet toCyclePopulated, bool isReverse);
 
     /// <summary>
     /// Writes the change built by <see cref="CalculateDelta()"/> in the delta blob format.
     /// </summary>
-    public abstract void WriteCalculatedDelta(HollowBlobOutput output);
+    public void WriteDelta(HollowBlobOutput output) =>
+        WriteCalculatedDelta(output, isReverse: false, MaxShardOrdinal);
 
     /// <summary>
-    /// Whether this type's populated ordinals differ from the previous cycle's.
+    /// Writes the change built by <see cref="CalculateReverseDelta"/> in the delta blob format.
     /// </summary>
-    public bool HasChangedSinceLastCycle() => !CurrentCyclePopulated.Equals(PreviousCyclePopulated);
+    public void WriteReverseDelta(HollowBlobOutput output) =>
+        WriteCalculatedDelta(output, isReverse: true, RevMaxShardOrdinal);
+
+    /// <summary>
+    /// Writes a calculated change in the delta blob format.
+    /// </summary>
+    /// <param name="output">The blob to write to.</param>
+    /// <param name="isReverse">Whether this is a reverse delta.</param>
+    /// <param name="maxShardOrdinal">The highest ordinal in each shard at that direction's count.</param>
+    public abstract void WriteCalculatedDelta(
+        HollowBlobOutput output, bool isReverse, int[] maxShardOrdinal);
+
+    /// <summary>
+    /// The number of shards a delta in the given direction is laid out at.
+    /// </summary>
+    protected int NumShardsForDelta(bool isReverse) =>
+        isReverse && _numShards != RevNumShards ? RevNumShards : _numShards;
+
+    /// <summary>
+    /// Whether this type has anything for a delta to say.
+    /// </summary>
+    /// <remarks>
+    /// A change of shard count counts even when the records did not change, because the arrangement
+    /// itself is what the delta is carrying — a consumer that skipped it would be left at the old count
+    /// and would misread every ordinal in the delta after it.
+    /// </remarks>
+    public bool HasChangedSinceLastCycle() =>
+        !CurrentCyclePopulated.Equals(PreviousCyclePopulated)
+        || (_numShards != RevNumShards && RevNumShards != 0);
 
     /// <summary>
     /// Grows the ordinal map to hold <paramref name="size"/> records without rehashing.
@@ -462,17 +541,82 @@ public abstract class HollowTypeWriteState
     public void ResizeOrdinalMap(int size) => OrdinalMap.Resize(size);
 
     /// <summary>
-    /// Derives the number of shards from the measured data size, if it was not fixed up front, and
-    /// computes the per-shard ordinal bounds.
+    /// Settles how many shards this cycle's records are laid out in and computes the per-shard ordinal
+    /// bounds, for this cycle and for the previous one.
     /// </summary>
-    protected void GatherShardingStats(int maxOrdinal)
+    /// <remarks>
+    /// On the first write the count is simply derived from the data size. After that it stays where it
+    /// is unless resharding is allowed, in which case the data size is measured again and the count
+    /// moves one factor of two towards what that measurement calls for. Moving in single steps keeps
+    /// each consumer's rearrangement to one split or one join per cycle.
+    /// </remarks>
+    /// <param name="maxOrdinal">The highest ordinal this cycle assigned.</param>
+    /// <param name="canReshard">Whether this write may change the count.</param>
+    protected void GatherShardingStats(int maxOrdinal, bool canReshard)
     {
         if (_numShards == -1)
         {
             _numShards = TypeStateNumShards(maxOrdinal);
+            RevNumShards = _numShards;
+        }
+        else
+        {
+            RevNumShards = _numShards;
+
+            if (canReshard && AllowTypeResharding())
+            {
+                int targetNumShards = TypeStateNumShards(maxOrdinal);
+
+                if (targetNumShards != RevNumShards)
+                {
+                    _numShards = targetNumShards > RevNumShards ? RevNumShards * 2 : RevNumShards / 2;
+
+                    AddReshardingHeader(RevNumShards, _numShards);
+                }
+            }
         }
 
         MaxShardOrdinal = CalcMaxShardOrdinal(maxOrdinal, _numShards);
+
+        if (RevNumShards > 0)
+        {
+            RevMaxShardOrdinal = CalcMaxShardOrdinal(maxOrdinal, RevNumShards);
+        }
+    }
+
+    /// <summary>
+    /// Whether this type's shard count may change from one cycle to the next.
+    /// </summary>
+    /// <remarks>
+    /// A pinned count loses to the engine-wide setting rather than overriding it, matching Java. The
+    /// pin is then pointless and can be dropped from the data model.
+    /// </remarks>
+    protected bool AllowTypeResharding() => StateEngine?.AllowTypeResharding ?? false;
+
+    /// <summary>
+    /// Records a shard-count change in the header tags, so that a consumer — or someone reading the
+    /// blob later — can see which types moved and by how much.
+    /// </summary>
+    /// <remarks>
+    /// The tag names every type resharded this cycle, in the forward direction, as
+    /// <c>Movie:(2,4) Actor:(8,4)</c>.
+    /// </remarks>
+    protected void AddReshardingHeader(int prevNumShards, int newNumShards)
+    {
+        if (StateEngine is not { } stateEngine)
+        {
+            return;
+        }
+
+        string existing = stateEngine.HeaderTags.TryGetValue(HollowHeaderTags.TypeReshardingInvoked, out string? tag)
+            ? tag + " "
+            : string.Empty;
+
+        stateEngine.AddHeaderTag(
+            HollowHeaderTags.TypeReshardingInvoked,
+            string.Create(
+                CultureInfo.InvariantCulture,
+                $"{existing}{Schema.Name}:({prevNumShards},{newNumShards})"));
     }
 
     /// <summary>

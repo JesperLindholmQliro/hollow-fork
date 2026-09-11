@@ -70,6 +70,8 @@ public sealed class HollowProducerBuilder
     /// <summary>Whether reclaimed ordinal holes are concentrated in as few shards as possible.</summary>
     internal bool FocusHoleFillInFewestShards { get; private set; }
 
+    internal bool AllowTypeResharding { get; private set; }
+
     /// <summary>
     /// Stages blobs through <paramref name="blobStager"/> before publishing them.
     /// </summary>
@@ -233,6 +235,22 @@ public sealed class HollowProducerBuilder
     public HollowProducerBuilder WithFocusHoleFillInFewestShards(bool focusHoleFillInFewestShards = true)
     {
         FocusHoleFillInFewestShards = focusHoleFillInFewestShards;
+
+        return this;
+    }
+
+    /// <summary>
+    /// Lets a type change its shard count between cycles as its data grows or shrinks past
+    /// <see cref="WithTargetMaxTypeShardSize"/>.
+    /// </summary>
+    /// <remarks>
+    /// Off by default, and only safe to turn on once every consumer of the delta chain can rearrange
+    /// its records to a new count — an older consumer applies the delta at the count it already has and
+    /// misreads every ordinal in it. A count changes by at most a factor of two per cycle.
+    /// </remarks>
+    public HollowProducerBuilder WithTypeResharding(bool allowTypeResharding = true)
+    {
+        AllowTypeResharding = allowTypeResharding;
 
         return this;
     }

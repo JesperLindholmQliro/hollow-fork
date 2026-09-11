@@ -32,12 +32,13 @@ public sealed partial class HollowMapTypeWriteState
     private ByteDataArray[]? _deltaRemovedOrdinals;
 
     /// <inheritdoc />
-    public override void CalculateDelta(ThreadSafeBitSet fromCyclePopulated, ThreadSafeBitSet toCyclePopulated)
+    public override void CalculateDelta(
+        ThreadSafeBitSet fromCyclePopulated, ThreadSafeBitSet toCyclePopulated, bool isReverse)
     {
         ArgumentNullException.ThrowIfNull(fromCyclePopulated);
         ArgumentNullException.ThrowIfNull(toCyclePopulated);
 
-        int numShards = NumShards;
+        int numShards = NumShardsForDelta(isReverse);
         int shardMask = numShards - 1;
         int bitsPerMapFixedLengthPortion = _bitsPerMapSizeValue + _bitsPerMapPointer;
         int bitsPerMapEntry = _bitsPerKeyElement + _bitsPerValueElement;
@@ -158,25 +159,28 @@ public sealed partial class HollowMapTypeWriteState
     }
 
     /// <inheritdoc />
-    public override void WriteCalculatedDelta(HollowBlobOutput output)
+    public override void WriteCalculatedDelta(HollowBlobOutput output, bool isReverse, int[] maxShardOrdinal)
     {
         ArgumentNullException.ThrowIfNull(output);
+        ArgumentNullException.ThrowIfNull(maxShardOrdinal);
 
         if (_deltaAddedOrdinals is null)
         {
             throw new InvalidOperationException($"{nameof(CalculateDelta)} has not been called");
         }
 
-        if (NumShards == 1)
+        int numShards = NumShardsForDelta(isReverse);
+
+        if (numShards == 1)
         {
-            WriteCalculatedDeltaShard(output, 0);
+            WriteCalculatedDeltaShard(output, 0, maxShardOrdinal);
         }
         else
         {
             VarInt.WriteVInt(output, MaxOrdinal);
-            for (int i = 0; i < NumShards; i++)
+            for (int i = 0; i < numShards; i++)
             {
-                WriteCalculatedDeltaShard(output, i);
+                WriteCalculatedDeltaShard(output, i, maxShardOrdinal);
             }
         }
 
@@ -186,13 +190,13 @@ public sealed partial class HollowMapTypeWriteState
         _deltaRemovedOrdinals = null;
     }
 
-    private void WriteCalculatedDeltaShard(HollowBlobOutput output, int shardNumber)
+    private void WriteCalculatedDeltaShard(HollowBlobOutput output, int shardNumber, int[] maxShardOrdinal)
     {
         int bitsPerMapFixedLengthPortion = _bitsPerMapSizeValue + _bitsPerMapPointer;
         int bitsPerMapEntry = _bitsPerKeyElement + _bitsPerValueElement;
 
         // 1) The shard's max ordinal.
-        VarInt.WriteVInt(output, MaxShardOrdinal[shardNumber]);
+        VarInt.WriteVInt(output, maxShardOrdinal[shardNumber]);
 
         // 2) The removed and added ordinals.
         HollowObjectTypeWriteState.WriteOrdinals(output, _deltaRemovedOrdinals![shardNumber]);

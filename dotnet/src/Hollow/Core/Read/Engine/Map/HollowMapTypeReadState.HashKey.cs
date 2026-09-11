@@ -81,7 +81,7 @@ public sealed partial class HollowMapTypeReadState
             return -1L;
         }
 
-        Shard shard = _shards[ordinal & _shardNumberMask];
+        Shard shard = ShardFor(ordinal);
         int shardOrdinal = ordinal >> shard.ShardOrdinalShift;
 
         long startBucket = shard.DataElements.GetStartBucket(shardOrdinal);

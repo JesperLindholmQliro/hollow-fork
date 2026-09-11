@@ -54,11 +54,11 @@ public sealed partial class HollowMapTypeWriteState : HollowTypeWriteState
     public new HollowMapSchema Schema => (HollowMapSchema)base.Schema;
 
     /// <inheritdoc />
-    public override void PrepareForWrite()
+    public override void PrepareForWrite(bool canReshard)
     {
-        base.PrepareForWrite();
+        base.PrepareForWrite(canReshard);
 
-        GatherShardingStats(MaxOrdinal);
+        GatherShardingStats(MaxOrdinal, canReshard);
         GatherStatistics();
     }
 

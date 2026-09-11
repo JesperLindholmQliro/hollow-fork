@@ -38,8 +38,7 @@ public sealed partial class HollowObjectTypeReadState : HollowTypeReadState, IHo
 {
     private readonly HollowObjectSchema _unfilteredSchema;
 
-    private Shard[] _shards = [];
-    private int _shardNumberMask;
+    private volatile ShardsHolder<Shard> _shardsVolatile = ShardsHolder<Shard>.Empty;
     private int _maxOrdinal = -1;
 
     /// <summary>
@@ -68,7 +67,20 @@ public sealed partial class HollowObjectTypeReadState : HollowTypeReadState, IHo
     public override int MaxOrdinal => _maxOrdinal;
 
     /// <inheritdoc />
-    public override int NumShards => _shards.Length;
+    public override ShardsHolder ShardsVolatile => _shardsVolatile;
+
+    /// <inheritdoc />
+    internal override void UpdateShards(HollowTypeReadStateShard[] shards) =>
+        _shardsVolatile = new ShardsHolder<Shard>([.. shards.Cast<Shard>()]);
+
+    /// <inheritdoc />
+    internal override HollowTypeDataElements[] CreateTypeDataElements(int length) =>
+        new HollowObjectTypeDataElements[length];
+
+    /// <inheritdoc />
+    internal override HollowTypeReadStateShard CreateTypeReadStateShard(
+        HollowTypeDataElements elements, int shardOrdinalShift) =>
+        new Shard((HollowObjectTypeDataElements)elements, shardOrdinalShift);
 
     /// <inheritdoc />
     public override long ApproxHeapFootprintInBytes
@@ -76,7 +88,7 @@ public sealed partial class HollowObjectTypeReadState : HollowTypeReadState, IHo
         get
         {
             long total = 0;
-            foreach (Shard shard in _shards)
+            foreach (Shard shard in _shardsVolatile.TypedShards)
             {
                 total += (long)shard.DataElements.BitsPerRecord * (shard.DataElements.MaxOrdinal + 1) / 8;
 
@@ -116,8 +128,7 @@ public sealed partial class HollowObjectTypeReadState : HollowTypeReadState, IHo
             shards[i] = new Shard(dataElements, shardOrdinalShift);
         }
 
-        _shards = shards;
-        _shardNumberMask = numShards - 1;
+        _shardsVolatile = new ShardsHolder<Shard>(shards);
 
         if (numShards == 1)
         {
@@ -130,12 +141,12 @@ public sealed partial class HollowObjectTypeReadState : HollowTypeReadState, IHo
     /// <inheritdoc />
     public override void Destroy(IArraySegmentRecycler memoryRecycler)
     {
-        foreach (Shard shard in _shards)
+        foreach (Shard shard in _shardsVolatile.TypedShards)
         {
             shard.DataElements.Destroy();
         }
 
-        _shards = [];
+        _shardsVolatile = ShardsHolder<Shard>.Empty;
     }
 
     /// <inheritdoc />
@@ -323,7 +334,9 @@ public sealed partial class HollowObjectTypeReadState : HollowTypeReadState, IHo
     public int BitsRequiredForField(string fieldName)
     {
         int fieldIndex = Schema.GetPosition(fieldName);
-        return fieldIndex == -1 || _shards.Length == 0 ? 0 : _shards[0].DataElements.BitsPerField[fieldIndex];
+        Shard[] shards = _shardsVolatile.TypedShards;
+
+        return fieldIndex == -1 || shards.Length == 0 ? 0 : shards[0].DataElements.BitsPerField[fieldIndex];
     }
 
     /// <summary>
@@ -380,18 +393,29 @@ public sealed partial class HollowObjectTypeReadState : HollowTypeReadState, IHo
         return characterIndex == testValue.Length;
     }
 
-    private Shard ShardFor(int ordinal) => _shards[ordinal & _shardNumberMask];
+    /// <summary>
+    /// The shard holding <paramref name="ordinal"/>, read through one load of the shards holder so
+    /// that a concurrent reshard cannot change the mask between selecting a shard and using it.
+    /// </summary>
+    private Shard ShardFor(int ordinal)
+    {
+        ShardsHolder<Shard> shards = _shardsVolatile;
+
+        return shards.TypedShards[ordinal & shards.ShardNumberMask];
+    }
 
     private static int ShardOrdinal(int ordinal, Shard shard) => ordinal >> shard.ShardOrdinalShift;
 
     /// <summary>
     /// One shard's records, addressed by the ordinal's high bits.
     /// </summary>
-    private sealed class Shard(HollowObjectTypeDataElements dataElements, int shardOrdinalShift)
+    internal sealed class Shard(HollowObjectTypeDataElements dataElements, int shardOrdinalShift)
+        : HollowTypeReadStateShard(shardOrdinalShift)
     {
         internal HollowObjectTypeDataElements DataElements { get; } = dataElements;
 
-        internal int ShardOrdinalShift { get; } = shardOrdinalShift;
+        /// <inheritdoc />
+        public override HollowTypeDataElements Elements => DataElements;
 
         internal long FieldOffset(int shardOrdinal, int fieldIndex) =>
             ((long)DataElements.BitsPerRecord * shardOrdinal) + DataElements.BitOffsetPerField[fieldIndex];

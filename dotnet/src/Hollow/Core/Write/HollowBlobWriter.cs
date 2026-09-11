@@ -60,7 +60,7 @@ public sealed class HollowBlobWriter
     {
         ArgumentNullException.ThrowIfNull(output);
 
-        _stateEngine.PrepareForWrite();
+        _stateEngine.PrepareForWrite(canReshard: true);
 
         HollowBlobHeader header = new()
         {
@@ -93,7 +93,7 @@ public sealed class HollowBlobWriter
     {
         ArgumentNullException.ThrowIfNull(output);
 
-        _stateEngine.PrepareForWrite();
+        _stateEngine.PrepareForWrite(canReshard: true);
 
         HollowBlobHeader header = new()
         {
@@ -142,7 +142,7 @@ public sealed class HollowBlobWriter
         ArgumentNullException.ThrowIfNull(output);
 
         _stateEngine.EnsureAllNecessaryStatesRestored();
-        _stateEngine.PrepareForWrite();
+        _stateEngine.PrepareForWrite(canReshard: true);
 
         List<HollowTypeWriteState> changedTypes =
             [.. _stateEngine.OrderedTypeStates.Where(state => state.HasChangedSinceLastCycle())];
@@ -165,7 +165,7 @@ public sealed class HollowBlobWriter
 
             typeState.Schema.WriteTo(output);
             WriteNumShards(output, typeState.NumShards);
-            typeState.WriteCalculatedDelta(output);
+            typeState.WriteDelta(output);
         }
 
         output.Flush();
@@ -203,7 +203,7 @@ public sealed class HollowBlobWriter
         ArgumentNullException.ThrowIfNull(output);
 
         _stateEngine.EnsureAllNecessaryStatesRestored();
-        _stateEngine.PrepareForWrite();
+        _stateEngine.PrepareForWrite(canReshard: true);
 
         List<HollowTypeWriteState> changedTypes =
             [.. _stateEngine.OrderedTypeStates.Where(state => state.HasChangedSinceLastCycle())];
@@ -225,8 +225,11 @@ public sealed class HollowBlobWriter
             typeState.CalculateReverseDelta();
 
             typeState.Schema.WriteTo(output);
-            WriteNumShards(output, typeState.NumShards);
-            typeState.WriteCalculatedDelta(output);
+
+            // A reverse delta declares the previous cycle's shard count, because that is the
+            // arrangement the consumer it takes back has to end up in.
+            WriteNumShards(output, typeState.RevNumShards);
+            typeState.WriteReverseDelta(output);
         }
 
         output.Flush();

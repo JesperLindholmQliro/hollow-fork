@@ -47,6 +47,15 @@ public static class HollowHeaderTags
     /// <summary>How many versions this delta chain has been through.</summary>
     public const string DeltaChainVersionCounter = "hollow.delta.chain.version.counter";
 
+    /// <summary>
+    /// Which types changed shard count in this version, and from what to what.
+    /// </summary>
+    /// <remarks>
+    /// Formatted as <c>Movie:(2,4) Actor:(8,4)</c>, always in the forward direction. Present only on a
+    /// version that resharded something; the producer clears it at the start of each cycle.
+    /// </remarks>
+    public const string TypeReshardingInvoked = "hollow.type.resharding.invoked";
+
     /// <summary>When the producer's cycle began, as Unix milliseconds.</summary>
     public const string MetricCycleStart = "hollow.metric.cycle.start";
 

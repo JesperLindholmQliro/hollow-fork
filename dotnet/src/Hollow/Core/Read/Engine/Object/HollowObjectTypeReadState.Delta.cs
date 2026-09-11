@@ -39,32 +39,36 @@ public sealed partial class HollowObjectTypeReadState
         ArgumentNullException.ThrowIfNull(deltaSchema);
         ArgumentNullException.ThrowIfNull(memoryRecycler);
 
-        if (_shards.Length > 1)
+        Shard[] shards = [.. _shardsVolatile.TypedShards];
+
+        if (shards.Length > 1)
         {
             _maxOrdinal = VarInt.ReadVInt(input);
         }
 
-        for (int i = 0; i < _shards.Length; i++)
+        for (int i = 0; i < shards.Length; i++)
         {
             HollowObjectTypeDataElements deltaData = new(deltaSchema, memoryRecycler);
             deltaData.ReadDelta(input);
 
-            HollowObjectTypeDataElements fromData = _shards[i].DataElements;
+            HollowObjectTypeDataElements fromData = shards[i].DataElements;
             HollowObjectTypeDataElements nextData = HollowObjectTypeDataElements.ApplyDelta(fromData, deltaData);
 
-            _shards[i] = new Shard(nextData, _shards[i].ShardOrdinalShift);
+            shards[i] = new Shard(nextData, shards[i].ShardOrdinalShift);
 
             NotifyListenersAboutDeltaChanges(
-                deltaData.EncodedRemovals, deltaData.EncodedAdditions, i, _shards.Length);
+                deltaData.EncodedRemovals, deltaData.EncodedAdditions, i, shards.Length);
 
             fromData.Destroy();
             deltaData.Destroy();
         }
 
-        if (_shards.Length == 1)
+        if (shards.Length == 1)
         {
-            _maxOrdinal = _shards[0].DataElements.MaxOrdinal;
+            _maxOrdinal = shards[0].DataElements.MaxOrdinal;
         }
+
+        _shardsVolatile = new ShardsHolder<Shard>(shards);
     }
 
     /// <summary>

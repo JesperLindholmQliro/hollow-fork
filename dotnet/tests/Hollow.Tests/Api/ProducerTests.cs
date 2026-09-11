@@ -849,4 +849,43 @@ public class ProducerTests
         Assert.Equal(HollowConstants.VersionNone, blobStore.AnnouncedVersion);
         Assert.Equal(1, blobStore.PublishedSnapshotCount);
     }
+
+    /// <summary>
+    /// A producer allowed to reshard changes a type's shard count mid-chain, and its own integrity
+    /// check — which compares the snapshot against the delta and the reverse delta — still passes.
+    /// </summary>
+    /// <remarks>
+    /// This is the case resharding has to get right end to end: the delta is written at the new count,
+    /// so the previous read state has to be rearranged to it before the delta applies, while the
+    /// reverse delta is written at the old count and has to rearrange it back.
+    /// </remarks>
+    [Fact]
+    public void AProducerThatReshardsStillPassesItsOwnIntegrityCheck()
+    {
+        InMemoryPublisher blobStore = new();
+        HollowProducer producer = Producer(
+            blobStore,
+            builder => builder.WithTypeResharding().WithTargetMaxTypeShardSize(1 << 20));
+
+        producer.RunCycle(Movies([.. ManyMovies(40)]));
+        Assert.Equal(1, producer.WriteEngine.GetTypeState("String")!.NumShards);
+
+        // The titles now call for more shards than one. They live in the shared String type, because
+        // that is how the object mapper lays a string field out.
+        producer.WriteEngine.TargetMaxTypeShardSize = 512;
+        long version = producer.RunCycle(Movies([.. ManyMovies(45)]));
+
+        Assert.Equal(version, blobStore.AnnouncedVersion);
+        Assert.Equal(2, producer.WriteEngine.GetTypeState("String")!.NumShards);
+        Assert.Contains(
+            "String:(1,2)",
+            producer.WriteEngine.GetHeaderTag(HollowHeaderTags.TypeReshardingInvoked),
+            StringComparison.Ordinal);
+
+        // And a consumer following the chain by delta ends up holding everything.
+        Assert.Equal(45, ConsumedTitles(blobStore).Count);
+    }
+
+    private static IEnumerable<Movie> ManyMovies(int count) =>
+        Enumerable.Range(0, count).Select(i => new Movie(i, $"movie-{i}-{new string('x', 60)}"));
 }

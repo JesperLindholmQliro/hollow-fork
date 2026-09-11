@@ -24,11 +24,7 @@ namespace Hollow.Core.Read.Engine.Set;
 /// </summary>
 public sealed partial class HollowSetTypeDataElements
 {
-    /// <summary>The ordinals this state's successor removes, populated when a delta is read.</summary>
-    public GapEncodedVariableLengthIntegerReader? EncodedRemovals { get; internal set; }
 
-    /// <summary>The ordinals this delta adds.</summary>
-    public GapEncodedVariableLengthIntegerReader? EncodedAdditions { get; internal set; }
 
     /// <summary>
     /// Reads one shard's delta records from <paramref name="input"/>.
@@ -39,8 +35,8 @@ public sealed partial class HollowSetTypeDataElements
 
         MaxOrdinal = VarInt.ReadVInt(input);
 
-        EncodedRemovals = GapEncodedVariableLengthIntegerReader.ReadEncodedDeltaOrdinals(input, _memoryRecycler);
-        EncodedAdditions = GapEncodedVariableLengthIntegerReader.ReadEncodedDeltaOrdinals(input, _memoryRecycler);
+        EncodedRemovals = GapEncodedVariableLengthIntegerReader.ReadEncodedDeltaOrdinals(input, MemoryRecycler);
+        EncodedAdditions = GapEncodedVariableLengthIntegerReader.ReadEncodedDeltaOrdinals(input, MemoryRecycler);
 
         BitsPerSetPointer = VarInt.ReadVInt(input);
         BitsPerSetSizeValue = VarInt.ReadVInt(input);
@@ -49,8 +45,8 @@ public sealed partial class HollowSetTypeDataElements
         EmptyBucketValue = (1 << BitsPerElement) - 1;
         TotalNumberOfBuckets = VarInt.ReadVLong(input);
 
-        SetPointerAndSizeData = FixedLengthElementArray.NewFrom(input, _memoryRecycler);
-        ElementData = FixedLengthElementArray.NewFrom(input, _memoryRecycler);
+        SetPointerAndSizeData = FixedLengthElementArray.NewFrom(input, MemoryRecycler);
+        ElementData = FixedLengthElementArray.NewFrom(input, MemoryRecycler);
     }
 
     /// <summary>
@@ -60,7 +56,7 @@ public sealed partial class HollowSetTypeDataElements
     internal static HollowSetTypeDataElements ApplyDelta(
         HollowSetTypeDataElements from, HollowSetTypeDataElements delta)
     {
-        HollowSetTypeDataElements target = new(from._memoryRecycler)
+        HollowSetTypeDataElements target = new(from.MemoryRecycler)
         {
             MaxOrdinal = delta.MaxOrdinal,
             EncodedRemovals = delta.EncodedRemovals,
@@ -73,9 +69,9 @@ public sealed partial class HollowSetTypeDataElements
         };
 
         target.SetPointerAndSizeData = new FixedLengthElementArray(
-            from._memoryRecycler, ((long)target.MaxOrdinal + 1) * target.BitsPerFixedLengthSetPortion);
+            from.MemoryRecycler, ((long)target.MaxOrdinal + 1) * target.BitsPerFixedLengthSetPortion);
         target.ElementData = new FixedLengthElementArray(
-            from._memoryRecycler, target.TotalNumberOfBuckets * target.BitsPerElement);
+            from.MemoryRecycler, target.TotalNumberOfBuckets * target.BitsPerElement);
 
         GapEncodedVariableLengthIntegerReader additions =
             delta.EncodedAdditions ?? GapEncodedVariableLengthIntegerReader.EmptyReader;
@@ -110,18 +106,26 @@ public sealed partial class HollowSetTypeDataElements
                 removals.Advance();
             }
 
-            long fixedLengthOffset = (long)ordinal * target.BitsPerFixedLengthSetPortion;
-            target.SetPointerAndSizeData.SetElementValue(
-                fixedLengthOffset, target.BitsPerSetPointer, writeBucket);
-            target.SetPointerAndSizeData.SetElementValue(
-                fixedLengthOffset + target.BitsPerSetPointer, target.BitsPerSetSizeValue, size);
+            target.WritePointerAndSize(ordinal, writeBucket, size);
         }
 
         return target;
     }
 
     private static (long WriteBucket, int Size) CopyBuckets(
-        HollowSetTypeDataElements target, HollowSetTypeDataElements source, int sourceOrdinal, long writeBucket)
+        HollowSetTypeDataElements target, HollowSetTypeDataElements source, int sourceOrdinal, long writeBucket) =>
+        target.CopyBucketsFrom(writeBucket, source, sourceOrdinal);
+
+    /// <summary>
+    /// Copies one set's hash table into this shard at <paramref name="writeBucket"/>, returning where
+    /// the next one starts and how many elements were in it.
+    /// </summary>
+    /// <remarks>
+    /// The empty-bucket sentinel is all-ones at the element width, so an empty bucket has to be
+    /// rewritten at this shard's width rather than copied.
+    /// </remarks>
+    internal (long WriteBucket, int Size) CopyBucketsFrom(
+        long writeBucket, HollowSetTypeDataElements source, int sourceOrdinal)
     {
         long start = source.GetStartBucket(sourceOrdinal);
         long end = source.GetEndBucket(sourceOrdinal);
@@ -129,13 +133,9 @@ public sealed partial class HollowSetTypeDataElements
         for (long bucket = start; bucket < end; bucket++)
         {
             int value = source.GetBucketValue(bucket);
+            long targetValue = value == source.EmptyBucketValue ? EmptyBucketValue : value;
 
-            // The empty-bucket sentinel is width-dependent, so an empty bucket has to be rewritten at
-            // the target's width rather than copied.
-            long targetValue = value == source.EmptyBucketValue ? target.EmptyBucketValue : value;
-
-            target.ElementData!.SetElementValue(
-                writeBucket * target.BitsPerElement, target.BitsPerElement, targetValue);
+            ElementData!.SetElementValue(writeBucket * BitsPerElement, BitsPerElement, targetValue);
             writeBucket++;
         }
 

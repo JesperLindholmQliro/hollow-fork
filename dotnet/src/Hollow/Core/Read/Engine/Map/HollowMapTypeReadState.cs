@@ -29,21 +29,18 @@ namespace Hollow.Core.Read.Engine.Map;
 /// The in-memory record storage of one shard of a map type: each record's open-addressed hash table,
 /// with the key and value ordinals packed side by side in every bucket.
 /// </summary>
-public sealed partial class HollowMapTypeDataElements
+public sealed partial class HollowMapTypeDataElements : HollowTypeDataElements
 {
-    private readonly IArraySegmentRecycler _memoryRecycler;
 
     /// <summary>
     /// Initialises empty storage.
     /// </summary>
     public HollowMapTypeDataElements(IArraySegmentRecycler memoryRecycler)
+        : base(memoryRecycler)
     {
         ArgumentNullException.ThrowIfNull(memoryRecycler);
-        _memoryRecycler = memoryRecycler;
     }
 
-    /// <summary>The highest ordinal this shard holds.</summary>
-    public int MaxOrdinal { get; internal set; }
 
     /// <summary>Each record's end-of-table pointer and entry count, packed together.</summary>
     public IFixedLengthData? MapPointerAndSizeData { get; internal set; }
@@ -92,8 +89,8 @@ public sealed partial class HollowMapTypeDataElements
         EmptyBucketKeyValue = (1 << BitsPerKeyElement) - 1;
         TotalNumberOfBuckets = VarInt.ReadVLong(input);
 
-        MapPointerAndSizeData = FixedLengthElementArray.NewFrom(input, _memoryRecycler);
-        EntryData = FixedLengthElementArray.NewFrom(input, _memoryRecycler);
+        MapPointerAndSizeData = FixedLengthElementArray.NewFrom(input, MemoryRecycler);
+        EntryData = FixedLengthElementArray.NewFrom(input, MemoryRecycler);
     }
 
     /// <summary>The number of entries in <paramref name="ordinal"/>'s map.</summary>
@@ -122,11 +119,27 @@ public sealed partial class HollowMapTypeDataElements
         (int)EntryData!.GetLargeElementValue(
             (absoluteBucketIndex * BitsPerMapEntry) + BitsPerKeyElement, BitsPerValueElement);
 
-    /// <summary>Returns every segment of this shard's storage to the recycler.</summary>
-    public void Destroy()
+    /// <summary>
+    /// Records where <paramref name="ordinal"/>'s hash table ends and how many entries it holds.
+    /// </summary>
+    /// <remarks>
+    /// A record's table starts where the previous one ended, so writing the end pointer for every
+    /// ordinal in turn — including the ones holding nothing — is what delimits them all.
+    /// </remarks>
+    internal void WritePointerAndSize(int ordinal, long endBucket, int size)
     {
-        (MapPointerAndSizeData as FixedLengthElementArray)?.Destroy(_memoryRecycler);
-        (EntryData as FixedLengthElementArray)?.Destroy(_memoryRecycler);
+        long fixedLengthOffset = (long)ordinal * BitsPerFixedLengthMapPortion;
+
+        MapPointerAndSizeData!.SetElementValue(fixedLengthOffset, BitsPerMapPointer, endBucket);
+        MapPointerAndSizeData.SetElementValue(
+            fixedLengthOffset + BitsPerMapPointer, BitsPerMapSizeValue, size);
+    }
+
+    /// <summary>Returns every segment of this shard's storage to the recycler.</summary>
+    public override void Destroy()
+    {
+        (MapPointerAndSizeData as FixedLengthElementArray)?.Destroy(MemoryRecycler);
+        (EntryData as FixedLengthElementArray)?.Destroy(MemoryRecycler);
         MapPointerAndSizeData = null;
         EntryData = null;
     }
@@ -171,8 +184,7 @@ public sealed partial class HollowMapTypeDataElements
 /// </summary>
 public sealed partial class HollowMapTypeReadState : HollowTypeReadState, IHollowMapTypeDataAccess
 {
-    private Shard[] _shards = [];
-    private int _shardNumberMask;
+    private volatile ShardsHolder<Shard> _shardsVolatile = ShardsHolder<Shard>.Empty;
     private int _maxOrdinal = -1;
 
     /// <summary>
@@ -191,7 +203,20 @@ public sealed partial class HollowMapTypeReadState : HollowTypeReadState, IHollo
     public override int MaxOrdinal => _maxOrdinal;
 
     /// <inheritdoc />
-    public override int NumShards => _shards.Length;
+    public override ShardsHolder ShardsVolatile => _shardsVolatile;
+
+    /// <inheritdoc />
+    internal override void UpdateShards(HollowTypeReadStateShard[] shards) =>
+        _shardsVolatile = new ShardsHolder<Shard>([.. shards.Cast<Shard>()]);
+
+    /// <inheritdoc />
+    internal override HollowTypeDataElements[] CreateTypeDataElements(int length) =>
+        new HollowMapTypeDataElements[length];
+
+    /// <inheritdoc />
+    internal override HollowTypeReadStateShard CreateTypeReadStateShard(
+        HollowTypeDataElements elements, int shardOrdinalShift) =>
+        new Shard((HollowMapTypeDataElements)elements, shardOrdinalShift);
 
     /// <inheritdoc />
     public override long ApproxHeapFootprintInBytes
@@ -199,7 +224,7 @@ public sealed partial class HollowMapTypeReadState : HollowTypeReadState, IHollo
         get
         {
             long bits = 0;
-            foreach (Shard shard in _shards)
+            foreach (Shard shard in _shardsVolatile.TypedShards)
             {
                 bits += ((long)shard.DataElements.MaxOrdinal + 1) * shard.DataElements.BitsPerFixedLengthMapPortion;
                 bits += shard.DataElements.TotalNumberOfBuckets * shard.DataElements.BitsPerMapEntry;
@@ -230,8 +255,7 @@ public sealed partial class HollowMapTypeReadState : HollowTypeReadState, IHollo
             shards[i] = new Shard(dataElements, shardOrdinalShift);
         }
 
-        _shards = shards;
-        _shardNumberMask = numShards - 1;
+        _shardsVolatile = new ShardsHolder<Shard>(shards);
 
         if (numShards == 1)
         {
@@ -244,18 +268,18 @@ public sealed partial class HollowMapTypeReadState : HollowTypeReadState, IHollo
     /// <inheritdoc />
     public override void Destroy(IArraySegmentRecycler memoryRecycler)
     {
-        foreach (Shard shard in _shards)
+        foreach (Shard shard in _shardsVolatile.TypedShards)
         {
             shard.DataElements.Destroy();
         }
 
-        _shards = [];
+        _shardsVolatile = ShardsHolder<Shard>.Empty;
     }
 
     /// <inheritdoc />
     public int Size(int ordinal)
     {
-        Shard shard = _shards[ordinal & _shardNumberMask];
+        Shard shard = ShardFor(ordinal);
         return shard.DataElements.GetSize(ordinal >> shard.ShardOrdinalShift);
     }
 
@@ -265,7 +289,7 @@ public sealed partial class HollowMapTypeReadState : HollowTypeReadState, IHollo
     /// <inheritdoc />
     public int Get(int ordinal, int keyOrdinal, int hashCode)
     {
-        Shard shard = _shards[ordinal & _shardNumberMask];
+        Shard shard = ShardFor(ordinal);
         int shardOrdinal = ordinal >> shard.ShardOrdinalShift;
 
         long startBucket = shard.DataElements.GetStartBucket(shardOrdinal);
@@ -301,7 +325,7 @@ public sealed partial class HollowMapTypeReadState : HollowTypeReadState, IHollo
     /// <inheritdoc />
     public long RelativeBucket(int ordinal, int bucketIndex)
     {
-        Shard shard = _shards[ordinal & _shardNumberMask];
+        Shard shard = ShardFor(ordinal);
         int shardOrdinal = ordinal >> shard.ShardOrdinalShift;
 
         long absoluteBucketIndex = shard.DataElements.GetStartBucket(shardOrdinal) + bucketIndex;
@@ -323,10 +347,23 @@ public sealed partial class HollowMapTypeReadState : HollowTypeReadState, IHollo
     public IHollowMapEntryOrdinalIterator PotentialMatchOrdinalIterator(int ordinal, int hashCode) =>
         new PotentialMatchHollowMapEntryOrdinalIteratorImpl(ordinal, this, hashCode);
 
-    private sealed class Shard(HollowMapTypeDataElements dataElements, int shardOrdinalShift)
+    /// <summary>
+    /// The shard holding <paramref name="ordinal"/>, read through one load of the shards holder so
+    /// that a concurrent reshard cannot change the mask between selecting a shard and using it.
+    /// </summary>
+    private Shard ShardFor(int ordinal)
+    {
+        ShardsHolder<Shard> shards = _shardsVolatile;
+
+        return shards.TypedShards[ordinal & shards.ShardNumberMask];
+    }
+
+    internal sealed class Shard(HollowMapTypeDataElements dataElements, int shardOrdinalShift)
+        : HollowTypeReadStateShard(shardOrdinalShift)
     {
         internal HollowMapTypeDataElements DataElements { get; } = dataElements;
 
-        internal int ShardOrdinalShift { get; } = shardOrdinalShift;
+        /// <inheritdoc />
+        public override HollowTypeDataElements Elements => DataElements;
     }
 }

@@ -54,11 +54,11 @@ public sealed partial class HollowSetTypeWriteState : HollowTypeWriteState
     public new HollowSetSchema Schema => (HollowSetSchema)base.Schema;
 
     /// <inheritdoc />
-    public override void PrepareForWrite()
+    public override void PrepareForWrite(bool canReshard)
     {
-        base.PrepareForWrite();
+        base.PrepareForWrite(canReshard);
 
-        GatherShardingStats(MaxOrdinal);
+        GatherShardingStats(MaxOrdinal, canReshard);
         GatherStatistics();
     }
 

@@ -15,6 +15,7 @@
  *
  */
 
+using System.Numerics;
 using Hollow.Core.Memory.Pool;
 using Hollow.Core.Read;
 using Hollow.Core.Write;
@@ -115,6 +116,106 @@ public class GapEncodedVariableLengthIntegerReader
 
     /// <summary>Returns this reader's storage to its recycler.</summary>
     public void Destroy() => _data?.Destroy();
+
+    /// <summary>
+    /// Divides this sequence the way a type's records are divided when its shard count grows: ordinal
+    /// <c>o</c> goes to split <c>o &amp; (numSplits - 1)</c> as <c>o &gt;&gt; log2(numSplits)</c>.
+    /// </summary>
+    /// <remarks>Consumes this reader; call <see cref="Reset"/> to read it again.</remarks>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="numSplits"/> is not a positive power of two.
+    /// </exception>
+    public GapEncodedVariableLengthIntegerReader[] Split(int numSplits)
+    {
+        if (numSplits <= 0 || (numSplits & (numSplits - 1)) != 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(numSplits), numSplits, "A sequence can only be split by a power of two.");
+        }
+
+        int toMask = numSplits - 1;
+        int toOrdinalShift = BitOperations.TrailingZeroCount((uint)numSplits);
+
+        ByteDataArray?[] splitOrdinals = new ByteDataArray?[numSplits];
+        int[] previousSplitOrdinal = new int[numSplits];
+
+        foreach (int ordinal in EnumerateOrdinals())
+        {
+            int toIndex = ordinal & toMask;
+            int toOrdinal = ordinal >> toOrdinalShift;
+
+            splitOrdinals[toIndex] ??= new ByteDataArray(WastefulRecycler.DefaultInstance);
+
+            VarInt.WriteVInt(splitOrdinals[toIndex]!, toOrdinal - previousSplitOrdinal[toIndex]);
+            previousSplitOrdinal[toIndex] = toOrdinal;
+        }
+
+        return [.. splitOrdinals.Select(FromOrdinals)];
+    }
+
+    /// <summary>
+    /// Merges sequences the way a type's records are merged when its shard count shrinks: ordinal
+    /// <c>o</c> of source <c>i</c> becomes <c>(o * n) + i</c>.
+    /// </summary>
+    /// <remarks>Consumes the readers; call <see cref="Reset"/> on one to read it again.</remarks>
+    /// <exception cref="ArgumentException">
+    /// The number of sequences is not a positive power of two.
+    /// </exception>
+    public static GapEncodedVariableLengthIntegerReader Join(GapEncodedVariableLengthIntegerReader?[] from)
+    {
+        ArgumentNullException.ThrowIfNull(from);
+
+        if (from.Length <= 0 || (from.Length & (from.Length - 1)) != 0)
+        {
+            throw new ArgumentException(
+                "Sequences can only be joined a power of two at a time.", nameof(from));
+        }
+
+        HashSet<int>[] fromOrdinals = new HashSet<int>[from.Length];
+        int joinedMaxOrdinal = -1;
+
+        for (int i = 0; i < from.Length; i++)
+        {
+            fromOrdinals[i] = [];
+
+            if (from[i] is not { } reader)
+            {
+                continue;
+            }
+
+            foreach (int ordinal in reader.EnumerateOrdinals())
+            {
+                fromOrdinals[i].Add(ordinal);
+                joinedMaxOrdinal = Math.Max(joinedMaxOrdinal, (ordinal * from.Length) + i);
+            }
+        }
+
+        int fromMask = from.Length - 1;
+        int fromOrdinalShift = BitOperations.TrailingZeroCount((uint)from.Length);
+
+        ByteDataArray? joined = null;
+        int previousOrdinal = 0;
+
+        for (int ordinal = 0; ordinal <= joinedMaxOrdinal; ordinal++)
+        {
+            if (!fromOrdinals[ordinal & fromMask].Contains(ordinal >> fromOrdinalShift))
+            {
+                continue;
+            }
+
+            joined ??= new ByteDataArray(WastefulRecycler.DefaultInstance);
+
+            VarInt.WriteVInt(joined, ordinal - previousOrdinal);
+            previousOrdinal = ordinal;
+        }
+
+        return FromOrdinals(joined);
+    }
+
+    private static GapEncodedVariableLengthIntegerReader FromOrdinals(ByteDataArray? ordinals) =>
+        ordinals is null
+            ? EmptyReader
+            : new GapEncodedVariableLengthIntegerReader(ordinals.UnderlyingArray, (int)ordinals.Length);
 
     /// <summary>
     /// Writes this sequence, preceded by its length in bytes.

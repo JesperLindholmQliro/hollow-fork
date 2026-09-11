@@ -32,11 +32,7 @@ namespace Hollow.Core.Read.Engine.Object;
 /// </remarks>
 public sealed partial class HollowObjectTypeDataElements
 {
-    /// <summary>The ordinals this state's successor removes, populated when a delta is read.</summary>
-    public GapEncodedVariableLengthIntegerReader? EncodedRemovals { get; internal set; }
 
-    /// <summary>The ordinals this delta adds.</summary>
-    public GapEncodedVariableLengthIntegerReader? EncodedAdditions { get; internal set; }
 
     /// <summary>
     /// Reads one shard's delta records from <paramref name="input"/>.
@@ -47,12 +43,12 @@ public sealed partial class HollowObjectTypeDataElements
 
         MaxOrdinal = VarInt.ReadVInt(input);
 
-        EncodedRemovals = GapEncodedVariableLengthIntegerReader.ReadEncodedDeltaOrdinals(input, _memoryRecycler);
-        EncodedAdditions = GapEncodedVariableLengthIntegerReader.ReadEncodedDeltaOrdinals(input, _memoryRecycler);
+        EncodedRemovals = GapEncodedVariableLengthIntegerReader.ReadEncodedDeltaOrdinals(input, MemoryRecycler);
+        EncodedAdditions = GapEncodedVariableLengthIntegerReader.ReadEncodedDeltaOrdinals(input, MemoryRecycler);
 
         ReadFieldStatistics(input, Schema);
 
-        FixedLengthData = FixedLengthElementArray.NewFrom(input, _memoryRecycler);
+        FixedLengthData = FixedLengthElementArray.NewFrom(input, MemoryRecycler);
 
         ReadVarLengthData(input, Schema);
     }
@@ -101,7 +97,7 @@ public sealed partial class HollowObjectTypeDataElements
         HollowObjectTypeDataElements from, HollowObjectTypeDataElements delta)
     {
         HollowObjectSchema schema = from.Schema;
-        HollowObjectTypeDataElements target = new(schema, from._memoryRecycler)
+        HollowObjectTypeDataElements target = new(schema, from.MemoryRecycler)
         {
             MaxOrdinal = delta.MaxOrdinal,
             EncodedRemovals = delta.EncodedRemovals,
@@ -122,13 +118,13 @@ public sealed partial class HollowObjectTypeDataElements
 
         target.BitsPerRecord = bitsPerRecord;
         target.FixedLengthData = new FixedLengthElementArray(
-            from._memoryRecycler, (long)bitsPerRecord * (target.MaxOrdinal + 1));
+            from.MemoryRecycler, (long)bitsPerRecord * (target.MaxOrdinal + 1));
 
         for (int i = 0; i < schema.FieldCount; i++)
         {
             if (schema.GetFieldType(i).IsVariableLength())
             {
-                target.VarLengthData[i] = new SegmentedByteArray(from._memoryRecycler);
+                target.VarLengthData[i] = new SegmentedByteArray(from.MemoryRecycler);
             }
         }
 

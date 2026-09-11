@@ -30,21 +30,18 @@ namespace Hollow.Core.Read.Engine.List;
 /// The in-memory record storage of one shard of a list type: every list's elements concatenated into
 /// one bit-packed array, with a per-record pointer to the end of its own run.
 /// </summary>
-public sealed partial class HollowListTypeDataElements
+public sealed partial class HollowListTypeDataElements : HollowTypeDataElements
 {
-    private readonly IArraySegmentRecycler _memoryRecycler;
 
     /// <summary>
     /// Initialises empty storage.
     /// </summary>
     public HollowListTypeDataElements(IArraySegmentRecycler memoryRecycler)
+        : base(memoryRecycler)
     {
         ArgumentNullException.ThrowIfNull(memoryRecycler);
-        _memoryRecycler = memoryRecycler;
     }
 
-    /// <summary>The highest ordinal this shard holds.</summary>
-    public int MaxOrdinal { get; internal set; }
 
     /// <summary>The end-of-run pointer of each record.</summary>
     public IFixedLengthData? ListPointerData { get; internal set; }
@@ -73,8 +70,8 @@ public sealed partial class HollowListTypeDataElements
         BitsPerElement = VarInt.ReadVInt(input);
         TotalNumberOfElements = VarInt.ReadVLong(input);
 
-        ListPointerData = FixedLengthElementArray.NewFrom(input, _memoryRecycler);
-        ElementData = FixedLengthElementArray.NewFrom(input, _memoryRecycler);
+        ListPointerData = FixedLengthElementArray.NewFrom(input, MemoryRecycler);
+        ElementData = FixedLengthElementArray.NewFrom(input, MemoryRecycler);
     }
 
     /// <summary>The index of the first element of <paramref name="ordinal"/>'s list.</summary>
@@ -92,10 +89,10 @@ public sealed partial class HollowListTypeDataElements
         (int)ElementData!.GetLargeElementValue(elementIndex * BitsPerElement, BitsPerElement);
 
     /// <summary>Returns every segment of this shard's storage to the recycler.</summary>
-    public void Destroy()
+    public override void Destroy()
     {
-        (ListPointerData as FixedLengthElementArray)?.Destroy(_memoryRecycler);
-        (ElementData as FixedLengthElementArray)?.Destroy(_memoryRecycler);
+        (ListPointerData as FixedLengthElementArray)?.Destroy(MemoryRecycler);
+        (ElementData as FixedLengthElementArray)?.Destroy(MemoryRecycler);
         ListPointerData = null;
         ElementData = null;
     }
@@ -138,8 +135,7 @@ public sealed partial class HollowListTypeDataElements
 /// </summary>
 public sealed partial class HollowListTypeReadState : HollowTypeReadState, IHollowListTypeDataAccess
 {
-    private Shard[] _shards = [];
-    private int _shardNumberMask;
+    private volatile ShardsHolder<Shard> _shardsVolatile = ShardsHolder<Shard>.Empty;
     private int _maxOrdinal = -1;
 
     /// <summary>
@@ -161,7 +157,20 @@ public sealed partial class HollowListTypeReadState : HollowTypeReadState, IHoll
     public override int MaxOrdinal => _maxOrdinal;
 
     /// <inheritdoc />
-    public override int NumShards => _shards.Length;
+    public override ShardsHolder ShardsVolatile => _shardsVolatile;
+
+    /// <inheritdoc />
+    internal override void UpdateShards(HollowTypeReadStateShard[] shards) =>
+        _shardsVolatile = new ShardsHolder<Shard>([.. shards.Cast<Shard>()]);
+
+    /// <inheritdoc />
+    internal override HollowTypeDataElements[] CreateTypeDataElements(int length) =>
+        new HollowListTypeDataElements[length];
+
+    /// <inheritdoc />
+    internal override HollowTypeReadStateShard CreateTypeReadStateShard(
+        HollowTypeDataElements elements, int shardOrdinalShift) =>
+        new Shard((HollowListTypeDataElements)elements, shardOrdinalShift);
 
     /// <inheritdoc />
     public override long ApproxHeapFootprintInBytes
@@ -169,7 +178,7 @@ public sealed partial class HollowListTypeReadState : HollowTypeReadState, IHoll
         get
         {
             long bits = 0;
-            foreach (Shard shard in _shards)
+            foreach (Shard shard in _shardsVolatile.TypedShards)
             {
                 bits += ((long)shard.DataElements.MaxOrdinal + 1) * shard.DataElements.BitsPerListPointer;
                 bits += shard.DataElements.TotalNumberOfElements * shard.DataElements.BitsPerElement;
@@ -200,8 +209,7 @@ public sealed partial class HollowListTypeReadState : HollowTypeReadState, IHoll
             shards[i] = new Shard(dataElements, shardOrdinalShift);
         }
 
-        _shards = shards;
-        _shardNumberMask = numShards - 1;
+        _shardsVolatile = new ShardsHolder<Shard>(shards);
 
         if (numShards == 1)
         {
@@ -214,18 +222,18 @@ public sealed partial class HollowListTypeReadState : HollowTypeReadState, IHoll
     /// <inheritdoc />
     public override void Destroy(IArraySegmentRecycler memoryRecycler)
     {
-        foreach (Shard shard in _shards)
+        foreach (Shard shard in _shardsVolatile.TypedShards)
         {
             shard.DataElements.Destroy();
         }
 
-        _shards = [];
+        _shardsVolatile = ShardsHolder<Shard>.Empty;
     }
 
     /// <inheritdoc />
     public int Size(int ordinal)
     {
-        Shard shard = _shards[ordinal & _shardNumberMask];
+        Shard shard = ShardFor(ordinal);
         int shardOrdinal = ordinal >> shard.ShardOrdinalShift;
 
         return (int)(shard.DataElements.GetEndElement(shardOrdinal) - shard.DataElements.GetStartElement(shardOrdinal));
@@ -235,7 +243,7 @@ public sealed partial class HollowListTypeReadState : HollowTypeReadState, IHoll
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="listIndex"/> is past the end.</exception>
     public int GetElementOrdinal(int ordinal, int listIndex)
     {
-        Shard shard = _shards[ordinal & _shardNumberMask];
+        Shard shard = ShardFor(ordinal);
         int shardOrdinal = ordinal >> shard.ShardOrdinalShift;
 
         long startElement = shard.DataElements.GetStartElement(shardOrdinal);
@@ -254,10 +262,23 @@ public sealed partial class HollowListTypeReadState : HollowTypeReadState, IHoll
     /// <inheritdoc />
     public IHollowOrdinalIterator OrdinalIterator(int ordinal) => new HollowListOrdinalIterator(ordinal, this);
 
-    private sealed class Shard(HollowListTypeDataElements dataElements, int shardOrdinalShift)
+    /// <summary>
+    /// The shard holding <paramref name="ordinal"/>, read through one load of the shards holder so
+    /// that a concurrent reshard cannot change the mask between selecting a shard and using it.
+    /// </summary>
+    private Shard ShardFor(int ordinal)
+    {
+        ShardsHolder<Shard> shards = _shardsVolatile;
+
+        return shards.TypedShards[ordinal & shards.ShardNumberMask];
+    }
+
+    internal sealed class Shard(HollowListTypeDataElements dataElements, int shardOrdinalShift)
+        : HollowTypeReadStateShard(shardOrdinalShift)
     {
         internal HollowListTypeDataElements DataElements { get; } = dataElements;
 
-        internal int ShardOrdinalShift { get; } = shardOrdinalShift;
+        /// <inheritdoc />
+        public override HollowTypeDataElements Elements => DataElements;
     }
 }

@@ -35,32 +35,36 @@ public sealed partial class HollowListTypeReadState
         ArgumentNullException.ThrowIfNull(input);
         ArgumentNullException.ThrowIfNull(memoryRecycler);
 
-        if (_shards.Length > 1)
+        Shard[] shards = [.. _shardsVolatile.TypedShards];
+
+        if (shards.Length > 1)
         {
             _maxOrdinal = VarInt.ReadVInt(input);
         }
 
-        for (int i = 0; i < _shards.Length; i++)
+        for (int i = 0; i < shards.Length; i++)
         {
             HollowListTypeDataElements deltaData = new(memoryRecycler);
             deltaData.ReadDelta(input);
 
-            HollowListTypeDataElements fromData = _shards[i].DataElements;
+            HollowListTypeDataElements fromData = shards[i].DataElements;
             HollowListTypeDataElements nextData = HollowListTypeDataElements.ApplyDelta(fromData, deltaData);
 
-            _shards[i] = new Shard(nextData, _shards[i].ShardOrdinalShift);
+            shards[i] = new Shard(nextData, shards[i].ShardOrdinalShift);
 
             NotifyListenersAboutDeltaChanges(
-                deltaData.EncodedRemovals, deltaData.EncodedAdditions, i, _shards.Length);
+                deltaData.EncodedRemovals, deltaData.EncodedAdditions, i, shards.Length);
 
             fromData.Destroy();
             deltaData.Destroy();
         }
 
-        if (_shards.Length == 1)
+        if (shards.Length == 1)
         {
-            _maxOrdinal = _shards[0].DataElements.MaxOrdinal;
+            _maxOrdinal = shards[0].DataElements.MaxOrdinal;
         }
+
+        _shardsVolatile = new ShardsHolder<Shard>(shards);
     }
 
     /// <summary>

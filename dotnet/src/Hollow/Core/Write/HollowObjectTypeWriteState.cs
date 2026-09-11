@@ -50,12 +50,12 @@ public sealed partial class HollowObjectTypeWriteState : HollowTypeWriteState
     public new HollowObjectSchema Schema => (HollowObjectSchema)base.Schema;
 
     /// <inheritdoc />
-    public override void PrepareForWrite()
+    public override void PrepareForWrite(bool canReshard)
     {
-        base.PrepareForWrite();
+        base.PrepareForWrite(canReshard);
 
         GatherFieldStats();
-        GatherShardingStats(MaxOrdinal);
+        GatherShardingStats(MaxOrdinal, canReshard);
     }
 
     /// <inheritdoc />

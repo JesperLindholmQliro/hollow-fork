@@ -28,11 +28,7 @@ namespace Hollow.Core.Read.Engine.List;
 /// </remarks>
 public sealed partial class HollowListTypeDataElements
 {
-    /// <summary>The ordinals this state's successor removes, populated when a delta is read.</summary>
-    public GapEncodedVariableLengthIntegerReader? EncodedRemovals { get; internal set; }
 
-    /// <summary>The ordinals this delta adds.</summary>
-    public GapEncodedVariableLengthIntegerReader? EncodedAdditions { get; internal set; }
 
     /// <summary>
     /// Reads one shard's delta records from <paramref name="input"/>.
@@ -43,15 +39,15 @@ public sealed partial class HollowListTypeDataElements
 
         MaxOrdinal = VarInt.ReadVInt(input);
 
-        EncodedRemovals = GapEncodedVariableLengthIntegerReader.ReadEncodedDeltaOrdinals(input, _memoryRecycler);
-        EncodedAdditions = GapEncodedVariableLengthIntegerReader.ReadEncodedDeltaOrdinals(input, _memoryRecycler);
+        EncodedRemovals = GapEncodedVariableLengthIntegerReader.ReadEncodedDeltaOrdinals(input, MemoryRecycler);
+        EncodedAdditions = GapEncodedVariableLengthIntegerReader.ReadEncodedDeltaOrdinals(input, MemoryRecycler);
 
         BitsPerListPointer = VarInt.ReadVInt(input);
         BitsPerElement = VarInt.ReadVInt(input);
         TotalNumberOfElements = VarInt.ReadVLong(input);
 
-        ListPointerData = FixedLengthElementArray.NewFrom(input, _memoryRecycler);
-        ElementData = FixedLengthElementArray.NewFrom(input, _memoryRecycler);
+        ListPointerData = FixedLengthElementArray.NewFrom(input, MemoryRecycler);
+        ElementData = FixedLengthElementArray.NewFrom(input, MemoryRecycler);
     }
 
     /// <summary>
@@ -61,7 +57,7 @@ public sealed partial class HollowListTypeDataElements
     internal static HollowListTypeDataElements ApplyDelta(
         HollowListTypeDataElements from, HollowListTypeDataElements delta)
     {
-        HollowListTypeDataElements target = new(from._memoryRecycler)
+        HollowListTypeDataElements target = new(from.MemoryRecycler)
         {
             MaxOrdinal = delta.MaxOrdinal,
             EncodedRemovals = delta.EncodedRemovals,
@@ -71,9 +67,9 @@ public sealed partial class HollowListTypeDataElements
         };
 
         target.ListPointerData = new FixedLengthElementArray(
-            from._memoryRecycler, ((long)target.MaxOrdinal + 1) * target.BitsPerListPointer);
+            from.MemoryRecycler, ((long)target.MaxOrdinal + 1) * target.BitsPerListPointer);
         target.ElementData = new FixedLengthElementArray(
-            from._memoryRecycler, target.TotalNumberOfElements * target.BitsPerElement);
+            from.MemoryRecycler, target.TotalNumberOfElements * target.BitsPerElement);
 
         GapEncodedVariableLengthIntegerReader additions =
             delta.EncodedAdditions ?? GapEncodedVariableLengthIntegerReader.EmptyReader;
@@ -115,17 +111,26 @@ public sealed partial class HollowListTypeDataElements
     }
 
     private static long CopyElements(
-        HollowListTypeDataElements target, HollowListTypeDataElements source, int sourceOrdinal, long writeElement)
+        HollowListTypeDataElements target, HollowListTypeDataElements source, int sourceOrdinal, long writeElement) =>
+        target.CopyElementsFrom(writeElement, source, sourceOrdinal);
+
+    /// <summary>
+    /// Copies one list's elements into this shard at <paramref name="writeElement"/>, returning the
+    /// index one past the last element written.
+    /// </summary>
+    /// <remarks>
+    /// Copied value by value rather than bit by bit, because the element width may differ between the
+    /// two shards — which it does whenever they were sized for different record counts.
+    /// </remarks>
+    internal long CopyElementsFrom(long writeElement, HollowListTypeDataElements source, int sourceOrdinal)
     {
         long start = source.GetStartElement(sourceOrdinal);
         long end = source.GetEndElement(sourceOrdinal);
 
         for (long element = start; element < end; element++)
         {
-            // Copied value by value rather than bit by bit, because the element width may differ
-            // between the two states.
-            target.ElementData!.SetElementValue(
-                writeElement * target.BitsPerElement, target.BitsPerElement, source.GetElementValue(element));
+            ElementData!.SetElementValue(
+                writeElement * BitsPerElement, BitsPerElement, source.GetElementValue(element));
             writeElement++;
         }
 

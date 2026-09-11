@@ -24,11 +24,7 @@ namespace Hollow.Core.Read.Engine.Map;
 /// </summary>
 public sealed partial class HollowMapTypeDataElements
 {
-    /// <summary>The ordinals this state's successor removes, populated when a delta is read.</summary>
-    public GapEncodedVariableLengthIntegerReader? EncodedRemovals { get; internal set; }
 
-    /// <summary>The ordinals this delta adds.</summary>
-    public GapEncodedVariableLengthIntegerReader? EncodedAdditions { get; internal set; }
 
     /// <summary>
     /// Reads one shard's delta records from <paramref name="input"/>.
@@ -39,8 +35,8 @@ public sealed partial class HollowMapTypeDataElements
 
         MaxOrdinal = VarInt.ReadVInt(input);
 
-        EncodedRemovals = GapEncodedVariableLengthIntegerReader.ReadEncodedDeltaOrdinals(input, _memoryRecycler);
-        EncodedAdditions = GapEncodedVariableLengthIntegerReader.ReadEncodedDeltaOrdinals(input, _memoryRecycler);
+        EncodedRemovals = GapEncodedVariableLengthIntegerReader.ReadEncodedDeltaOrdinals(input, MemoryRecycler);
+        EncodedAdditions = GapEncodedVariableLengthIntegerReader.ReadEncodedDeltaOrdinals(input, MemoryRecycler);
 
         BitsPerMapPointer = VarInt.ReadVInt(input);
         BitsPerMapSizeValue = VarInt.ReadVInt(input);
@@ -51,8 +47,8 @@ public sealed partial class HollowMapTypeDataElements
         EmptyBucketKeyValue = (1 << BitsPerKeyElement) - 1;
         TotalNumberOfBuckets = VarInt.ReadVLong(input);
 
-        MapPointerAndSizeData = FixedLengthElementArray.NewFrom(input, _memoryRecycler);
-        EntryData = FixedLengthElementArray.NewFrom(input, _memoryRecycler);
+        MapPointerAndSizeData = FixedLengthElementArray.NewFrom(input, MemoryRecycler);
+        EntryData = FixedLengthElementArray.NewFrom(input, MemoryRecycler);
     }
 
     /// <summary>
@@ -62,7 +58,7 @@ public sealed partial class HollowMapTypeDataElements
     internal static HollowMapTypeDataElements ApplyDelta(
         HollowMapTypeDataElements from, HollowMapTypeDataElements delta)
     {
-        HollowMapTypeDataElements target = new(from._memoryRecycler)
+        HollowMapTypeDataElements target = new(from.MemoryRecycler)
         {
             MaxOrdinal = delta.MaxOrdinal,
             EncodedRemovals = delta.EncodedRemovals,
@@ -77,9 +73,9 @@ public sealed partial class HollowMapTypeDataElements
         };
 
         target.MapPointerAndSizeData = new FixedLengthElementArray(
-            from._memoryRecycler, ((long)target.MaxOrdinal + 1) * target.BitsPerFixedLengthMapPortion);
+            from.MemoryRecycler, ((long)target.MaxOrdinal + 1) * target.BitsPerFixedLengthMapPortion);
         target.EntryData = new FixedLengthElementArray(
-            from._memoryRecycler, target.TotalNumberOfBuckets * target.BitsPerMapEntry);
+            from.MemoryRecycler, target.TotalNumberOfBuckets * target.BitsPerMapEntry);
 
         GapEncodedVariableLengthIntegerReader additions =
             delta.EncodedAdditions ?? GapEncodedVariableLengthIntegerReader.EmptyReader;
@@ -114,18 +110,26 @@ public sealed partial class HollowMapTypeDataElements
                 removals.Advance();
             }
 
-            long fixedLengthOffset = (long)ordinal * target.BitsPerFixedLengthMapPortion;
-            target.MapPointerAndSizeData.SetElementValue(
-                fixedLengthOffset, target.BitsPerMapPointer, writeBucket);
-            target.MapPointerAndSizeData.SetElementValue(
-                fixedLengthOffset + target.BitsPerMapPointer, target.BitsPerMapSizeValue, size);
+            target.WritePointerAndSize(ordinal, writeBucket, size);
         }
 
         return target;
     }
 
     private static (long WriteBucket, int Size) CopyBuckets(
-        HollowMapTypeDataElements target, HollowMapTypeDataElements source, int sourceOrdinal, long writeBucket)
+        HollowMapTypeDataElements target, HollowMapTypeDataElements source, int sourceOrdinal, long writeBucket) =>
+        target.CopyBucketsFrom(writeBucket, source, sourceOrdinal);
+
+    /// <summary>
+    /// Copies one map's hash table into this shard at <paramref name="writeBucket"/>, returning where
+    /// the next one starts and how many entries were in it.
+    /// </summary>
+    /// <remarks>
+    /// The empty-bucket sentinel is all-ones at the key width, so an empty bucket has to be rewritten
+    /// at this shard's width rather than copied.
+    /// </remarks>
+    internal (long WriteBucket, int Size) CopyBucketsFrom(
+        long writeBucket, HollowMapTypeDataElements source, int sourceOrdinal)
     {
         long start = source.GetStartBucket(sourceOrdinal);
         long end = source.GetEndBucket(sourceOrdinal);
@@ -135,18 +139,16 @@ public sealed partial class HollowMapTypeDataElements
             int key = source.GetBucketKeyValue(bucket);
             bool isEmpty = key == source.EmptyBucketKeyValue;
 
-            long entryBitOffset = writeBucket * target.BitsPerMapEntry;
+            long entryBitOffset = writeBucket * BitsPerMapEntry;
 
-            // The empty-bucket sentinel is width-dependent, so an empty bucket is rewritten at the
-            // target's width rather than copied.
-            target.EntryData!.SetElementValue(
-                entryBitOffset, target.BitsPerKeyElement, isEmpty ? target.EmptyBucketKeyValue : key);
+            EntryData!.SetElementValue(
+                entryBitOffset, BitsPerKeyElement, isEmpty ? EmptyBucketKeyValue : key);
 
             if (!isEmpty)
             {
-                target.EntryData.SetElementValue(
-                    entryBitOffset + target.BitsPerKeyElement,
-                    target.BitsPerValueElement,
+                EntryData.SetElementValue(
+                    entryBitOffset + BitsPerKeyElement,
+                    BitsPerValueElement,
                     source.GetBucketValueValue(bucket));
             }
 

@@ -63,8 +63,8 @@ namespace Hollow.Api.Producer;
 /// produces a delta from the last version consumers actually saw.
 /// </para>
 /// <para>
-/// <strong>Port note.</strong> The incremental producer, metrics collection, optional blob parts and
-/// type resharding are not ported — see <c>PORTING.md</c>.
+/// <strong>Port note.</strong> Metrics collection and optional blob parts are not ported — see
+/// <c>PORTING.md</c>.
 /// </para>
 /// </remarks>
 public sealed class HollowProducer
@@ -80,6 +80,7 @@ public sealed class HollowProducer
     private readonly int _numStatesBetweenSnapshots;
     private readonly long _targetMaxTypeShardSize;
     private readonly bool _focusHoleFillInFewestShards;
+    private readonly bool _allowTypeResharding;
 
     private readonly Lock _cycleLock = new();
 
@@ -104,6 +105,7 @@ public sealed class HollowProducer
         _numStatesBetweenSnapshots = builder.NumStatesBetweenSnapshots;
         _targetMaxTypeShardSize = builder.TargetMaxTypeShardSize;
         _focusHoleFillInFewestShards = builder.FocusHoleFillInFewestShards;
+        _allowTypeResharding = builder.AllowTypeResharding;
 
         _objectMapper = new HollowObjectMapper(NewWriteEngine());
 
@@ -335,6 +337,7 @@ public sealed class HollowProducer
     {
         TargetMaxTypeShardSize = _targetMaxTypeShardSize,
         FocusHoleFillInFewestShards = _focusHoleFillInFewestShards,
+        AllowTypeResharding = _allowTypeResharding,
     };
 
     private long RunCycleUnderLock(Populator populator)
@@ -496,6 +499,10 @@ public sealed class HollowProducer
         writeEngine.AddHeaderTag(HollowHeaderTags.SchemaHash, new HollowSchemaHash(writeEngine).Hash);
         writeEngine.AddHeaderTag(
             HollowHeaderTags.SchemaChange, schemaChanged ? bool.TrueString : bool.FalseString);
+
+        // The resharding tag describes this version only. Clear whatever the last cycle left; the shard
+        // decision made while writing the blobs will put it back if anything moves.
+        writeEngine.HeaderTags.Remove(HollowHeaderTags.TypeReshardingInvoked);
 
         long previousCounter =
             writeEngine.GetHeaderTag(HollowHeaderTags.DeltaChainVersionCounter) is { } counter

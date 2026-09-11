@@ -48,11 +48,11 @@ public sealed partial class HollowListTypeWriteState : HollowTypeWriteState
     public new HollowListSchema Schema => (HollowListSchema)base.Schema;
 
     /// <inheritdoc />
-    public override void PrepareForWrite()
+    public override void PrepareForWrite(bool canReshard)
     {
-        base.PrepareForWrite();
+        base.PrepareForWrite(canReshard);
 
-        GatherShardingStats(MaxOrdinal);
+        GatherShardingStats(MaxOrdinal, canReshard);
         GatherStatistics();
     }
 

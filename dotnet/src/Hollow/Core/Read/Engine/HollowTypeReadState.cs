@@ -73,7 +73,28 @@ public abstract class HollowTypeReadState : IHollowTypeDataAccess
     /// A producer restoring from this state has to adopt the same shard count, because a record's
     /// ordinal determines which shard holds it and a delta is written per shard.
     /// </remarks>
-    public abstract int NumShards { get; }
+    public int NumShards => ShardsVolatile.Shards.Length;
+
+    /// <summary>
+    /// This type's shards as they stand, which resharding replaces wholesale.
+    /// </summary>
+    public abstract ShardsHolder ShardsVolatile { get; }
+
+    /// <summary>
+    /// Publishes <paramref name="shards"/> as this type's shards.
+    /// </summary>
+    internal abstract void UpdateShards(HollowTypeReadStateShard[] shards);
+
+    /// <summary>
+    /// Creates an array able to hold <paramref name="length"/> of this record kind's data elements.
+    /// </summary>
+    internal abstract HollowTypeDataElements[] CreateTypeDataElements(int length);
+
+    /// <summary>
+    /// Wraps <paramref name="elements"/> as a shard of this record kind.
+    /// </summary>
+    internal abstract HollowTypeReadStateShard CreateTypeReadStateShard(
+        HollowTypeDataElements elements, int shardOrdinalShift);
 
     /// <summary>The listeners currently associated with this type.</summary>
     public IReadOnlyList<IHollowTypeStateListener> Listeners => _stateListeners;

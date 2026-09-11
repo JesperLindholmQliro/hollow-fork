@@ -147,6 +147,13 @@ public sealed class HollowBlobReader
 
         HollowTypeReadState? typeState = _stateEngine.GetTypeState(schema.Name);
 
+        if (typeState is not null && ShouldReshard(typeState.NumShards, numShards))
+        {
+            // The producer changed how many shards this type is written in, so the records already held
+            // have to be rearranged to match before the delta — which is written per shard — can apply.
+            HollowTypeReshardingStrategy.ForType(typeState).Reshard(typeState, typeState.NumShards, numShards);
+        }
+
         switch (typeState)
         {
             case HollowObjectTypeReadState objectState when schema is HollowObjectSchema objectSchema:
@@ -178,6 +185,16 @@ public sealed class HollowBlobReader
                     + $"match the {typeState.Schema.SchemaType} type held in this state.");
         }
     }
+
+    /// <summary>
+    /// Whether the shard count the delta was written at differs from the one the records are held at.
+    /// </summary>
+    /// <remarks>
+    /// A count of zero means "not stated" — a blob written before shard counts were recorded, or a type
+    /// that has not read one yet — and never triggers a rearrangement.
+    /// </remarks>
+    private static bool ShouldReshard(int currentNumShards, int deltaNumShards) =>
+        currentNumShards != 0 && deltaNumShards != 0 && currentNumShards != deltaNumShards;
 
     private static void DiscardTypeStateDelta(HollowBlobInput input, HollowSchema schema, int numShards)
     {

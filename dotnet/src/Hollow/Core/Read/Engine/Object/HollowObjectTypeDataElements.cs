@@ -26,9 +26,8 @@ namespace Hollow.Core.Read.Engine.Object;
 /// The in-memory record storage of one shard of an object type: a fixed-width bit string holding every
 /// record's fixed-length fields, plus one variable-length byte buffer per string or bytes field.
 /// </summary>
-public sealed partial class HollowObjectTypeDataElements
+public sealed partial class HollowObjectTypeDataElements : HollowTypeDataElements
 {
-    private readonly IArraySegmentRecycler _memoryRecycler;
 
     private int[] _bitsPerUnfilteredField = [];
     private bool[] _unfilteredFieldIsIncluded = [];
@@ -37,12 +36,12 @@ public sealed partial class HollowObjectTypeDataElements
     /// Initialises empty storage for <paramref name="schema"/>.
     /// </summary>
     public HollowObjectTypeDataElements(HollowObjectSchema schema, IArraySegmentRecycler memoryRecycler)
+        : base(memoryRecycler)
     {
         ArgumentNullException.ThrowIfNull(schema);
         ArgumentNullException.ThrowIfNull(memoryRecycler);
 
         Schema = schema;
-        _memoryRecycler = memoryRecycler;
 
         VarLengthData = new IVariableLengthData[schema.FieldCount];
         BitsPerField = new int[schema.FieldCount];
@@ -53,8 +52,6 @@ public sealed partial class HollowObjectTypeDataElements
     /// <summary>The schema of this shard's type, after any field filtering.</summary>
     public HollowObjectSchema Schema { get; }
 
-    /// <summary>The highest ordinal this shard holds.</summary>
-    public int MaxOrdinal { get; internal set; }
 
     /// <summary>The packed fixed-length fields of every record in this shard.</summary>
     public IFixedLengthData? FixedLengthData { get; internal set; }
@@ -90,7 +87,7 @@ public sealed partial class HollowObjectTypeDataElements
 
         ReadFieldStatistics(input, unfilteredSchema);
 
-        FixedLengthData = FixedLengthElementArray.NewFrom(input, _memoryRecycler);
+        FixedLengthData = FixedLengthElementArray.NewFrom(input, MemoryRecycler);
         RemoveExcludedFieldsFromFixedLengthData();
 
         ReadVarLengthData(input, unfilteredSchema);
@@ -99,11 +96,11 @@ public sealed partial class HollowObjectTypeDataElements
     /// <summary>
     /// Returns every segment of this shard's storage to the recycler.
     /// </summary>
-    public void Destroy()
+    public override void Destroy()
     {
         if (FixedLengthData is FixedLengthElementArray fixedLength)
         {
-            fixedLength.Destroy(_memoryRecycler);
+            fixedLength.Destroy(MemoryRecycler);
         }
 
         for (int i = 0; i < VarLengthData.Length; i++)
@@ -211,7 +208,7 @@ public sealed partial class HollowObjectTypeDataElements
         }
 
         long numBitsRequired = (long)BitsPerRecord * (MaxOrdinal + 1);
-        FixedLengthElementArray filteredData = new(_memoryRecycler, numBitsRequired);
+        FixedLengthElementArray filteredData = new(MemoryRecycler, numBitsRequired);
 
         long currentReadBit = 0;
         long currentWriteBit = 0;
@@ -235,10 +232,10 @@ public sealed partial class HollowObjectTypeDataElements
 
         if (FixedLengthData is FixedLengthElementArray previous)
         {
-            previous.Destroy(_memoryRecycler);
+            previous.Destroy(MemoryRecycler);
         }
 
-        _memoryRecycler.Swap();
+        MemoryRecycler.Swap();
         FixedLengthData = filteredData;
     }
 
@@ -254,7 +251,7 @@ public sealed partial class HollowObjectTypeDataElements
             {
                 if (numBytesInVarLengthData != 0)
                 {
-                    SegmentedByteArray data = new(_memoryRecycler);
+                    SegmentedByteArray data = new(MemoryRecycler);
                     data.LoadFrom(input, numBytesInVarLengthData);
                     VarLengthData[filteredFieldIndex] = data;
                 }

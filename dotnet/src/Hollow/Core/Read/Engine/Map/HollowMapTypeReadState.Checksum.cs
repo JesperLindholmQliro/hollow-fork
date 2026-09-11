@@ -41,15 +41,17 @@ public sealed partial class HollowMapTypeReadState
 
         BitSet populatedOrdinals = PopulatedOrdinals;
 
-        for (int shardNumber = 0; shardNumber < _shards.Length; shardNumber++)
+        ShardsHolder<Shard> holder = _shardsVolatile;
+
+        for (int shardNumber = 0; shardNumber < holder.TypedShards.Length; shardNumber++)
         {
-            Shard shard = _shards[shardNumber];
+            Shard shard = holder.TypedShards[shardNumber];
 
             for (int ordinal = populatedOrdinals.NextSetBit(0);
                 ordinal != HollowConstants.OrdinalNone;
                 ordinal = populatedOrdinals.NextSetBit(ordinal + 1))
             {
-                if ((ordinal & _shardNumberMask) != shardNumber)
+                if ((ordinal & holder.ShardNumberMask) != shardNumber)
                 {
                     continue;
                 }
