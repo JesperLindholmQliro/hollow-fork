@@ -56,6 +56,17 @@ public sealed class HollowObjectMapper
     public HollowWriteStateEngine StateEngine => _stateEngine;
 
     /// <summary>
+    /// Whether a set or map without a declared <see cref="HollowHashKeyAttribute"/> takes a hash key
+    /// derived from its element or key type. On by default, as in Java.
+    /// </summary>
+    /// <remarks>
+    /// A derived key is the element type's <see cref="HollowPrimaryKeyAttribute"/> if it has one,
+    /// otherwise the name of its single field if it maps to exactly one non-reference field. Turning
+    /// this off makes every undeclared set and map hash by ordinal instead.
+    /// </remarks>
+    public bool UseDefaultHashKeys { get; set; } = true;
+
+    /// <summary>
     /// Registers <typeparamref name="T"/> and everything reachable from it, without adding a record.
     /// </summary>
     public void InitializeTypeState<T>() => InitializeTypeState(typeof(T));
@@ -66,7 +77,7 @@ public sealed class HollowObjectMapper
     public void InitializeTypeState(Type type)
     {
         ArgumentNullException.ThrowIfNull(type);
-        GetTypeMapper(type, typeName: null);
+        GetTypeMapper(type, typeName: null, hashKeyFieldPaths: null);
     }
 
     /// <summary>
@@ -76,15 +87,22 @@ public sealed class HollowObjectMapper
     public int Add(object value)
     {
         ArgumentNullException.ThrowIfNull(value);
-        return GetTypeMapper(value.GetType(), typeName: null).Write(value);
+        return GetTypeMapper(value.GetType(), typeName: null, hashKeyFieldPaths: null).Write(value);
     }
 
     /// <summary>
     /// Resolves, creating if necessary, the mapper for a CLR type.
     /// </summary>
-    internal HollowTypeMapper GetTypeMapper(Type type, string? typeName)
+    /// <param name="type">The CLR type to map.</param>
+    /// <param name="typeName">The Hollow type name to use, or null to derive one.</param>
+    /// <param name="hashKeyFieldPaths">
+    /// The hash key declared on the member this type was reached through, for a set or map type. Null
+    /// means none was declared, in which case <see cref="UseDefaultHashKeys"/> decides whether one is
+    /// derived; an empty array declares that the element or key ordinal is hashed.
+    /// </param>
+    internal HollowTypeMapper GetTypeMapper(Type type, string? typeName, string[]? hashKeyFieldPaths)
     {
-        MapperKey key = new(type, typeName);
+        MapperKey key = new(type, typeName, MapperKey.HashKeyToken(hashKeyFieldPaths));
 
         if (_typeMappers.TryGetValue(key, out HollowTypeMapper? existing))
         {
@@ -93,7 +111,7 @@ public sealed class HollowObjectMapper
 
         // Construct, publish, then resolve referenced types. Publishing before recursing is what makes
         // a self-referencing or mutually-referencing model terminate.
-        HollowTypeMapper mapper = CreateMapper(key);
+        HollowTypeMapper mapper = CreateMapper(key, hashKeyFieldPaths);
         mapper = _typeMappers.GetOrAdd(key, mapper);
 
         mapper.EnsureRegistered(_stateEngine);
@@ -102,18 +120,79 @@ public sealed class HollowObjectMapper
         return mapper;
     }
 
-    private HollowTypeMapper CreateMapper(MapperKey key)
+    /// <summary>
+    /// The hash key to give a set or map reached through a member declaring
+    /// <paramref name="declared"/>, over elements or keys of <paramref name="elementOrKeyType"/>.
+    /// </summary>
+    internal string[]? ResolveHashKey(string[]? declared, Type elementOrKeyType)
+    {
+        if (declared is not null)
+        {
+            return declared;
+        }
+
+        return UseDefaultHashKeys ? DefaultHashKeyFor(elementOrKeyType) : null;
+    }
+
+    /// <summary>
+    /// The hash key Java derives for a set element or map key type that declares none: its primary key
+    /// if it has one, otherwise its single field if it maps to exactly one non-reference field.
+    /// </summary>
+    /// <remarks>
+    /// Derived from the CLR type alone rather than from its mapper, because the element type's mapper
+    /// cannot be built while the collection's own mapper is still being constructed — a model where a
+    /// type contains a set of itself would not terminate.
+    /// </remarks>
+    private static string[]? DefaultHashKeyFor(Type elementOrKeyType)
+    {
+        if (elementOrKeyType.GetCustomAttribute<HollowPrimaryKeyAttribute>()?.Fields is { Length: > 0 } key)
+        {
+            return key;
+        }
+
+        // Only an object type has fields to hash; a collection of collections hashes by ordinal.
+        if (!MapsToObjectType(elementOrKeyType))
+        {
+            return null;
+        }
+
+        if (HollowObjectTypeMapper.IsScalarWrapper(elementOrKeyType))
+        {
+            return ["value"];
+        }
+
+        if (elementOrKeyType.IsEnum)
+        {
+            return ["_name"];
+        }
+
+        List<MappedMember> members = MappedMember.ForType(elementOrKeyType);
+
+        return members.Count == 1 && HollowObjectTypeMapper.IsInlinedScalar(members[0])
+            ? [members[0].Name]
+            : null;
+    }
+
+    /// <summary>
+    /// Whether a CLR type maps to a Hollow object type rather than to a list, set or map.
+    /// </summary>
+    internal static bool MapsToObjectType(Type type) =>
+        !TryGetDictionaryTypes(type, out _, out _)
+        && !TryGetSetElementType(type, out _)
+        && !TryGetListElementType(type, out _);
+
+    private HollowTypeMapper CreateMapper(MapperKey key, string[]? hashKeyFieldPaths)
     {
         Type type = key.Type;
 
         if (TryGetDictionaryTypes(type, out Type? keyType, out Type? valueType))
         {
-            return new HollowMapTypeMapper(this, type, keyType!, valueType!, key.TypeName);
+            return new HollowMapTypeMapper(this, type, keyType!, valueType!, key.TypeName, hashKeyFieldPaths);
         }
 
         if (TryGetSetElementType(type, out Type? setElementType))
         {
-            return new HollowSetTypeMapper(this, type, setElementType!, key.TypeName);
+            return new HollowSetTypeMapper(this, type, setElementType!, key.TypeName, hashKeyFieldPaths);
         }
 
         if (TryGetListElementType(type, out Type? listElementType))
@@ -286,7 +365,20 @@ public sealed class HollowObjectMapper
         return null;
     }
 
-    private readonly record struct MapperKey(Type Type, string? TypeName);
+    /// <summary>
+    /// Identifies a mapper. The hash key is part of the identity because the same CLR set type reached
+    /// through members declaring different keys is two different Hollow types' worth of layout — which
+    /// <see cref="HollowTypeMapper.EnsureRegistered"/> then rejects, since both want the same name.
+    /// </summary>
+    private readonly record struct MapperKey(Type Type, string? TypeName, string? HashKey)
+    {
+        /// <summary>
+        /// Collapses a hash key into a comparable token. Null (none declared) and empty (declared as
+        /// "hash by ordinal") have to stay distinguishable.
+        /// </summary>
+        internal static string? HashKeyToken(string[]? hashKeyFieldPaths) =>
+            hashKeyFieldPaths is null ? null : string.Join(' ', hashKeyFieldPaths);
+    }
 }
 
 /// <summary>
@@ -331,9 +423,22 @@ public abstract class HollowTypeMapper
             return;
         }
 
-        if (stateEngine.GetTypeState(TypeName) is null)
+        if (stateEngine.GetTypeState(TypeName) is not { } existing)
         {
             stateEngine.AddTypeState(CreateWriteState());
+            return;
+        }
+
+        // Two mappers wanting the same type name must agree on what that type is. The usual cause is
+        // one CLR type reached through members declaring different hash keys: both are SetOfX, but
+        // their records would be hashed differently, so whichever was registered first would silently
+        // decide the layout.
+        if (!existing.Schema.Equals(Schema))
+        {
+            throw new HollowMappingException(
+                $"Two different schemas were mapped to the Hollow type {TypeName}:"
+                + $"{Environment.NewLine}  {existing.Schema}{Environment.NewLine}  {Schema}"
+                + $"{Environment.NewLine}Give one of them a distinct name with [HollowTypeName].");
         }
     }
 }
@@ -379,6 +484,7 @@ internal sealed class MappedMember
         _getValue = getValue;
         IsInlined = member.GetCustomAttribute<HollowInlineAttribute>() is not null;
         TypeNameOverride = member.GetCustomAttribute<HollowTypeNameAttribute>()?.Name;
+        HashKeyFieldPaths = member.GetCustomAttribute<HollowHashKeyAttribute>()?.Fields;
     }
 
     internal string Name { get; }
@@ -388,6 +494,12 @@ internal sealed class MappedMember
     internal bool IsInlined { get; }
 
     internal string? TypeNameOverride { get; }
+
+    /// <summary>
+    /// The hash key declared on this member, or <see langword="null"/> when none is. An empty array is
+    /// a declaration that the element or key ordinal should be hashed.
+    /// </summary>
+    internal string[]? HashKeyFieldPaths { get; }
 
     internal object? GetValue(object instance) => _getValue(instance);
 

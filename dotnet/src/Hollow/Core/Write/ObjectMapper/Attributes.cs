@@ -58,6 +58,36 @@ public sealed class HollowPrimaryKeyAttribute(params string[] fields) : Attribut
 }
 
 /// <summary>
+/// Declares how the elements of a set, or the keys of a map, are hashed within each record's hash
+/// table, so a consumer can find one by key rather than by ordinal.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Java's <c>@HollowHashKey</c>. Apply it to a member whose type is a set or a dictionary; the field
+/// paths are resolved against the element type (for a set) or the key type (for a map).
+/// </para>
+/// <para>
+/// When this attribute is absent, a hash key is derived from the element or key type: its
+/// <see cref="HollowPrimaryKeyAttribute"/> if it has one, otherwise the name of its single field if it
+/// maps to exactly one non-reference field, otherwise none. Declaring the attribute with no field
+/// paths suppresses that derivation and hashes by ordinal instead. Setting
+/// <see cref="HollowObjectMapper.UseDefaultHashKeys"/> to <see langword="false"/> suppresses it for
+/// every type.
+/// </para>
+/// <para>
+/// A declared hash key replaces ordinal-based lookup rather than adding to it — see <c>PORTING.md</c>.
+/// </para>
+/// </remarks>
+[AttributeUsage(AttributeTargets.Property | AttributeTargets.Field)]
+public sealed class HollowHashKeyAttribute(params string[] fields) : Attribute
+{
+    /// <summary>
+    /// The field paths making up the hash key. Empty means the element or key ordinal is hashed.
+    /// </summary>
+    public string[] Fields { get; } = fields;
+}
+
+/// <summary>
 /// Fixes the number of shards a type's records are split across, rather than deriving it from the
 /// data size.
 /// </summary>
