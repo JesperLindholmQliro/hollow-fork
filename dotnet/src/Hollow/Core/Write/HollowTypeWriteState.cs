@@ -163,18 +163,82 @@ public abstract class HollowTypeWriteState
     {
         ArgumentNullException.ThrowIfNull(record);
 
-        if (!OrdinalMap.IsReadyForAddingObjects)
-        {
-            throw new InvalidOperationException(
-                "The HollowWriteStateEngine is not ready to add more Objects. "
-                + $"Did you remember to call {nameof(HollowWriteStateEngine.PrepareForNextCycle)}()?");
-        }
+        ThrowIfNotReadyForAddingObjects();
 
         int ordinal = _restoredMap is null ? AssignOrdinal(record) : ReuseOrdinalFromRestoredState(record);
 
         CurrentCyclePopulated.Set(ordinal);
 
         return ordinal;
+    }
+
+    /// <summary>
+    /// Throws unless this state is between <c>PrepareForNextCycle</c> and <c>PrepareForWrite</c>,
+    /// which is the only window in which its populated ordinals may change.
+    /// </summary>
+    private void ThrowIfNotReadyForAddingObjects()
+    {
+        if (!OrdinalMap.IsReadyForAddingObjects)
+        {
+            throw new InvalidOperationException(
+                "The HollowWriteStateEngine is not ready to add more Objects. "
+                + $"Did you remember to call {nameof(HollowWriteStateEngine.PrepareForNextCycle)}()?");
+        }
+    }
+
+    /// <summary>
+    /// Carries every record the previous cycle held into this one, unchanged.
+    /// </summary>
+    /// <remarks>
+    /// This is what makes an incremental cycle possible: start from the previous state and describe
+    /// only the difference, rather than re-adding everything. No record is re-serialised — the ordinals
+    /// are simply marked populated again.
+    /// </remarks>
+    public void AddAllObjectsFromPreviousCycle()
+    {
+        ThrowIfNotReadyForAddingObjects();
+
+        CurrentCyclePopulated = ThreadSafeBitSet.OrAll(PreviousCyclePopulated, CurrentCyclePopulated);
+    }
+
+    /// <summary>
+    /// Carries one record the previous cycle held into this one, unchanged.
+    /// </summary>
+    /// <exception cref="ArgumentException">
+    /// The previous cycle did not hold <paramref name="ordinal"/>.
+    /// </exception>
+    public void AddOrdinalFromPreviousCycle(int ordinal)
+    {
+        ThrowIfNotReadyForAddingObjects();
+
+        if (!PreviousCyclePopulated.Get(ordinal))
+        {
+            throw new ArgumentException(
+                $"Ordinal {ordinal.Invariant()} was not present in the previous cycle.", nameof(ordinal));
+        }
+
+        CurrentCyclePopulated.Set(ordinal);
+    }
+
+    /// <summary>
+    /// Drops a record from this cycle. Its ordinal stays assigned, so re-adding an equal record later
+    /// in the chain gets the same ordinal back.
+    /// </summary>
+    public void RemoveOrdinalFromThisCycle(int ordinalToRemove)
+    {
+        ThrowIfNotReadyForAddingObjects();
+
+        CurrentCyclePopulated.Clear(ordinalToRemove);
+    }
+
+    /// <summary>
+    /// Drops every record from this cycle, leaving the type empty.
+    /// </summary>
+    public void RemoveAllOrdinalsFromThisCycle()
+    {
+        ThrowIfNotReadyForAddingObjects();
+
+        CurrentCyclePopulated.ClearAll();
     }
 
     /// <summary>

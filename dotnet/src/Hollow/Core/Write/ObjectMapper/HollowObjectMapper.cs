@@ -91,6 +91,30 @@ public sealed class HollowObjectMapper
     }
 
     /// <summary>
+    /// Identifies <paramref name="value"/> by its type and primary key, without writing it.
+    /// </summary>
+    /// <remarks>
+    /// This is how an incremental cycle names a record: the key is enough to find the record in the
+    /// previous version and decide what to do with it.
+    /// </remarks>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="value"/>'s type is not an object type, or has no primary key.
+    /// </exception>
+    public RecordPrimaryKey ExtractPrimaryKey(object value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+
+        if (GetTypeMapper(value.GetType(), typeName: null, hashKeyFieldPaths: null)
+            is not HollowObjectTypeMapper typeMapper)
+        {
+            throw new ArgumentException(
+                $"{value.GetType().Name} maps to a collection type, which has no primary key.", nameof(value));
+        }
+
+        return new RecordPrimaryKey(typeMapper.TypeName, typeMapper.ExtractPrimaryKey(value));
+    }
+
+    /// <summary>
     /// Resolves, creating if necessary, the mapper for a CLR type.
     /// </summary>
     /// <param name="type">The CLR type to map.</param>

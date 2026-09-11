@@ -106,6 +106,27 @@ public interface IPopulateListener : IHollowProducerEventListener
     void OnPopulateComplete(Status status, long version, TimeSpan elapsed);
 }
 
+/// <summary>Notified about the change-collecting sub-stage of an incremental cycle.</summary>
+/// <remarks>
+/// Only fired by <see cref="HollowProducer.RunIncrementalCycle"/>. It surrounds the populator call
+/// itself, not the work of applying what it reported — that is inside the population stage, which
+/// <see cref="IPopulateListener"/> covers.
+/// </remarks>
+public interface IIncrementalPopulateListener : IHollowProducerEventListener
+{
+    /// <summary>Called before the incremental populator runs.</summary>
+    void OnIncrementalPopulateStart(long version);
+
+    /// <summary>Called after the incremental populator runs, with what it reported.</summary>
+    /// <param name="status">Whether the populator completed.</param>
+    /// <param name="removedCount">How many records it deleted.</param>
+    /// <param name="addedOrModifiedCount">How many records it added or modified.</param>
+    /// <param name="version">The version being populated.</param>
+    /// <param name="elapsed">How long the populator took.</param>
+    void OnIncrementalPopulateComplete(
+        Status status, long removedCount, long addedOrModifiedCount, long version, TimeSpan elapsed);
+}
+
 /// <summary>Notified about staging and publishing blobs.</summary>
 public interface IPublishListener : IHollowProducerEventListener
 {
@@ -174,6 +195,7 @@ public abstract class HollowProducerListener
         IRestoreListener,
         ICycleListener,
         IPopulateListener,
+        IIncrementalPopulateListener,
         IPublishListener,
         IIntegrityCheckListener,
         IValidationStatusListener,
@@ -192,6 +214,17 @@ public abstract class HollowProducerListener
     /// <inheritdoc />
     public virtual void OnProducerRestoreComplete(
         Status status, long versionDesired, long versionReached, TimeSpan elapsed)
+    {
+    }
+
+    /// <inheritdoc />
+    public virtual void OnIncrementalPopulateStart(long version)
+    {
+    }
+
+    /// <inheritdoc />
+    public virtual void OnIncrementalPopulateComplete(
+        Status status, long removedCount, long addedOrModifiedCount, long version, TimeSpan elapsed)
     {
     }
 

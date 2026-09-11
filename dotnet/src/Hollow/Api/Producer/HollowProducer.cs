@@ -291,7 +291,55 @@ public sealed class HollowProducer
 
         lock (_cycleLock)
         {
-            return RunCycleUnderLock(populator);
+            return RunCycleUnderLock(incrementalPopulator: null, populator);
+        }
+    }
+
+    /// <summary>
+    /// Runs one cycle from a description of what changed, rather than of the whole dataset.
+    /// </summary>
+    /// <param name="incrementalPopulator">
+    /// Reports the records added, modified and deleted since the last version. Everything it does not
+    /// mention is carried across unchanged.
+    /// </param>
+    /// <returns>
+    /// The version consumers should now be on — the version this cycle produced, or the previous one
+    /// when this cycle published nothing.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// Otherwise identical to <see cref="RunCycle"/>: the same blobs are written, the same integrity
+    /// check and validators run, and the same version is announced. The difference is only in how the
+    /// state is described, which matters when the dataset is large and the change is small.
+    /// </para>
+    /// <para>
+    /// Records are named by primary key, so every type an incremental cycle touches needs one — through
+    /// <see cref="HollowPrimaryKeyAttribute"/> on the CLR type, or on the schema.
+    /// </para>
+    /// <code>
+    /// producer.RunIncrementalCycle(state =>
+    /// {
+    ///     foreach (Change change in QueryChangesSinceLastVersion())
+    ///     {
+    ///         if (change.IsDeletion)
+    ///         {
+    ///             state.Delete(change.Movie);
+    ///         }
+    ///         else
+    ///         {
+    ///             state.AddOrModify(change.Movie);
+    ///         }
+    ///     }
+    /// });
+    /// </code>
+    /// </remarks>
+    public long RunIncrementalCycle(IncrementalPopulator incrementalPopulator)
+    {
+        ArgumentNullException.ThrowIfNull(incrementalPopulator);
+
+        lock (_cycleLock)
+        {
+            return RunCycleUnderLock(incrementalPopulator, populator: null);
         }
     }
 
@@ -340,7 +388,7 @@ public sealed class HollowProducer
         AllowTypeResharding = _allowTypeResharding,
     };
 
-    private long RunCycleUnderLock(Populator populator)
+    private long RunCycleUnderLock(IncrementalPopulator? incrementalPopulator, Populator? populator)
     {
         ProducerListenerSupport.Snapshot listeners = _listeners.Listeners();
 
@@ -367,7 +415,7 @@ public sealed class HollowProducer
 
         try
         {
-            cycleReadState = RunCycleStages(listeners, populator, toVersion);
+            cycleReadState = RunCycleStages(listeners, incrementalPopulator, populator, toVersion);
             return LastSuccessfulCycle;
         }
         catch (Exception e)
@@ -387,7 +435,10 @@ public sealed class HollowProducer
     }
 
     private IReadState? RunCycleStages(
-        ProducerListenerSupport.Snapshot listeners, Populator populator, long toVersion)
+        ProducerListenerSupport.Snapshot listeners,
+        IncrementalPopulator? incrementalPopulator,
+        Populator? populator,
+        long toVersion)
     {
         Artifacts artifacts = new();
         HollowWriteStateEngine writeEngine = WriteEngine;
@@ -398,7 +449,7 @@ public sealed class HollowProducer
             writeEngine.AddHeaderTag(
                 HollowHeaderTags.MetricCycleStart, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().Invariant());
 
-            Populate(listeners, populator, toVersion);
+            Populate(listeners, incrementalPopulator, populator, toVersion);
 
             if (!writeEngine.HasChangedSinceLastCycle())
             {
@@ -457,7 +508,11 @@ public sealed class HollowProducer
         }
     }
 
-    private void Populate(ProducerListenerSupport.Snapshot listeners, Populator populator, long toVersion)
+    private void Populate(
+        ProducerListenerSupport.Snapshot listeners,
+        IncrementalPopulator? incrementalPopulator,
+        Populator? populator,
+        long toVersion)
     {
         listeners.Fire<IPopulateListener>(listener => listener.OnPopulateStart(toVersion));
 
@@ -466,6 +521,10 @@ public sealed class HollowProducer
 
         try
         {
+            // Collecting the changes is a sub-stage of population, so that a failure there fails the
+            // population stage as a whole and the listeners registered for it see it.
+            populator ??= IncrementalPopulate(listeners, incrementalPopulator!, toVersion);
+
             WriteStateForCycle writeState = new(this, toVersion, _readStates.Current);
             try
             {
@@ -490,6 +549,56 @@ public sealed class HollowProducer
 
             listeners.Fire<IPopulateListener>(listener =>
                 listener.OnPopulateComplete(finalStatus, toVersion, elapsed));
+        }
+    }
+
+    /// <summary>
+    /// Collects the changes an incremental populator reports, and returns the ordinary populator that
+    /// applies them to the previous version.
+    /// </summary>
+    private Populator IncrementalPopulate(
+        ProducerListenerSupport.Snapshot listeners, IncrementalPopulator incrementalPopulator, long toVersion)
+    {
+        listeners.Fire<IIncrementalPopulateListener>(
+            listener => listener.OnIncrementalPopulateStart(toVersion));
+
+        long start = Stopwatch.GetTimestamp();
+        Status status = Status.Success;
+        long removed = 0;
+        long addedOrModified = 0;
+
+        try
+        {
+            IncrementalWriteStateForCycle incrementalWriteState = new(_objectMapper);
+            try
+            {
+                incrementalPopulator(incrementalWriteState);
+            }
+            finally
+            {
+                incrementalWriteState.Close();
+            }
+
+            removed = incrementalWriteState.Events.Values.Count(mutation => mutation.IsDeletion);
+            addedOrModified = incrementalWriteState.Events.Count - removed;
+
+            return new IncrementalCyclePopulator(incrementalWriteState.Events).Populate;
+        }
+        catch (Exception e)
+        {
+            status = Status.Fail(e);
+            throw;
+        }
+        finally
+        {
+            Status finalStatus = status;
+            long finalRemoved = removed;
+            long finalAddedOrModified = addedOrModified;
+            TimeSpan elapsed = Stopwatch.GetElapsedTime(start);
+
+            listeners.Fire<IIncrementalPopulateListener>(listener =>
+                listener.OnIncrementalPopulateComplete(
+                    finalStatus, finalRemoved, finalAddedOrModified, toVersion, elapsed));
         }
     }
 

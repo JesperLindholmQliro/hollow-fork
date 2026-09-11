@@ -18,6 +18,7 @@
 using System.Collections;
 using System.Globalization;
 using System.Reflection;
+using Hollow.Core.Index.Key;
 using Hollow.Core.Schema;
 
 namespace Hollow.Core.Write.ObjectMapper;
@@ -32,6 +33,8 @@ public sealed class HollowObjectTypeMapper : HollowTypeMapper
     private readonly HollowObjectSchema _schema;
     private readonly List<MappedFieldInfo> _fields = [];
     private readonly int _numShards;
+
+    private int[][]? _primaryKeyFieldPathIndexes;
 
     internal HollowObjectTypeMapper(HollowObjectMapper parentMapper, Type type, string? typeName)
     {
@@ -138,6 +141,85 @@ public sealed class HollowObjectTypeMapper : HollowTypeMapper
         }
 
         return _parentMapper.StateEngine.Add(TypeName, record);
+    }
+
+    /// <summary>
+    /// Reads the primary key of <paramref name="value"/> out of the CLR object, as the values the
+    /// schema's key field paths point at.
+    /// </summary>
+    /// <remarks>
+    /// The key is what identifies a record to an incremental cycle, which has to find the record in
+    /// the previous state without serialising the object first.
+    /// </remarks>
+    /// <exception cref="ArgumentException">This type has no primary key.</exception>
+    internal object?[] ExtractPrimaryKey(object value)
+    {
+        int[][] fieldPathIndexes = _primaryKeyFieldPathIndexes ??= CalculatePrimaryKeyFieldPathIndexes();
+
+        object?[] key = new object?[fieldPathIndexes.Length];
+        for (int i = 0; i < key.Length; i++)
+        {
+            key[i] = RetrieveFieldValue(value, fieldPathIndexes[i], 0);
+        }
+
+        return key;
+    }
+
+    private int[][] CalculatePrimaryKeyFieldPathIndexes()
+    {
+        PrimaryKey primaryKey = _schema.PrimaryKey
+            ?? throw new ArgumentException($"Type {TypeName} does not have a primary key defined.");
+
+        int[][] fieldPathIndexes = new int[primaryKey.FieldCount][];
+        for (int i = 0; i < fieldPathIndexes.Length; i++)
+        {
+            fieldPathIndexes[i] = primaryKey.GetFieldPathIndex(_parentMapper.StateEngine, i);
+        }
+
+        return fieldPathIndexes;
+    }
+
+    /// <summary>
+    /// Follows one key field path into the CLR object, returning the value at its end.
+    /// </summary>
+    private object? RetrieveFieldValue(object value, int[] fieldPathIndex, int depth)
+    {
+        MappedFieldInfo field = _fields[fieldPathIndex[depth]];
+        object? fieldValue = field.GetValue(value);
+
+        if (fieldValue is null)
+        {
+            return null;
+        }
+
+        if (depth < fieldPathIndex.Length - 1)
+        {
+            if (field.FieldType != FieldType.Reference)
+            {
+                throw new ArgumentException(
+                    $"The primary key of type {TypeName} steps through field {field.Name}, which is a "
+                    + $"{field.FieldType} field rather than a reference.");
+            }
+
+            HollowObjectTypeMapper referenced = (HollowObjectTypeMapper)_parentMapper.GetTypeMapper(
+                field.DeclaredType!, field.TypeNameOverride, field.HashKeyFieldPaths);
+
+            return referenced.RetrieveFieldValue(fieldValue, fieldPathIndex, depth + 1);
+        }
+
+        // The index compares a key against the stored field, so the value has to arrive as the CLR type
+        // that field's Hollow type reads back as — an enum or a short reaching an Int field, say.
+        return field.FieldType switch
+        {
+            FieldType.Int => Convert.ToInt32(fieldValue, CultureInfo.InvariantCulture),
+            FieldType.Long => Convert.ToInt64(fieldValue, CultureInfo.InvariantCulture),
+            FieldType.Float => Convert.ToSingle(fieldValue, CultureInfo.InvariantCulture),
+            FieldType.Double => Convert.ToDouble(fieldValue, CultureInfo.InvariantCulture),
+            FieldType.Decimal => Convert.ToDecimal(fieldValue, CultureInfo.InvariantCulture),
+            FieldType.Boolean => Convert.ToBoolean(fieldValue, CultureInfo.InvariantCulture),
+            FieldType.String => ToHollowString(fieldValue),
+            _ => fieldValue,
+        };
     }
 
     /// <inheritdoc />

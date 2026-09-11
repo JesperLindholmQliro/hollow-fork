@@ -235,6 +235,21 @@ public sealed class HollowWriteStateEngine : IHollowDataset
     }
 
     /// <summary>
+    /// Carries every record the previous cycle held into this one, unchanged, across every type.
+    /// </summary>
+    /// <remarks>
+    /// This is where an incremental cycle starts: the previous state is adopted wholesale, and the
+    /// populator then describes only what changed.
+    /// </remarks>
+    public void AddAllObjectsFromPreviousCycle()
+    {
+        foreach (HollowTypeWriteState typeState in _orderedTypeStates)
+        {
+            typeState.AddAllObjectsFromPreviousCycle();
+        }
+    }
+
+    /// <summary>
     /// Populates this engine from a published read state, so that it can continue that state's delta
     /// chain rather than starting a new one with a fresh snapshot.
     /// </summary>
