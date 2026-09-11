@@ -62,6 +62,11 @@ public sealed class HollowReadStateEngine : IHollowDataAccess
     /// <summary>The pool this engine draws record storage from.</summary>
     public IArraySegmentRecycler MemoryRecycler { get; }
 
+    /// <summary>
+    /// The randomized tag of the state currently held, which a delta must name as its origin.
+    /// </summary>
+    public long RandomizedTag { get; internal set; }
+
     /// <summary>The header tags carried by the blob this state was read from.</summary>
     public IReadOnlyDictionary<string, string> HeaderTags { get; internal set; } =
         new Dictionary<string, string>(StringComparer.Ordinal);
@@ -99,6 +104,28 @@ public sealed class HollowReadStateEngine : IHollowDataAccess
     {
         typeState.AddListener(new PopulatedOrdinalListener());
         _typeStates[typeState.TypeName] = typeState;
+    }
+
+    /// <summary>
+    /// Tells every type that a delta transition is starting, so listeners can snapshot their state.
+    /// </summary>
+    internal void NotifyBeginUpdate()
+    {
+        foreach (HollowTypeReadState typeState in _typeStates.Values)
+        {
+            typeState.BeginUpdate();
+        }
+    }
+
+    /// <summary>
+    /// Tells every type that a delta transition has finished.
+    /// </summary>
+    internal void NotifyEndUpdate()
+    {
+        foreach (HollowTypeReadState typeState in _typeStates.Values)
+        {
+            typeState.EndUpdate();
+        }
     }
 
     /// <summary>

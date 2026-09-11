@@ -26,7 +26,7 @@ namespace Hollow.Core.Read.Engine.Object;
 /// The in-memory record storage of one shard of an object type: a fixed-width bit string holding every
 /// record's fixed-length fields, plus one variable-length byte buffer per string or bytes field.
 /// </summary>
-public sealed class HollowObjectTypeDataElements
+public sealed partial class HollowObjectTypeDataElements
 {
     private readonly IArraySegmentRecycler _memoryRecycler;
 
@@ -54,10 +54,10 @@ public sealed class HollowObjectTypeDataElements
     public HollowObjectSchema Schema { get; }
 
     /// <summary>The highest ordinal this shard holds.</summary>
-    public int MaxOrdinal { get; private set; }
+    public int MaxOrdinal { get; internal set; }
 
     /// <summary>The packed fixed-length fields of every record in this shard.</summary>
-    public IFixedLengthData? FixedLengthData { get; private set; }
+    public IFixedLengthData? FixedLengthData { get; internal set; }
 
     /// <summary>The variable-length payload of each field, or null for fields that have none.</summary>
     public IVariableLengthData?[] VarLengthData { get; }
@@ -72,7 +72,7 @@ public sealed class HollowObjectTypeDataElements
     public long[] NullValueForField { get; }
 
     /// <summary>The total width of one record, in bits.</summary>
-    public int BitsPerRecord { get; private set; }
+    public int BitsPerRecord { get; internal set; }
 
     /// <summary>
     /// Reads one shard's records from <paramref name="input"/>.

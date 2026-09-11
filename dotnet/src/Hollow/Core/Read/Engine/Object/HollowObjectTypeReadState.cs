@@ -34,7 +34,7 @@ namespace Hollow.Core.Read.Engine.Object;
 /// access so that a concurrent resharding cannot be observed half-applied. Resharding is not ported,
 /// so the shards here are assigned once during <see cref="ReadSnapshot"/> and never replaced.
 /// </remarks>
-public sealed class HollowObjectTypeReadState : HollowTypeReadState, IHollowObjectTypeDataAccess
+public sealed partial class HollowObjectTypeReadState : HollowTypeReadState, IHollowObjectTypeDataAccess
 {
     private readonly HollowObjectSchema _unfilteredSchema;
 

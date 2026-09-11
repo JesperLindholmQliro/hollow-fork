@@ -34,7 +34,7 @@ namespace Hollow.Core.Write;
 /// machinery in <c>core.index</c>, which is not ported; a schema with a hash key is written with
 /// ordinal hashing here. See <c>PORTING.md</c>.
 /// </remarks>
-public sealed class HollowSetTypeWriteState : HollowTypeWriteState
+public sealed partial class HollowSetTypeWriteState : HollowTypeWriteState
 {
     private int _bitsPerElement;
     private int _bitsPerSetSizeValue;

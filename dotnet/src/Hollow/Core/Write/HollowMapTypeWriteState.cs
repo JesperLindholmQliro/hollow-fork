@@ -31,7 +31,7 @@ namespace Hollow.Core.Write;
 /// <strong>Port note.</strong> As with sets, a schema-declared hash key is not honoured — see
 /// <see cref="HollowSetTypeWriteState"/> and <c>PORTING.md</c>.
 /// </remarks>
-public sealed class HollowMapTypeWriteState : HollowTypeWriteState
+public sealed partial class HollowMapTypeWriteState : HollowTypeWriteState
 {
     private int _bitsPerKeyElement;
     private int _bitsPerValueElement;

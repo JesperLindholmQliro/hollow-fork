@@ -123,6 +123,16 @@ public abstract class HollowTypeReadState : IHollowTypeDataAccess
     /// <summary>
     /// Notifies the attached listeners that a delta update is beginning.
     /// </summary>
+    internal void BeginUpdate() => NotifyBeginUpdate();
+
+    /// <summary>
+    /// Notifies the attached listeners that a delta update has finished.
+    /// </summary>
+    internal void EndUpdate() => NotifyEndUpdate();
+
+    /// <summary>
+    /// Notifies the attached listeners that a delta update is beginning.
+    /// </summary>
     protected void NotifyBeginUpdate()
     {
         foreach (IHollowTypeStateListener listener in _stateListeners)

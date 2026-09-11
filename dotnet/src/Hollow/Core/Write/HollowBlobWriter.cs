@@ -82,6 +82,72 @@ public sealed class HollowBlobWriter
     }
 
     /// <summary>
+    /// Writes a delta taking a consumer from the previous cycle's state to this one, to
+    /// <paramref name="stream"/>.
+    /// </summary>
+    public void WriteDelta(Stream stream)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+
+        using HollowBlobOutput output = HollowBlobOutput.Serial(stream, leaveOpen: true);
+        WriteDelta(output);
+    }
+
+    /// <summary>
+    /// Writes a delta taking a consumer from the previous cycle's state to this one.
+    /// </summary>
+    /// <remarks>
+    /// Only the types whose records changed appear in a delta, so a consumer leaves the rest alone.
+    /// </remarks>
+    /// <exception cref="NotSupportedException">
+    /// A changed type is not an object type. The .NET port can produce collection-type deltas but
+    /// cannot yet apply them, so writing one would produce a blob no consumer here could read.
+    /// </exception>
+    public void WriteDelta(HollowBlobOutput output)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+
+        _stateEngine.PrepareForWrite();
+
+        List<HollowTypeWriteState> changedTypes =
+            [.. _stateEngine.OrderedTypeStates.Where(state => state.HasChangedSinceLastCycle())];
+
+        foreach (HollowTypeWriteState typeState in changedTypes)
+        {
+            if (typeState.Schema.SchemaType != SchemaType.Object)
+            {
+                throw new NotSupportedException(
+                    $"Type {typeState.Schema.Name} is a {typeState.Schema.SchemaType} type. The .NET port "
+                    + "cannot yet apply a delta for collection types, so it will not write one; see "
+                    + "PORTING.md.");
+            }
+        }
+
+        HollowBlobHeader header = new()
+        {
+            Schemas = [.. changedTypes.Select(state => state.Schema)],
+            HeaderTags = new Dictionary<string, string>(_stateEngine.HeaderTags, StringComparer.Ordinal),
+            OriginRandomizedTag = _stateEngine.PreviousRandomizedTag,
+            DestinationRandomizedTag = _stateEngine.RandomizedTag,
+        };
+
+        _headerWriter.WriteHeader(header, output);
+
+        VarInt.WriteVInt(output, changedTypes.Count);
+
+        foreach (HollowTypeWriteState typeState in changedTypes)
+        {
+            typeState.CalculateDelta();
+
+            typeState.Schema.WriteTo(output);
+            WriteNumShards(output, typeState.NumShards);
+            typeState.WriteCalculatedDelta(output);
+        }
+
+        output.Flush();
+    }
+
+    /// <summary>
     /// Writes the shard count inside the forwards-compatibility envelope a pre-2.1.0 reader skips.
     /// </summary>
     private static void WriteNumShards(HollowBlobOutput output, int numShards)

@@ -158,6 +158,28 @@ public abstract class HollowTypeWriteState
     public abstract void WriteSnapshot(HollowBlobOutput output);
 
     /// <summary>
+    /// Builds the in-memory representation of the change from the previous cycle to this one.
+    /// </summary>
+    public void CalculateDelta() => CalculateDelta(PreviousCyclePopulated, CurrentCyclePopulated);
+
+    /// <summary>
+    /// Builds the in-memory representation of the change from this cycle back to the previous one.
+    /// </summary>
+    public void CalculateReverseDelta() => CalculateDelta(CurrentCyclePopulated, PreviousCyclePopulated);
+
+    /// <summary>
+    /// Builds the in-memory representation of the change between two cycles' populated ordinals.
+    /// </summary>
+    /// <param name="fromCyclePopulated">The ordinals populated by the cycle being moved away from.</param>
+    /// <param name="toCyclePopulated">The ordinals populated by the cycle being moved to.</param>
+    public abstract void CalculateDelta(ThreadSafeBitSet fromCyclePopulated, ThreadSafeBitSet toCyclePopulated);
+
+    /// <summary>
+    /// Writes the change built by <see cref="CalculateDelta()"/> in the delta blob format.
+    /// </summary>
+    public abstract void WriteCalculatedDelta(HollowBlobOutput output);
+
+    /// <summary>
     /// Whether this type's populated ordinals differ from the previous cycle's.
     /// </summary>
     public bool HasChangedSinceLastCycle() => !CurrentCyclePopulated.Equals(PreviousCyclePopulated);

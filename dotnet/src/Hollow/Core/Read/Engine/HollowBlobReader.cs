@@ -76,6 +76,7 @@ public sealed class HollowBlobReader
         filter = filter.Resolve(header.Schemas);
 
         _stateEngine.HeaderTags = header.HeaderTags;
+        _stateEngine.RandomizedTag = header.DestinationRandomizedTag;
 
         int numStates = VarInt.ReadVInt(input);
         for (int i = 0; i < numStates; i++)
@@ -84,6 +85,77 @@ public sealed class HollowBlobReader
         }
 
         _stateEngine.WireSchemaReferences();
+    }
+
+    /// <summary>
+    /// Applies a delta blob from <paramref name="stream"/>, moving this state forward one transition.
+    /// </summary>
+    public void ApplyDelta(Stream stream)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+
+        using HollowBlobInput input = HollowBlobInput.Serial(stream, leaveOpen: true);
+        ApplyDelta(input);
+    }
+
+    /// <summary>
+    /// Applies a delta blob, moving this state forward one transition.
+    /// </summary>
+    /// <remarks>
+    /// A delta names the state it applies to by its randomized tag; applying it to any other state
+    /// would silently corrupt the data, so a mismatch is rejected.
+    /// </remarks>
+    /// <exception cref="InvalidDataException">The delta does not apply to this state.</exception>
+    /// <exception cref="NotSupportedException">The delta changes a collection type.</exception>
+    public void ApplyDelta(HollowBlobInput input)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+
+        HollowBlobHeader header = _headerReader.ReadHeader(input);
+
+        if (_stateEngine.RandomizedTag != 0 && header.OriginRandomizedTag != _stateEngine.RandomizedTag)
+        {
+            throw new InvalidDataException(
+                $"This delta originates from a state with randomized tag {header.OriginRandomizedTag}, "
+                + $"but the current state's tag is {_stateEngine.RandomizedTag}.");
+        }
+
+        _stateEngine.HeaderTags = header.HeaderTags;
+        _stateEngine.RandomizedTag = header.DestinationRandomizedTag;
+
+        _stateEngine.NotifyBeginUpdate();
+
+        int numStates = VarInt.ReadVInt(input);
+        for (int i = 0; i < numStates; i++)
+        {
+            ReadTypeStateDelta(input);
+        }
+
+        _stateEngine.NotifyEndUpdate();
+    }
+
+    private void ReadTypeStateDelta(HollowBlobInput input)
+    {
+        HollowSchema schema = HollowSchema.ReadFrom(input);
+        int numShards = ReadNumShards(input);
+
+        HollowTypeReadState? typeState = _stateEngine.GetTypeState(schema.Name);
+
+        switch (typeState)
+        {
+            case HollowObjectTypeReadState objectState when schema is HollowObjectSchema objectSchema:
+                objectState.ApplyDelta(input, objectSchema, _stateEngine.MemoryRecycler);
+                break;
+
+            case null:
+                throw new InvalidDataException(
+                    $"The delta changes type {schema.Name}, which is not present in this state.");
+
+            default:
+                throw new NotSupportedException(
+                    $"Type {schema.Name} is a {schema.SchemaType} type. The .NET port cannot yet apply a "
+                    + "delta for collection types; see PORTING.md.");
+        }
     }
 
     private void ReadTypeStateSnapshot(HollowBlobInput input, ITypeFilter filter)

@@ -29,7 +29,7 @@ namespace Hollow.Core.Read.Engine.Map;
 /// The in-memory record storage of one shard of a map type: each record's open-addressed hash table,
 /// with the key and value ordinals packed side by side in every bucket.
 /// </summary>
-public sealed class HollowMapTypeDataElements
+public sealed partial class HollowMapTypeDataElements
 {
     private readonly IArraySegmentRecycler _memoryRecycler;
 
@@ -43,37 +43,37 @@ public sealed class HollowMapTypeDataElements
     }
 
     /// <summary>The highest ordinal this shard holds.</summary>
-    public int MaxOrdinal { get; private set; }
+    public int MaxOrdinal { get; internal set; }
 
     /// <summary>Each record's end-of-table pointer and entry count, packed together.</summary>
-    public IFixedLengthData? MapPointerAndSizeData { get; private set; }
+    public IFixedLengthData? MapPointerAndSizeData { get; internal set; }
 
     /// <summary>Every record's hash table buckets, back to back.</summary>
-    public IFixedLengthData? EntryData { get; private set; }
+    public IFixedLengthData? EntryData { get; internal set; }
 
     /// <summary>The width of a pointer into <see cref="EntryData"/>, in bits.</summary>
-    public int BitsPerMapPointer { get; private set; }
+    public int BitsPerMapPointer { get; internal set; }
 
     /// <summary>The width of a map's entry count, in bits.</summary>
-    public int BitsPerMapSizeValue { get; private set; }
+    public int BitsPerMapSizeValue { get; internal set; }
 
     /// <summary>The combined width of the pointer and size stored per record.</summary>
-    public int BitsPerFixedLengthMapPortion { get; private set; }
+    public int BitsPerFixedLengthMapPortion { get; internal set; }
 
     /// <summary>The width of a key ordinal, in bits.</summary>
-    public int BitsPerKeyElement { get; private set; }
+    public int BitsPerKeyElement { get; internal set; }
 
     /// <summary>The width of a value ordinal, in bits.</summary>
-    public int BitsPerValueElement { get; private set; }
+    public int BitsPerValueElement { get; internal set; }
 
     /// <summary>The combined width of one bucket.</summary>
-    public int BitsPerMapEntry { get; private set; }
+    public int BitsPerMapEntry { get; internal set; }
 
     /// <summary>The all-ones key value that marks a bucket as empty.</summary>
-    public int EmptyBucketKeyValue { get; private set; }
+    public int EmptyBucketKeyValue { get; internal set; }
 
     /// <summary>The total number of buckets across every map in this shard.</summary>
-    public long TotalNumberOfBuckets { get; private set; }
+    public long TotalNumberOfBuckets { get; internal set; }
 
     /// <summary>
     /// Reads one shard's records from <paramref name="input"/>.
@@ -161,7 +161,7 @@ public sealed class HollowMapTypeDataElements
 /// <summary>
 /// Holds the records of a map type.
 /// </summary>
-public sealed class HollowMapTypeReadState : HollowTypeReadState, IHollowMapTypeDataAccess
+public sealed partial class HollowMapTypeReadState : HollowTypeReadState, IHollowMapTypeDataAccess
 {
     private Shard[] _shards = [];
     private int _shardNumberMask;

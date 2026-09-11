@@ -5,9 +5,12 @@ list, set and map — round-trip end to end: a `HollowWriteStateEngine` writes a
 `HollowReadStateEngine` reads back. An object mapper maps ordinary CLR types onto Hollow records, so
 callers need not build records field by field.
 
-What is **not** here is everything built on top of a snapshot: deltas, resharding, restore, the
-indexing and diff/history tools, and the producer/consumer APIs. The status section says exactly what
-is and is not ported.
+Deltas are **partly** here: the producer can calculate and write a delta for all four record kinds,
+and a consumer can apply one for object types. Applying a collection-type delta is not implemented, so
+the writer refuses to produce one rather than emit a blob no consumer here could read.
+
+What is **not** here is resharding, restore, indexing, the diff/history tools, and the
+producer/consumer APIs. The status section says exactly what is and is not ported.
 
 ## Building and testing
 
@@ -113,6 +116,15 @@ set, so deriving the sentinel the way Java does would produce a different, incom
 sentinels are written as literals, and a NaN *value* is canonicalised to Java's pattern before being
 stored, matching `Float.floatToIntBits` rather than `floatToRawIntBits`.
 
+### Delta application copies record by record
+
+Java's delta applicators have a fast path that bulk-copies runs of unchanged records with `copyBits`
+and then fixes up their variable-length pointers with `incrementMany`. Only the record-at-a-time path
+is ported. The output is identical — `DeltaTests` checks that applying a delta leaves a consumer in
+exactly the state a snapshot of the same cycle would have produced — but applying a large delta is
+slower than it needs to be. The fast path is the obvious next optimisation, and the tests already in
+place would catch a mistake in it.
+
 ### Concurrency primitives
 
 Java's `AtomicLongArray` has no .NET equivalent. `ThreadSafeBitSet` and `ByteArrayOrdinalMap` use
@@ -163,6 +175,9 @@ memory modes; .NET's `Stream` covers both, so the port wraps a stream and report
 | `core.read` | `HollowBlobInput`, `HollowBlobHeaderReader`, `HollowBlobReader`, `HollowReadStateEngine`, `HollowTypeReadState`, `PopulatedOrdinalListener`, `SnapshotPopulatedOrdinalsReader`, the data-access interfaces, `ITypeFilter` |
 | `core.read.engine.*` | Data elements and read states for object, list, set and map |
 | `core.read.iterator` | The ordinal iterators, including the potential-match iterators used for key lookups |
+| `core.memory.encoding` (delta) | `GapEncodedVariableLengthIntegerReader` |
+| delta write path | `CalculateDelta`/`WriteCalculatedDelta` on all four type write states, `HollowBlobWriter.WriteDelta` |
+| delta read path | `HollowObjectTypeDataElements.ApplyDelta`, `HollowObjectTypeReadState.ApplyDelta`, `HollowBlobReader.ApplyDelta` (object types only) |
 
 Test coverage is carried over from the Java tests where they exist — `VarIntTest`, `HashCodesTest`,
 `FixedLengthElementArrayTest`, `FreeOrdinalTrackerTest`, `ThreadSafeBitSetTest`,
@@ -187,9 +202,13 @@ sets of `TypeFilter` exist; the recursive rule DSL is still absent.
   ordinal. That hasher needs the field-path machinery in `core.index`, which is not ported, so a set
   or map schema carrying a hash key is written with ordinal hashing. Lookups by ordinal are
   unaffected; lookups by key are not available.
-- **Deltas.** Delta and reverse-delta production and application, `GapEncodedVariableLengthIntegerReader`,
-  and historical state creation. `HollowTypeWriteState` keeps the previous cycle's populated ordinals,
-  so the bookkeeping a delta needs is present; the encoders are not.
+- **Collection-type delta application.** The write side produces deltas for list, set and map types,
+  but no applicator exists for them, so `HollowBlobWriter.WriteDelta` throws rather than writing one.
+  The object applicator shows the shape; the collection ones are simpler, since a collection record is
+  a run of elements rather than a set of independently sized fields.
+- **Reverse deltas.** `CalculateReverseDelta` exists on the write state but nothing writes or applies
+  one.
+- **Historical state creation**, which a consumer uses to serve queries against prior states.
 - **Restore and resharding.** Restoring a write state from a read state, and changing a type's shard
   count across cycles. A type's shard count is fixed when it is first written.
 - **Partitioned ordinal maps.** `HollowTypeWriteState` uses a single `ByteArrayOrdinalMap`, which is
@@ -208,10 +227,9 @@ sets of `TypeFilter` exist; the recursive rule DSL is still absent.
 
 ### Suggested order for the remaining work
 
-1. Deltas, which need `GapEncodedVariableLengthIntegerReader` first, then the four
-   `Hollow*DeltaApplicator` classes and delta calculation on the write side. This is what turns the
-   port from a snapshot serialiser into something a consumer can follow over time.
+1. Delta applicators for list, set and map, which completes the delta path. Each follows the object
+   applicator's shape and is simpler.
 2. `core.index` — `FieldPaths` and the primary key index — which also unlocks schema-declared hash
    keys on sets and maps.
 3. Resharding and restore, which build on deltas.
-4. The consumer API, once deltas exist.
+4. The consumer API, once the delta path is complete.

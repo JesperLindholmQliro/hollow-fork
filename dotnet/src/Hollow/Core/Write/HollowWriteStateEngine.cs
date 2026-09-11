@@ -57,6 +57,12 @@ public sealed class HollowWriteStateEngine : IHollowDataset
     /// <summary>The random tag identifying the state this engine produces.</summary>
     public long RandomizedTag { get; set; }
 
+    /// <summary>
+    /// The random tag of the state the previous cycle produced, which a delta names as its origin so
+    /// that it cannot be applied to the wrong state.
+    /// </summary>
+    public long PreviousRandomizedTag { get; private set; }
+
     /// <summary>The type states in the order they were added.</summary>
     public IReadOnlyList<HollowTypeWriteState> OrderedTypeStates => _orderedTypeStates;
 
@@ -110,6 +116,8 @@ public sealed class HollowWriteStateEngine : IHollowDataset
     /// </summary>
     public void PrepareForNextCycle()
     {
+        PreviousRandomizedTag = RandomizedTag;
+
         foreach (HollowTypeWriteState typeState in _orderedTypeStates)
         {
             typeState.PrepareForNextCycle();

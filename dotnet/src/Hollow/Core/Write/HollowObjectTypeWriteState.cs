@@ -27,7 +27,7 @@ namespace Hollow.Core.Write;
 /// The write state of an object type: packs each record's fields into a fixed-width bit string, with
 /// string and byte-array payloads appended to per-field variable-length buffers.
 /// </summary>
-public sealed class HollowObjectTypeWriteState : HollowTypeWriteState
+public sealed partial class HollowObjectTypeWriteState : HollowTypeWriteState
 {
     private FieldStatistics? _fieldStats;
     private FixedLengthElementArray[]? _fixedLengthLongArray;

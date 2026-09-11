@@ -29,7 +29,7 @@ namespace Hollow.Core.Read.Engine.Set;
 /// The in-memory record storage of one shard of a set type: each record's open-addressed hash table,
 /// concatenated into one bit-packed array.
 /// </summary>
-public sealed class HollowSetTypeDataElements
+public sealed partial class HollowSetTypeDataElements
 {
     private readonly IArraySegmentRecycler _memoryRecycler;
 
@@ -43,31 +43,31 @@ public sealed class HollowSetTypeDataElements
     }
 
     /// <summary>The highest ordinal this shard holds.</summary>
-    public int MaxOrdinal { get; private set; }
+    public int MaxOrdinal { get; internal set; }
 
     /// <summary>Each record's end-of-table pointer and element count, packed together.</summary>
-    public IFixedLengthData? SetPointerAndSizeData { get; private set; }
+    public IFixedLengthData? SetPointerAndSizeData { get; internal set; }
 
     /// <summary>Every record's hash table buckets, back to back.</summary>
-    public IFixedLengthData? ElementData { get; private set; }
+    public IFixedLengthData? ElementData { get; internal set; }
 
     /// <summary>The width of a pointer into <see cref="ElementData"/>, in bits.</summary>
-    public int BitsPerSetPointer { get; private set; }
+    public int BitsPerSetPointer { get; internal set; }
 
     /// <summary>The width of a set's element count, in bits.</summary>
-    public int BitsPerSetSizeValue { get; private set; }
+    public int BitsPerSetSizeValue { get; internal set; }
 
     /// <summary>The combined width of the pointer and size stored per record.</summary>
-    public int BitsPerFixedLengthSetPortion { get; private set; }
+    public int BitsPerFixedLengthSetPortion { get; internal set; }
 
     /// <summary>The width of an element ordinal, in bits.</summary>
-    public int BitsPerElement { get; private set; }
+    public int BitsPerElement { get; internal set; }
 
     /// <summary>The all-ones element value that marks a bucket as empty.</summary>
-    public int EmptyBucketValue { get; private set; }
+    public int EmptyBucketValue { get; internal set; }
 
     /// <summary>The total number of buckets across every set in this shard.</summary>
-    public long TotalNumberOfBuckets { get; private set; }
+    public long TotalNumberOfBuckets { get; internal set; }
 
     /// <summary>
     /// Reads one shard's records from <paramref name="input"/>.
@@ -147,7 +147,7 @@ public sealed class HollowSetTypeDataElements
 /// <summary>
 /// Holds the records of a set type.
 /// </summary>
-public sealed class HollowSetTypeReadState : HollowTypeReadState, IHollowSetTypeDataAccess
+public sealed partial class HollowSetTypeReadState : HollowTypeReadState, IHollowSetTypeDataAccess
 {
     private Shard[] _shards = [];
     private int _shardNumberMask;

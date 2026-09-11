@@ -29,7 +29,7 @@ namespace Hollow.Core.Read.Engine.List;
 /// The in-memory record storage of one shard of a list type: every list's elements concatenated into
 /// one bit-packed array, with a per-record pointer to the end of its own run.
 /// </summary>
-public sealed class HollowListTypeDataElements
+public sealed partial class HollowListTypeDataElements
 {
     private readonly IArraySegmentRecycler _memoryRecycler;
 
@@ -43,22 +43,22 @@ public sealed class HollowListTypeDataElements
     }
 
     /// <summary>The highest ordinal this shard holds.</summary>
-    public int MaxOrdinal { get; private set; }
+    public int MaxOrdinal { get; internal set; }
 
     /// <summary>The end-of-run pointer of each record.</summary>
-    public IFixedLengthData? ListPointerData { get; private set; }
+    public IFixedLengthData? ListPointerData { get; internal set; }
 
     /// <summary>Every list's element ordinals, back to back.</summary>
-    public IFixedLengthData? ElementData { get; private set; }
+    public IFixedLengthData? ElementData { get; internal set; }
 
     /// <summary>The width of a pointer into <see cref="ElementData"/>, in bits.</summary>
-    public int BitsPerListPointer { get; private set; }
+    public int BitsPerListPointer { get; internal set; }
 
     /// <summary>The width of an element ordinal, in bits.</summary>
-    public int BitsPerElement { get; private set; }
+    public int BitsPerElement { get; internal set; }
 
     /// <summary>The total number of elements across every list in this shard.</summary>
-    public long TotalNumberOfElements { get; private set; }
+    public long TotalNumberOfElements { get; internal set; }
 
     /// <summary>
     /// Reads one shard's records from <paramref name="input"/>.
@@ -127,7 +127,7 @@ public sealed class HollowListTypeDataElements
 /// <summary>
 /// Holds the records of a list type.
 /// </summary>
-public sealed class HollowListTypeReadState : HollowTypeReadState, IHollowListTypeDataAccess
+public sealed partial class HollowListTypeReadState : HollowTypeReadState, IHollowListTypeDataAccess
 {
     private Shard[] _shards = [];
     private int _shardNumberMask;

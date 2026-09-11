@@ -27,7 +27,7 @@ namespace Hollow.Core.Write;
 /// The write state of a list type: element ordinals are concatenated into one bit-packed array, and
 /// each record stores a pointer to the end of its own run.
 /// </summary>
-public sealed class HollowListTypeWriteState : HollowTypeWriteState
+public sealed partial class HollowListTypeWriteState : HollowTypeWriteState
 {
     private int _bitsPerListPointer;
     private int _bitsPerElement;
