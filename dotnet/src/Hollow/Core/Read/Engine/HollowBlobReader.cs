@@ -16,7 +16,10 @@
  */
 
 using Hollow.Core.Memory.Encoding;
+using Hollow.Core.Read.Engine.List;
+using Hollow.Core.Read.Engine.Map;
 using Hollow.Core.Read.Engine.Object;
+using Hollow.Core.Read.Engine.Set;
 using Hollow.Core.Read.Filter;
 using Hollow.Core.Schema;
 
@@ -88,13 +91,16 @@ public sealed class HollowBlobReader
         HollowSchema schema = HollowSchema.ReadFrom(input);
         int numShards = ReadNumShards(input);
 
+        bool included = filter.Includes(schema.Name);
+
         switch (schema)
         {
-            case HollowObjectSchema objectSchema when filter.Includes(objectSchema.Name):
-                HollowObjectSchema filteredSchema = objectSchema.FilterSchema(filter);
-                HollowObjectTypeReadState typeState = new(
-                    _stateEngine, _stateEngine.MemoryMode, filteredSchema, objectSchema);
-                PopulateTypeStateSnapshot(input, typeState, numShards);
+            case HollowObjectSchema objectSchema when included:
+                PopulateTypeStateSnapshot(
+                    input,
+                    new HollowObjectTypeReadState(
+                        _stateEngine, _stateEngine.MemoryMode, objectSchema.FilterSchema(filter), objectSchema),
+                    numShards);
                 break;
 
             case HollowObjectSchema objectSchema:
@@ -102,10 +108,38 @@ public sealed class HollowBlobReader
                 SnapshotPopulatedOrdinalsReader.DiscardOrdinals(input);
                 break;
 
+            case HollowListSchema listSchema when included:
+                PopulateTypeStateSnapshot(
+                    input, new HollowListTypeReadState(_stateEngine, _stateEngine.MemoryMode, listSchema), numShards);
+                break;
+
+            case HollowListSchema:
+                HollowListTypeDataElements.DiscardFromInput(input, numShards);
+                SnapshotPopulatedOrdinalsReader.DiscardOrdinals(input);
+                break;
+
+            case HollowSetSchema setSchema when included:
+                PopulateTypeStateSnapshot(
+                    input, new HollowSetTypeReadState(_stateEngine, _stateEngine.MemoryMode, setSchema), numShards);
+                break;
+
+            case HollowSetSchema:
+                HollowSetTypeDataElements.DiscardFromInput(input, numShards);
+                SnapshotPopulatedOrdinalsReader.DiscardOrdinals(input);
+                break;
+
+            case HollowMapSchema mapSchema when included:
+                PopulateTypeStateSnapshot(
+                    input, new HollowMapTypeReadState(_stateEngine, _stateEngine.MemoryMode, mapSchema), numShards);
+                break;
+
+            case HollowMapSchema:
+                HollowMapTypeDataElements.DiscardFromInput(input, numShards);
+                SnapshotPopulatedOrdinalsReader.DiscardOrdinals(input);
+                break;
+
             default:
-                throw new NotSupportedException(
-                    $"Type {schema.Name} is a {schema.SchemaType} type, which the .NET port does not yet "
-                    + "read; see PORTING.md");
+                throw new UnrecognizedSchemaTypeException(schema.Name, schema.SchemaType);
         }
     }
 

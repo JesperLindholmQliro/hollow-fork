@@ -1,11 +1,13 @@
 # Porting Hollow to .NET 10
 
-This directory holds a .NET 10 port of Netflix Hollow's core engine. It is a work in progress. The
-memory, encoding and schema layers are complete; on top of them, `OBJECT` types round-trip end to end
-— a `HollowWriteStateEngine` writes a snapshot blob that a `HollowReadStateEngine` reads back, with
-every field type, nulls, sharding, field filtering and cross-cycle ordinal reuse covered by tests.
-List, set and map types are not written or read yet. The status section says exactly what is and is
-not here.
+This directory holds a .NET 10 port of Netflix Hollow's core engine. All four record kinds — object,
+list, set and map — round-trip end to end: a `HollowWriteStateEngine` writes a snapshot blob that a
+`HollowReadStateEngine` reads back. An object mapper maps ordinary CLR types onto Hollow records, so
+callers need not build records field by field.
+
+What is **not** here is everything built on top of a snapshot: deltas, resharding, restore, the
+indexing and diff/history tools, and the producer/consumer APIs. The status section says exactly what
+is and is not ported.
 
 ## Building and testing
 
@@ -93,6 +95,16 @@ a one-byte value rather than as null. This port marks the field absent instead: 
 Java for every fixed-length type, and correct for the variable-length ones.
 `RoundTripTests.ExplicitlyNulledStringReadsBackAsNull` pins it.
 
+### The object mapper reads public members, not private fields
+
+Java's `HollowObjectMapper` maps every declared field, reaching private state through
+`sun.misc.Unsafe`. This port maps public instance properties with a getter, and public instance
+fields, in declaration order. That is the idiomatic .NET surface and avoids reflecting over private
+state, but it means a type's schema follows its public shape; use `[HollowTransient]` to exclude a
+member. Collection type names follow Java's convention (`ListOfString`, `SetOfInteger`,
+`MapOfStringToInteger`), and the scalar wrapper types keep Java's names (`String`, `Integer`, `Long`
+and friends) so a .NET-produced blob describes the same types a Java-produced one would.
+
 ### NaN bit patterns
 
 `HollowObjectWriteRecord` derives its float and double null sentinels from Java's canonical NaN
@@ -146,9 +158,11 @@ memory modes; .NET's `Stream` covers both, so the port wraps a stream and report
 | `core.index.key` | `PrimaryKey` (identity and accessors only) |
 | `core` | `HollowConstants`, `IHollowDataset` |
 | `core.util` | `BitSet` (a port-specific stand-in for `java.util.BitSet`) |
-| `core.write` | `IHollowWriteRecord`, `HollowObjectWriteRecord`, `FieldStatistics`, `HollowTypeWriteState`, `HollowObjectTypeWriteState`, `HollowWriteStateEngine`, `HollowBlobHeaderWriter`, `HollowBlobWriter`, `HollowBlobOutput` |
+| `core.write` | The write records (object, list, set, map), `FieldStatistics`, `HollowTypeWriteState` and its four subclasses, `HollowWriteStateEngine`, `HollowBlobHeaderWriter`, `HollowBlobWriter`, `HollowBlobOutput` |
+| `core.write.objectmapper` | `HollowObjectMapper`, the four type mappers, and the `HollowTypeName`/`HollowInline`/`HollowTransient`/`HollowPrimaryKey`/`HollowShardLargeType` attributes |
 | `core.read` | `HollowBlobInput`, `HollowBlobHeaderReader`, `HollowBlobReader`, `HollowReadStateEngine`, `HollowTypeReadState`, `PopulatedOrdinalListener`, `SnapshotPopulatedOrdinalsReader`, the data-access interfaces, `ITypeFilter` |
-| `core.read.engine.object` | `HollowObjectTypeDataElements`, `HollowObjectTypeReadState` |
+| `core.read.engine.*` | Data elements and read states for object, list, set and map |
+| `core.read.iterator` | The ordinal iterators, including the potential-match iterators used for key lookups |
 
 Test coverage is carried over from the Java tests where they exist — `VarIntTest`, `HashCodesTest`,
 `FixedLengthElementArrayTest`, `FreeOrdinalTrackerTest`, `ThreadSafeBitSetTest`,
@@ -156,9 +170,10 @@ Test coverage is carried over from the Java tests where they exist — `VarIntTe
 `HashCodesTests` pins MurmurHash3 output against values produced by an independent transcription of
 the Java algorithm, so the port cannot drift from the blob layout contract unnoticed.
 
-`RoundTripTests` covers the write and read engines together, which is the only way to check the blob
-format itself: the bit packing, the variable-length ranges, the null sentinels, the shard layout and
-the trailing populated-ordinals bit set all have to agree for a record to survive the trip.
+`RoundTripTests`, `CollectionRoundTripTests` and `ObjectMapperTests` cover the write and read engines
+together, which is the only way to check the blob format itself: the bit packing, the variable-length
+ranges, the null sentinels, the hash-table layout, the shard layout and the trailing
+populated-ordinals bit set all have to agree for a record to survive the trip.
 
 ### Ported, not yet covered by a round-trip
 
@@ -167,11 +182,11 @@ sets of `TypeFilter` exist; the recursive rule DSL is still absent.
 
 ### Not ported
 
-- **List, set and map types.** Only `OBJECT` types are written and read. `HollowListTypeWriteState`,
-  `HollowSetTypeWriteState`, `HollowMapTypeWriteState` and their read-side counterparts
-  (`Hollow*TypeReadState`, `Hollow*TypeDataElements`, the ordinal iterators' concrete
-  implementations, `SetMapKeyHasher`) are the largest remaining gap. `HollowBlobReader` throws a
-  clear `NotSupportedException` when it meets one rather than misreading the blob.
+- **Schema-declared hash keys on sets and maps.** Java re-hashes elements through
+  `HollowWriteStateEnginePrimaryKeyHasher` so a consumer can find an element by key rather than by
+  ordinal. That hasher needs the field-path machinery in `core.index`, which is not ported, so a set
+  or map schema carrying a hash key is written with ordinal hashing. Lookups by ordinal are
+  unaffected; lookups by key are not available.
 - **Deltas.** Delta and reverse-delta production and application, `GapEncodedVariableLengthIntegerReader`,
   and historical state creation. `HollowTypeWriteState` keeps the previous cycle's populated ordinals,
   so the bookkeeping a delta needs is present; the encoders are not.
@@ -181,9 +196,6 @@ sets of `TypeFilter` exist; the recursive rule DSL is still absent.
   Java's default; the four-way partitioned variant is not ported.
 - **Shared-memory mode.** `MemoryMode.SharedMemoryLazy` and the `BlobByteBuffer`, `EncodedByteBuffer`
   and `EncodedLongBuffer` types behind it. Constructing a read state engine with it throws.
-- **Object mapper.** `core.write.objectmapper` — mapping POCOs to Hollow records, and the
-  `HollowPrimaryKey`/`HollowInline`/`HollowTypeName` attributes. Records are built field by field
-  through `HollowObjectWriteRecord` for now.
 - **Optional blob parts**, which split a snapshot across several streams.
 - **Indexing** (`core.index` beyond `PrimaryKey`), **tools** (`core.tools`: diff, history, combine,
   split, patch, checksum), **the producer and consumer APIs** (`api.producer`, `api.consumer`),
@@ -196,9 +208,10 @@ sets of `TypeFilter` exist; the recursive rule DSL is still absent.
 
 ### Suggested order for the remaining work
 
-1. The list, set and map type states, write side and read side together so each can be round-tripped
-   as it lands. They follow the same shape as the object type: measure, pack, write shard by shard;
-   read shard by shard, decode on demand.
-2. The object mapper, so callers can hand over POCOs instead of building records field by field.
-3. Deltas, which need `GapEncodedVariableLengthIntegerReader` first.
-4. Resharding and restore, which build on deltas.
+1. Deltas, which need `GapEncodedVariableLengthIntegerReader` first, then the four
+   `Hollow*DeltaApplicator` classes and delta calculation on the write side. This is what turns the
+   port from a snapshot serialiser into something a consumer can follow over time.
+2. `core.index` — `FieldPaths` and the primary key index — which also unlocks schema-declared hash
+   keys on sets and maps.
+3. Resharding and restore, which build on deltas.
+4. The consumer API, once deltas exist.

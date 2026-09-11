@@ -1,0 +1,462 @@
+/*
+ *  Copyright 2016-2019 Netflix, Inc.
+ *
+ *     Licensed under the Apache License, Version 2.0 (the "License");
+ *     you may not use this file except in compliance with the License.
+ *     You may obtain a copy of the License at
+ *
+ *         http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *     Unless required by applicable law or agreed to in writing, software
+ *     distributed under the License is distributed on an "AS IS" BASIS,
+ *     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *     See the License for the specific language governing permissions and
+ *     limitations under the License.
+ *
+ */
+
+using System.Collections;
+using System.Globalization;
+using System.Reflection;
+using Hollow.Core.Schema;
+
+namespace Hollow.Core.Write.ObjectMapper;
+
+/// <summary>
+/// Maps a CLR class or struct onto a Hollow object type.
+/// </summary>
+public sealed class HollowObjectTypeMapper : HollowTypeMapper
+{
+    private readonly HollowObjectMapper _parentMapper;
+    private readonly Type _type;
+    private readonly HollowObjectSchema _schema;
+    private readonly List<MappedFieldInfo> _fields = [];
+    private readonly int _numShards;
+
+    internal HollowObjectTypeMapper(HollowObjectMapper parentMapper, Type type, string? typeName)
+    {
+        _parentMapper = parentMapper;
+        _type = type;
+
+        TypeName = HollowObjectMapper.ResolveTypeName(type, typeName);
+
+        _numShards = type.GetCustomAttribute<HollowShardLargeTypeAttribute>()?.NumShards ?? -1;
+
+        string[]? primaryKey = type.GetCustomAttribute<HollowPrimaryKeyAttribute>()?.Fields;
+
+        if (IsScalarWrapper(type))
+        {
+            // A scalar stored by reference becomes a one-field wrapper type, matching Java's
+            // Integer/Long/String and friends.
+            _schema = new HollowObjectSchema(TypeName, 1, primaryKey);
+            _schema.AddField("value", ScalarFieldType(type));
+            _fields.Add(MappedFieldInfo.Scalar("value", ScalarFieldType(type), static instance => instance));
+        }
+        else if (type.IsEnum)
+        {
+            // An enum becomes a type carrying its member name, so the data stays readable if the
+            // enum's numeric values are ever renumbered.
+            _schema = new HollowObjectSchema(TypeName, 1, primaryKey);
+            _schema.AddField("_name", FieldType.String);
+            _fields.Add(MappedFieldInfo.Scalar(
+                "_name",
+                FieldType.String,
+                static instance => instance.ToString() ?? string.Empty));
+        }
+        else
+        {
+            List<MappedMember> members = MappedMember.ForType(type);
+            _schema = new HollowObjectSchema(TypeName, members.Count, primaryKey);
+
+            foreach (MappedMember member in members)
+            {
+                _fields.Add(AddField(member));
+            }
+        }
+    }
+
+    /// <inheritdoc />
+    public override string TypeName { get; }
+
+    /// <inheritdoc />
+    public override HollowSchema Schema => _schema;
+
+    /// <inheritdoc />
+    public override int Write(object value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+
+        HollowObjectWriteRecord record = new(_schema);
+
+        foreach (MappedFieldInfo field in _fields)
+        {
+            object? memberValue = field.GetValue(value);
+            if (memberValue is null)
+            {
+                continue;
+            }
+
+            switch (field.FieldType)
+            {
+                case FieldType.Int:
+                    record.SetInt(field.Name, Convert.ToInt32(memberValue, CultureInfo.InvariantCulture));
+                    break;
+                case FieldType.Long:
+                    record.SetLong(field.Name, Convert.ToInt64(memberValue, CultureInfo.InvariantCulture));
+                    break;
+                case FieldType.Float:
+                    record.SetFloat(field.Name, Convert.ToSingle(memberValue, CultureInfo.InvariantCulture));
+                    break;
+                case FieldType.Double:
+                    record.SetDouble(field.Name, Convert.ToDouble(memberValue, CultureInfo.InvariantCulture));
+                    break;
+                case FieldType.Boolean:
+                    record.SetBoolean(field.Name, Convert.ToBoolean(memberValue, CultureInfo.InvariantCulture));
+                    break;
+                case FieldType.String:
+                    record.SetString(field.Name, ToHollowString(memberValue));
+                    break;
+                case FieldType.Bytes:
+                    record.SetBytes(field.Name, (byte[])memberValue);
+                    break;
+                case FieldType.Reference:
+                    // Resolve by the declared type, not the runtime type, so that the ordinal lands in
+                    // the type the schema says this field points at.
+                    record.SetReference(
+                        field.Name,
+                        _parentMapper.GetTypeMapper(field.DeclaredType!, field.TypeNameOverride).Write(memberValue));
+                    break;
+                default:
+                    throw new HollowMappingException(
+                        $"Field {field.Name} of type {TypeName} has unmappable field type {field.FieldType}");
+            }
+        }
+
+        return _parentMapper.StateEngine.Add(TypeName, record);
+    }
+
+    /// <inheritdoc />
+    protected override HollowTypeWriteState CreateWriteState() =>
+        new HollowObjectTypeWriteState(_schema, _numShards);
+
+    /// <inheritdoc />
+    protected internal override void RegisterReferencedTypes(HollowObjectMapper parentMapper)
+    {
+        foreach (MappedFieldInfo field in _fields)
+        {
+            if (field.FieldType == FieldType.Reference)
+            {
+                parentMapper.GetTypeMapper(field.DeclaredType!, field.TypeNameOverride);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Whether a CLR type is one Hollow stores directly rather than as a record of its own members.
+    /// </summary>
+    internal static bool IsScalarWrapper(Type type)
+    {
+        Type underlying = Nullable.GetUnderlyingType(type) ?? type;
+
+        return underlying == typeof(string)
+            || underlying == typeof(byte[])
+            || underlying == typeof(char[])
+            || underlying.IsPrimitive
+            || underlying == typeof(decimal);
+    }
+
+    /// <summary>
+    /// The schema field type a scalar maps to.
+    /// </summary>
+    internal static FieldType ScalarFieldType(Type type)
+    {
+        Type underlying = Nullable.GetUnderlyingType(type) ?? type;
+
+        if (underlying == typeof(bool))
+        {
+            return FieldType.Boolean;
+        }
+
+        if (underlying == typeof(float))
+        {
+            return FieldType.Float;
+        }
+
+        if (underlying == typeof(double))
+        {
+            return FieldType.Double;
+        }
+
+        if (underlying == typeof(long) || underlying == typeof(ulong))
+        {
+            return FieldType.Long;
+        }
+
+        if (underlying == typeof(byte[]))
+        {
+            return FieldType.Bytes;
+        }
+
+        if (underlying == typeof(string) || underlying == typeof(char[]) || underlying == typeof(char))
+        {
+            return FieldType.String;
+        }
+
+        if (underlying == typeof(int) || underlying == typeof(uint)
+            || underlying == typeof(short) || underlying == typeof(ushort)
+            || underlying == typeof(byte) || underlying == typeof(sbyte))
+        {
+            return FieldType.Int;
+        }
+
+        if (underlying == typeof(decimal))
+        {
+            // Hollow has no decimal field type; Java has no equivalent either.
+            throw new HollowMappingException(
+                "decimal has no Hollow field type. Map it to a long of minor units, or to a string.");
+        }
+
+        throw new HollowMappingException($"{underlying.Name} is not a Hollow scalar type");
+    }
+
+    private static string ToHollowString(object value) =>
+        value is char[] chars ? new string(chars) : (string)value;
+
+    private MappedFieldInfo AddField(MappedMember member)
+    {
+        Type memberType = member.MemberType;
+        Type underlying = Nullable.GetUnderlyingType(memberType) ?? memberType;
+
+        bool isNullableValue = Nullable.GetUnderlyingType(memberType) is not null;
+
+        // A non-nullable primitive is always inlined: there is no null to represent, and a reference
+        // would cost an indirection for nothing. Everything else follows the @HollowInline attribute,
+        // defaulting to a reference so that repeated values deduplicate.
+        bool inlineScalar = IsScalarWrapper(memberType)
+            && (member.IsInlined || (underlying.IsPrimitive && !isNullableValue));
+
+        if (inlineScalar)
+        {
+            FieldType fieldType = ScalarFieldType(memberType);
+            _schema.AddField(member.Name, fieldType);
+            return MappedFieldInfo.Scalar(member.Name, fieldType, member.GetValue);
+        }
+
+        // The name has to be derived rather than taken from the referenced mapper, which may not exist
+        // yet; RegisterReferencedTypes creates it once this mapper is published.
+        string referencedTypeName = HollowObjectMapper.ResolveTypeName(underlying, member.TypeNameOverride);
+
+        _schema.AddField(member.Name, FieldType.Reference, referencedTypeName);
+        return MappedFieldInfo.Reference(member.Name, underlying, member.TypeNameOverride, member.GetValue);
+    }
+
+    private sealed class MappedFieldInfo
+    {
+        private readonly Func<object, object?> _getValue;
+
+        private MappedFieldInfo(
+            string name,
+            FieldType fieldType,
+            Type? declaredType,
+            string? typeNameOverride,
+            Func<object, object?> getValue)
+        {
+            Name = name;
+            FieldType = fieldType;
+            DeclaredType = declaredType;
+            TypeNameOverride = typeNameOverride;
+            _getValue = getValue;
+        }
+
+        internal string Name { get; }
+
+        internal FieldType FieldType { get; }
+
+        /// <summary>The declared CLR type of a reference field, which decides its Hollow type.</summary>
+        internal Type? DeclaredType { get; }
+
+        internal string? TypeNameOverride { get; }
+
+        internal object? GetValue(object instance) => _getValue(instance);
+
+        internal static MappedFieldInfo Scalar(string name, FieldType fieldType, Func<object, object?> getValue) =>
+            new(name, fieldType, null, null, getValue);
+
+        internal static MappedFieldInfo Reference(
+            string name, Type declaredType, string? typeNameOverride, Func<object, object?> getValue) =>
+            new(name, FieldType.Reference, declaredType, typeNameOverride, getValue);
+    }
+}
+
+/// <summary>
+/// Maps a CLR sequence onto a Hollow list type.
+/// </summary>
+public sealed class HollowListTypeMapper : HollowTypeMapper
+{
+    private readonly HollowObjectMapper _parentMapper;
+    private readonly Type _elementType;
+    private readonly HollowListSchema _schema;
+
+    internal HollowListTypeMapper(
+        HollowObjectMapper parentMapper, Type type, Type elementType, string? typeName)
+    {
+        _parentMapper = parentMapper;
+        _elementType = elementType;
+
+        TypeName = HollowObjectMapper.ResolveTypeName(type, typeName);
+        _schema = new HollowListSchema(TypeName, HollowObjectMapper.ResolveTypeName(elementType, null));
+    }
+
+    /// <inheritdoc />
+    public override string TypeName { get; }
+
+    /// <inheritdoc />
+    public override HollowSchema Schema => _schema;
+
+    /// <inheritdoc />
+    public override int Write(object value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+
+        HollowListWriteRecord record = new();
+
+        foreach (object? element in (IEnumerable)value)
+        {
+            if (element is null)
+            {
+                throw new HollowMappingException(
+                    $"List type {TypeName} contains a null element; Hollow collections cannot hold nulls.");
+            }
+
+            record.AddElement(_parentMapper.GetTypeMapper(_elementType, null).Write(element));
+        }
+
+        return _parentMapper.StateEngine.Add(TypeName, record);
+    }
+
+    /// <inheritdoc />
+    protected override HollowTypeWriteState CreateWriteState() => new HollowListTypeWriteState(_schema);
+
+    /// <inheritdoc />
+    protected internal override void RegisterReferencedTypes(HollowObjectMapper parentMapper) =>
+        parentMapper.GetTypeMapper(_elementType, null);
+}
+
+/// <summary>
+/// Maps a CLR set onto a Hollow set type.
+/// </summary>
+public sealed class HollowSetTypeMapper : HollowTypeMapper
+{
+    private readonly HollowObjectMapper _parentMapper;
+    private readonly Type _elementType;
+    private readonly HollowSetSchema _schema;
+
+    internal HollowSetTypeMapper(
+        HollowObjectMapper parentMapper, Type type, Type elementType, string? typeName)
+    {
+        _parentMapper = parentMapper;
+
+        _elementType = elementType;
+        TypeName = HollowObjectMapper.ResolveTypeName(type, typeName);
+        _schema = new HollowSetSchema(TypeName, HollowObjectMapper.ResolveTypeName(elementType, null));
+    }
+
+    /// <inheritdoc />
+    public override string TypeName { get; }
+
+    /// <inheritdoc />
+    public override HollowSchema Schema => _schema;
+
+    /// <inheritdoc />
+    public override int Write(object value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+
+        HollowSetWriteRecord record = new();
+
+        foreach (object? element in (IEnumerable)value)
+        {
+            if (element is null)
+            {
+                throw new HollowMappingException(
+                    $"Set type {TypeName} contains a null element; Hollow collections cannot hold nulls.");
+            }
+
+            record.AddElement(_parentMapper.GetTypeMapper(_elementType, null).Write(element));
+        }
+
+        return _parentMapper.StateEngine.Add(TypeName, record);
+    }
+
+    /// <inheritdoc />
+    protected override HollowTypeWriteState CreateWriteState() => new HollowSetTypeWriteState(_schema);
+
+    /// <inheritdoc />
+    protected internal override void RegisterReferencedTypes(HollowObjectMapper parentMapper) =>
+        parentMapper.GetTypeMapper(_elementType, null);
+}
+
+/// <summary>
+/// Maps a CLR dictionary onto a Hollow map type.
+/// </summary>
+public sealed class HollowMapTypeMapper : HollowTypeMapper
+{
+    private readonly HollowObjectMapper _parentMapper;
+    private readonly Type _keyType;
+    private readonly Type _valueType;
+    private readonly HollowMapSchema _schema;
+
+    internal HollowMapTypeMapper(
+        HollowObjectMapper parentMapper, Type type, Type keyType, Type valueType, string? typeName)
+    {
+        _parentMapper = parentMapper;
+
+        _keyType = keyType;
+        _valueType = valueType;
+
+        TypeName = HollowObjectMapper.ResolveTypeName(type, typeName);
+        _schema = new HollowMapSchema(
+            TypeName,
+            HollowObjectMapper.ResolveTypeName(keyType, null),
+            HollowObjectMapper.ResolveTypeName(valueType, null));
+    }
+
+    /// <inheritdoc />
+    public override string TypeName { get; }
+
+    /// <inheritdoc />
+    public override HollowSchema Schema => _schema;
+
+    /// <inheritdoc />
+    public override int Write(object value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+
+        HollowMapWriteRecord record = new();
+
+        foreach (DictionaryEntry entry in (IDictionary)value)
+        {
+            if (entry.Key is null || entry.Value is null)
+            {
+                throw new HollowMappingException(
+                    $"Map type {TypeName} contains a null key or value; Hollow maps cannot hold nulls.");
+            }
+
+            int keyOrdinal = _parentMapper.GetTypeMapper(_keyType, null).Write(entry.Key);
+            int valueOrdinal = _parentMapper.GetTypeMapper(_valueType, null).Write(entry.Value);
+            record.AddEntry(keyOrdinal, valueOrdinal);
+        }
+
+        return _parentMapper.StateEngine.Add(TypeName, record);
+    }
+
+    /// <inheritdoc />
+    protected override HollowTypeWriteState CreateWriteState() => new HollowMapTypeWriteState(_schema);
+
+    /// <inheritdoc />
+    protected internal override void RegisterReferencedTypes(HollowObjectMapper parentMapper)
+    {
+        parentMapper.GetTypeMapper(_keyType, null);
+        parentMapper.GetTypeMapper(_valueType, null);
+    }
+}
