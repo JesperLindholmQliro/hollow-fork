@@ -137,6 +137,18 @@ public sealed class BitSet : IEquatable<BitSet>
         }
     }
 
+    /// <summary>Clears every bit that is not also set in <paramref name="other"/>.</summary>
+    public void And(BitSet other)
+    {
+        ArgumentNullException.ThrowIfNull(other);
+
+        for (int i = 0; i < _words.Length; i++)
+        {
+            // Anything past the end of the other set is clear there, so it clears here.
+            _words[i] &= i < other._words.Length ? other._words[i] : 0;
+        }
+    }
+
     /// <summary>Clears every bit that is set in <paramref name="other"/>.</summary>
     public void AndNot(BitSet other)
     {

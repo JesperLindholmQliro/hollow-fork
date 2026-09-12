@@ -1,0 +1,47 @@
+@*
+ *  Copyright 2017 Netflix, Inc.
+ *
+ *     Licensed under the Apache License, Version 2.0 (the "License");
+ *     you may not use this file except in compliance with the License.
+ *     You may obtain a copy of the License at
+ *
+ *         http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *     Unless required by applicable law or agreed to in writing, software
+ *     distributed under the License is distributed on an "AS IS" BASIS,
+ *     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *     See the License for the specific language governing permissions and
+ *     limitations under the License.
+*@
+@* Java's show-all-types.vm. *@
+@model ShowAllTypesModel
+
+<p><b>Approx. Total Heap Footprint:</b> @Model.TotalHeapFootprint (Holes: @Model.TotalHoleFootprint)</p>
+
+<table border="1">
+    <tr>
+        <th><a href="@Model.BasePath/home?sort=typeName">Data Type</a></th>
+        <th><a href="@Model.BasePath/home?sort=numRecords">Records</a></th>
+        <th><a href="@Model.BasePath/home?sort=numHoles">Holes</a></th>
+        <th><a href="@Model.BasePath/home?sort=holeSize">Hole Footprint</a></th>
+		<th><a href="@Model.BasePath/home?sort=heapSize">Heap Footprint</a></th>
+		<th><a href="@Model.BasePath/home?sort=primaryKey">Primary Key</a></th>
+		<th><a href="@Model.BasePath/home?sort=primaryKey">Schema</a></th>
+        <th><a href="@Model.BasePath/home?sort=numShards">Shards</a></th>
+    </tr>
+
+    @foreach (TypeOverview typeOverview in Model.TypeOverviews)
+    {
+        <tr>
+            @* Java closes this cell with </th>, which every browser has to guess its way out of. *@
+            <td><a href="@Model.BasePath/type?type=@Uri.EscapeDataString(typeOverview.TypeName)">@typeOverview.TypeName</a></td>
+            <td>@typeOverview.NumRecordsDisplay</td>
+            <td>@typeOverview.NumHolesDisplay</td>
+            <td>@typeOverview.ApproxHoleFootprintDisplay</td>
+            <td>@typeOverview.ApproxHeapFootprintDisplay</td>
+            <td><pre>@typeOverview.PrimaryKeyDisplay</pre></td>
+            <td><pre>@typeOverview.SchemaDisplay</pre></td>
+            <td>@typeOverview.NumShardsDisplay</td>
+        </tr>
+    }
+</table>

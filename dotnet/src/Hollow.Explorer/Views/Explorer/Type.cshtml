@@ -1,0 +1,149 @@
+@*
+ *  Copyright 2017 Netflix, Inc.
+ *
+ *     Licensed under the Apache License, Version 2.0 (the "License");
+ *     you may not use this file except in compliance with the License.
+ *     You may obtain a copy of the License at
+ *
+ *         http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *     Unless required by applicable law or agreed to in writing, software
+ *     distributed under the License is distributed on an "AS IS" BASIS,
+ *     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *     See the License for the specific language governing permissions and
+ *     limitations under the License.
+*@
+@*
+    Java's browse-selected-type-top.vm and browse-selected-type-bottom.vm. They are two templates there
+    because the record between them is written straight to the response rather than into the context;
+    here the writing happens inline, so there is only one.
+*@
+@model BrowseSelectedTypeModel
+@{
+	string type = Uri.EscapeDataString(Model.Type);
+	string key = Uri.EscapeDataString(Model.Key);
+
+	@* What every link on this page carries, so that following one keeps everything else in place. *@
+	string where = $"type={type}&amp;key={key}&amp;display={Model.Display}";
+	string paging = $"page={Model.Page}&amp;pageSize={Model.PageSize}";
+}
+
+@if (Model.FilteredByQuery is { } filteredByQuery)
+{
+	<text>NOTE: Results are filtered by query <span style="font-family: monospace;">@filteredByQuery</span>.  <a href="@Model.BasePath/type?@Html.Raw(where)&amp;ordinal=@Model.Ordinal&amp;clearQuery=true">clear</a></text>
+}
+
+<!-- navigation -->
+<table>
+	<tr>
+		<td class="nav">SIZE: @Model.NumRecords</td>
+		<td class="nav">PAGE: [@Model.Page / @Model.NumPages] </td>
+		<td class="nav">
+			@if (Model.Page != 0)
+			{
+				<a href="@Model.BasePath/type?@Html.Raw(where)&amp;ordinal=@Model.Ordinal&amp;page=@(Model.Page - 1)&amp;pageSize=@Model.PageSize">PREV</a>
+			}
+			@if (Model.Page != 0 && Model.Page < Model.NumPages - 1)
+			{
+				<text>-</text>
+			}
+			@if (Model.Page < Model.NumPages - 1)
+			{
+				<a href="@Model.BasePath/type?@Html.Raw(where)&amp;ordinal=@Model.Ordinal&amp;page=@(Model.Page + 1)&amp;pageSize=@Model.PageSize">NEXT</a>
+			}
+		</td>
+		@if (Model.HasRecord)
+		{
+			<td class="nav">
+				FORMAT:
+				<a href="@Model.BasePath/type?type=@type&amp;key=@key&amp;ordinal=@Model.Ordinal&amp;@Html.Raw(paging)&amp;display=text">text</a>
+				-
+				<a href="@Model.BasePath/type?type=@type&amp;key=@key&amp;ordinal=@Model.Ordinal&amp;@Html.Raw(paging)&amp;display=json">json</a>
+
+			</td>
+		}
+	</tr>
+</table>
+
+<table border=0 width=100%>
+	<tr valign=top>
+		<td width=5%>
+
+			<!-- Record keys -->
+
+			<table border="1">
+				<tr>
+					<th>#</th>
+					<th>Key</th>
+				</tr>
+
+				@foreach (TypeKey recordKey in Model.Keys)
+				{
+					<tr>
+						<td>@recordKey.Index</td>
+						<td nowrap><a href="@Model.BasePath/type?type=@type&amp;@Html.Raw(paging)&amp;display=@Model.Display&amp;ordinal=@recordKey.Ordinal&amp;key=@Uri.EscapeDataString(recordKey.Key)">@recordKey.KeyDisplay</a></td>
+					</tr>
+				}
+			</table>
+
+		</td>
+		<td>
+
+			<!-- Record Display -->
+
+			<table border=1 cellpadding=5 cellspacing=1 width=100%>
+				<tr valign=top>
+					<th align=right nowrap>Find Key: </th>
+					<td>
+						<form id="fRec" method="get">
+							<input type="hidden" name="type" value="@Model.Type">
+							<input type="hidden" name="page" value="@Model.Page">
+							<input type="hidden" name="pageSize" value="@Model.PageSize">
+							<input type="hidden" name="display" value="@Model.Display">
+							<input type="hidden" name="ordinal" value="@Model.Ordinal">
+							<input type="text" name="key" value="@Model.Key" size="120">
+							<input type="submit" value="Match">
+						</form>
+					</td>
+				</tr>
+				@*
+					Java asks whether the ordinal is null, which it never is — it is an int, and a record
+					that was not found is the none ordinal rather than nothing at all. Asking what the
+					template meant to ask keeps this block off a page showing no record.
+				*@
+				@if (Model.HasRecord)
+				{
+					<tr valign=top>
+						<th align=right nowrap>Showing Record: </th>
+						<td id="recLink">
+							ordinal: @Model.Ordinal
+							@if (Model.Key.Length > 0)
+							{
+								<br/>@:key: @Model.Key
+							}
+						</td>
+					</tr>
+				}
+				<tr valign=top>
+					<th align=right nowrap>
+						Record Data:
+					</th>
+					<td>
+						<div style="min-height:400px">
+							@if (Model.KeyNotFound)
+							{
+								<text>ERROR: Key @Model.Key was not found!</text>
+							}
+							else if (Model.HasRecord)
+							{
+								@* Escaped on its way out rather than built up as a string first, since a
+								   record holding a large collection is large. *@
+								<pre>@{ Model.WriteRecord(new HtmlEscapingTextWriter(Output)); }</pre>
+							}
+						</div>
+					</td>
+				</tr>
+			</table>
+		</td>
+	</tr>
+</table>

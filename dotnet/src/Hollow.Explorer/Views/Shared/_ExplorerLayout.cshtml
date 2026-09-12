@@ -1,0 +1,68 @@
+@*
+ *  Copyright 2017 Netflix, Inc.
+ *
+ *     Licensed under the Apache License, Version 2.0 (the "License");
+ *     you may not use this file except in compliance with the License.
+ *     You may obtain a copy of the License at
+ *
+ *         http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *     Unless required by applicable law or agreed to in writing, software
+ *     distributed under the License is distributed on an "AS IS" BASIS,
+ *     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *     See the License for the specific language governing permissions and
+ *     limitations under the License.
+*@
+@*
+    Java's explorer-header.vm and explorer-footer.vm, which every page was merged between. A layout is
+    the same arrangement without the page having to name the two halves.
+*@
+@model ExplorerPageModel
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<title>@(Model.HeaderDisplayString ?? "Hollow Explorer")</title>
+	<style>
+		.nav { text-align: left; padding-left: 5px; padding-right: 80px; border-left:1px solid #DCDCDC; }
+	</style>
+</head>
+<body>
+	<table>
+		<tr>
+			<td class="nav"><a href="@Model.BasePath/home">[ Hollow Data Explorer ]</a></td>
+			@*
+				Cells the embedder supplied as markup they wrote, which is the point of them: it is how
+				an application wraps the explorer in its own navigation.
+			*@
+			@foreach (string entry in Model.CommonHeaderEntries)
+			{
+				@Html.Raw(entry)
+			}
+			@if (Model.HeaderDisplayString is { } headerDisplayString)
+			{
+				<td class="nav">[ <a target="_blank" href="@Model.HeaderStringUrl">@headerDisplayString</a> ]</td>
+			}
+			@if (Model.StateVersion is { } stateVersion)
+			{
+				<td class="nav">[ State Version: @stateVersion ]</td>
+			}
+			@*
+				A page about one type gets links to that type's data and schema; the home page, which is
+				about none of them, gets a link to the schemas of the types nothing else references.
+			*@
+			@if (Model.TypeName is { } typeName)
+			{
+				<td class="nav">[ Type: <span style="font-family: monospace;">@typeName</span> ]</td>
+				<td class="nav">[ <a href="@Model.BasePath/type?type=@Uri.EscapeDataString(typeName)">Browse Data</a> | <a href="@Model.BasePath/schema?type=@Uri.EscapeDataString(typeName)">Browse Schema</a> ]</td>
+			}
+			else if (Model.TopLevelTypes.Count > 0)
+			{
+				<td class="nav">[ <a href="@Model.BasePath/schema?@Html.Raw(string.Join("&amp;", Model.TopLevelTypes.Select(t => "type=" + Uri.EscapeDataString(t))))">Browse Top Level Schemas</a> ]</td>
+			}
+			<td class="nav">[ <a href="@Model.BasePath/query">SEARCH</a> ]</td>
+		</tr>
+	</table>
+	<hr/>
+@RenderBody()
+</body>
+</html>

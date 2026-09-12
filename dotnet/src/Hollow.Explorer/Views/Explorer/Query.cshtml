@@ -1,0 +1,73 @@
+@*
+ *  Copyright 2017 Netflix, Inc.
+ *
+ *     Licensed under the Apache License, Version 2.0 (the "License");
+ *     you may not use this file except in compliance with the License.
+ *     You may obtain a copy of the License at
+ *
+ *         http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *     Unless required by applicable law or agreed to in writing, software
+ *     distributed under the License is distributed on an "AS IS" BASIS,
+ *     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *     See the License for the specific language governing permissions and
+ *     limitations under the License.
+*@
+@* Java's query.vm. *@
+@model QueryPageModel
+
+@if (Model.QueryResult is not null)
+{
+	<b>Augment Current Query:</b>
+}
+else
+{
+	<b>Search:</b>
+}
+
+<form action="@Model.BasePath/query">
+
+	<table>
+		<tr>
+			<th>Type:</th>
+			<th>Field Name:</th>
+			<th>Field Value:</th>
+			<td />
+		</tr>
+		<tr>
+			<td>
+				<select name="type">
+					<option>ANY TYPE</option>
+					@foreach (string type in Model.AllTypes)
+					{
+						<option selected="@(type == Model.SelectedType)">@type</option>
+					}
+				</select>
+			</td>
+			<td><input type="text" name="field" value="@Model.SelectedField"></td>
+			<td><input type="text" name="queryValue" size="85"></td>
+			<td><input type="submit"></td>
+		</tr>
+	</table>
+
+</form>
+
+@if (Model.QueryResult is { } queryResult)
+{
+	<text>Current Query: <span style="font-family: monospace;">@queryResult.QueryDisplayString</span> <a href="@Model.BasePath/query?clear=true">clear</a></text>
+
+	<p/>
+
+	<text>RESULTS:</text>
+
+	<ul>
+		@foreach (QueryTypeMatches typeMatches in queryResult.TypeMatches)
+		{
+			<li>
+				<span style="font-family: monospace;">
+					<a href="@Model.BasePath/type?type=@Uri.EscapeDataString(typeMatches.TypeName)">@typeMatches.TypeName</a>: @typeMatches.NumMatches records match
+				</span>
+			</li>
+		}
+	</ul>
+}
