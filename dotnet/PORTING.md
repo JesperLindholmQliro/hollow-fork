@@ -576,7 +576,9 @@ Java's three independent extras — a POJO generator, a "performance API" genera
 builder generator, around 1,900 lines between them — are not ported, and nothing else depends on them.
 
 
-## The sample
+## The samples
+
+### The console sample
 
 `samples/Hollow.Sample` is a runnable console application that is the whole loop in one process: a
 producer publishing a catalogue of films to a directory of blobs, and a consumer following it and
@@ -604,6 +606,26 @@ obvious:
   announced, and `TriggerRefreshTo` throws. The sample uses a version-pinned consumer to walk the
   chain step by step and a watcher-driven one to show what production looks like.
 
+
+### The explorer sample
+
+`samples/Hollow.Explorer.Sample` is the other one: a minimal ASP.NET Core application with the explorer
+mounted inside it.
+
+```
+dotnet run --project samples/Hollow.Explorer.Sample   # then http://127.0.0.1:7101
+```
+
+Four lines of it are the explorer; the rest is the application it is being put into — a producer, a
+consumer, a page of its own at `/`, and a button that publishes the next cycle so the explorer can be
+watched following a delta. It deliberately has no `[HollowGeneratedApi]` and does not reference the
+source generator, because the explorer reads schemas rather than classes and it is worth showing that
+it needs no generated client.
+
+The one thing it exists to demonstrate that nothing else does is cache invalidation. The explorer works
+each type's heap and hole figures out once per state, keyed on the randomized tag — which a delta does
+not change — so a consumer that moves by delta has to say so. The sample does it with a refresh
+listener; an embedder who forgets gets figures that are right after a snapshot and stale ever after.
 
 ## Culture-invariant formatting and parsing
 

@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <RootNamespace>Hollow.Explorer.Sample</RootNamespace>
+
+    <!-- A sample explains itself in prose rather than in XML doc comments. -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The explorer, and the producer and consumer that give it something to show. Nothing else: the
+         explorer reads schemas rather than generated classes, so the source generator is not here. -->
+    <ProjectReference Include="../../src/Hollow.Explorer/Hollow.Explorer.csproj" />
+  </ItemGroup>
+
+</Project>
