@@ -316,4 +316,80 @@ public static class HollowReadFieldUtils
     /// </remarks>
     public static int DecimalHashCode(decimal? value) =>
         value is null ? 0 : DecimalBits.CanonicalHashCode(value.Value);
+
+    /// <summary>
+    /// Orders two records of the same type by what they hold in the same field.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is for putting a set's elements in a settled order, which a set does not have: its
+    /// iteration order comes from where its elements' hashes fell, so two states holding the same
+    /// elements can write them out differently. Ordering by value makes the output something that can
+    /// be compared.
+    /// </para>
+    /// <para>
+    /// A field with nothing to order by — bytes, or a reference to a type with more than one field —
+    /// compares equal, leaving those records in whatever order they arrived.
+    /// </para>
+    /// </remarks>
+    /// <returns>
+    /// Negative when <paramref name="ordinal1"/>'s value sorts first, positive when it sorts last, and
+    /// zero when neither does.
+    /// </returns>
+    public static int CompareFieldValues(
+        IHollowObjectTypeDataAccess typeAccess, int fieldPosition, int ordinal1, int ordinal2)
+    {
+        ArgumentNullException.ThrowIfNull(typeAccess);
+
+        HollowObjectSchema schema = typeAccess.Schema;
+
+        switch (schema.GetFieldType(fieldPosition))
+        {
+            case FieldType.Boolean:
+                bool? left = typeAccess.ReadBoolean(ordinal1, fieldPosition);
+                bool? right = typeAccess.ReadBoolean(ordinal2, fieldPosition);
+
+                return Nullable.Compare(left, right);
+
+            case FieldType.Double:
+                return typeAccess.ReadDouble(ordinal1, fieldPosition)
+                    .CompareTo(typeAccess.ReadDouble(ordinal2, fieldPosition));
+
+            case FieldType.Float:
+                return typeAccess.ReadFloat(ordinal1, fieldPosition)
+                    .CompareTo(typeAccess.ReadFloat(ordinal2, fieldPosition));
+
+            case FieldType.Int:
+                return typeAccess.ReadInt(ordinal1, fieldPosition)
+                    .CompareTo(typeAccess.ReadInt(ordinal2, fieldPosition));
+
+            case FieldType.Long:
+                return typeAccess.ReadLong(ordinal1, fieldPosition)
+                    .CompareTo(typeAccess.ReadLong(ordinal2, fieldPosition));
+
+            case FieldType.Decimal:
+                return Nullable.Compare(
+                    typeAccess.ReadDecimal(ordinal1, fieldPosition),
+                    typeAccess.ReadDecimal(ordinal2, fieldPosition));
+
+            case FieldType.String:
+                return string.CompareOrdinal(
+                    typeAccess.ReadString(ordinal1, fieldPosition),
+                    typeAccess.ReadString(ordinal2, fieldPosition));
+
+            case FieldType.Reference
+                when schema.GetReferencedTypeState(fieldPosition) is { } referenced
+                    && referenced.Schema is HollowObjectSchema { FieldCount: 1 }:
+                // A reference to a type holding one field is that field, which is how the shared String
+                // type orders as text rather than by where its records happen to sit.
+                return CompareFieldValues(
+                    (IHollowObjectTypeDataAccess)referenced,
+                    0,
+                    typeAccess.ReadOrdinal(ordinal1, fieldPosition),
+                    typeAccess.ReadOrdinal(ordinal2, fieldPosition));
+
+            default:
+                return 0;
+        }
+    }
 }
