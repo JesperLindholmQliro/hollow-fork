@@ -19,6 +19,7 @@ using Hollow.Api.Error;
 using Hollow.Core.Memory;
 using Hollow.Core.Memory.Pool;
 using Hollow.Core.Read.DataAccess;
+using Hollow.Core.Read.Missing;
 using Hollow.Core.Read.Engine.Map;
 using Hollow.Core.Read.Engine.Set;
 using Hollow.Core.Schema;
@@ -97,6 +98,15 @@ public sealed class HollowReadStateEngine : IHollowDataAccess
 
     /// <inheritdoc />
     public IHollowTypeDataAccess? GetTypeDataAccess(string type, int ordinal) => GetTypeState(type);
+
+    /// <summary>
+    /// Answers reads of fields and types this state does not hold, for a typed client compiled
+    /// against a different version of the data model.
+    /// </summary>
+    /// <remarks>
+    /// Defaults to <see cref="DefaultMissingDataHandler"/>, which answers "absent" to everything.
+    /// </remarks>
+    public IMissingDataHandler MissingDataHandler { get; set; } = DefaultMissingDataHandler.Instance;
 
     /// <summary>
     /// Registers <paramref name="typeState"/>, attaching a <see cref="PopulatedOrdinalListener"/> to

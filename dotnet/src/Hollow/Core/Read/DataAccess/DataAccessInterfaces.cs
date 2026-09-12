@@ -17,6 +17,7 @@
 
 using Hollow.Core.Read.Engine;
 using Hollow.Core.Read.Iterator;
+using Hollow.Core.Read.Missing;
 using Hollow.Core.Schema;
 
 namespace Hollow.Core.Read.DataAccess;
@@ -62,6 +63,16 @@ public interface IHollowDataAccess : IHollowDataset
     /// Gets read access to the named type, resolved for a specific record.
     /// </summary>
     IHollowTypeDataAccess? GetTypeDataAccess(string type, int ordinal);
+
+    /// <summary>
+    /// Answers reads of fields and types this dataset does not have.
+    /// </summary>
+    /// <remarks>
+    /// A typed client compiled against one version of the data model may be pointed at a dataset
+    /// written against another. This is what a typed accessor falls through to when the field it wants
+    /// is not there.
+    /// </remarks>
+    IMissingDataHandler MissingDataHandler { get; }
 }
 
 /// <summary>
@@ -172,6 +183,12 @@ public interface IHollowSetTypeDataAccess : IHollowCollectionTypeDataAccess
     /// <paramref name="hashCode"/>.
     /// </summary>
     IHollowOrdinalIterator PotentialMatchOrdinalIterator(int ordinal, int hashCode);
+
+    /// <summary>
+    /// The ordinal of the element matching <paramref name="hashKey"/>, or
+    /// <see cref="HollowConstants.OrdinalNone"/>. Requires the type to declare a hash key.
+    /// </summary>
+    int FindElement(int ordinal, params object?[] hashKey);
 }
 
 /// <summary>
@@ -211,4 +228,22 @@ public interface IHollowMapTypeDataAccess : IHollowTypeDataAccess
 
     /// <summary>Iterates every entry of the given record.</summary>
     IHollowMapEntryOrdinalIterator OrdinalIterator(int ordinal);
+
+    /// <summary>
+    /// The key ordinal of the entry matching <paramref name="hashKey"/>, or
+    /// <see cref="HollowConstants.OrdinalNone"/>. Requires the type to declare a hash key.
+    /// </summary>
+    int FindKey(int ordinal, params object?[] hashKey);
+
+    /// <summary>
+    /// The value ordinal of the entry matching <paramref name="hashKey"/>, or
+    /// <see cref="HollowConstants.OrdinalNone"/>. Requires the type to declare a hash key.
+    /// </summary>
+    int FindValue(int ordinal, params object?[] hashKey);
+
+    /// <summary>
+    /// The entry matching <paramref name="hashKey"/> packed as <c>(key &lt;&lt; 32) | value</c>, or
+    /// -1. Requires the type to declare a hash key.
+    /// </summary>
+    long FindEntry(int ordinal, params object?[] hashKey);
 }
