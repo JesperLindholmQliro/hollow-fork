@@ -31,6 +31,11 @@ written in as the data grows or shrinks, and a consumer rearranges the records i
 match before applying the delta that says so. The incremental producer is here too, for a caller whose
 source of truth is a change feed rather than a table.
 
+The typed API layer is here — the record wrappers, delegates and per-type field readers that generated
+code is written against — so a dataset can be traversed by name today, with or without a generator.
+Variable-length fields can be read into a caller's buffer, or viewed in place where the storage layout
+allows it, rather than always allocating.
+
 What is **not** here is object longevity, code generation, and the diff/history tools. The status
 section says exactly what is and is not ported; [Porting the code
 generator](#porting-the-code-generator) sets out what the largest of those would take.
@@ -212,6 +217,86 @@ and the mask that selects one so a reader cannot pair a new array with an old ma
 fails part way through it throws `InvalidOperationException`, and the read state is then unusable:
 only a fresh snapshot recovers it.
 
+## The typed API layer
+
+Everything above reads a record by asking a type state for field 3 of ordinal 17. The typed layer is
+the one generated code is written against, and it is ported: `HollowApi` and the `HollowTypeApi`
+family that read fields by name, the delegates that decide whether a read goes to the blob or to a
+cache, the `HollowObject`/`HollowList`/`HollowSet`/`HollowMap` record wrappers, the providers that
+turn an ordinal into a wrapper, and the missing-data handler a read falls through to when the field is
+not in the dataset.
+
+It is useful before a generator exists, because the generic records traverse anything:
+
+```csharp
+GenericHollowObject movie = new(consumer.StateEngine!, "Movie", ordinal);
+
+int year = movie.GetInt("Year");
+string? title = movie.GetObject("Title")!.GetString("value");
+
+foreach (GenericHollowObject actor in movie.GetList("Cast")!.Cast<GenericHollowObject>())
+{
+    // ...
+}
+```
+
+The wrappers implement the BCL collection interfaces, so `HollowList<T>` is an `IReadOnlyList<T>` and
+LINQ works over a record without anything being materialised. A record is a handle — a type name, an
+ordinal and a delegate — and two handles to the same record compare equal, so a record can be a
+dictionary key.
+
+A field the dataset does not have does not fail. It goes to `IMissingDataHandler`, which by default
+answers absent (`null`, `int.MinValue`, `double.NaN`), so a client compiled against a newer model can
+read an older dataset. Replace `HollowReadStateEngine.MissingDataHandler` to make it loud instead.
+
+Caching is a configuration choice rather than a code change: a generated API routes every read through
+a `HollowObjectProvider<T>`, and swapping `HollowObjectFactoryProvider<T>` for
+`HollowObjectCacheProvider<T>` caches the whole type. The cache follows deltas — a record the next
+version still holds keeps its wrapper, repointed at the new type API — and pins what it holds until
+`Detach()`.
+
+## Reading strings and bytes without allocating
+
+A variable-length field can be read into a caller's buffer rather than into a fresh `string` or
+`byte[]`:
+
+```csharp
+Span<char> buffer = stackalloc char[64];
+ReadOnlySpan<char> title = titleRecord.GetString("value", buffer);
+```
+
+`GetVarLengthByteLength` says how big a buffer a field needs. It is the stored byte count, which
+bounds the character count rather than giving it: a character is stored VarInt-encoded, so text is
+never longer in characters than in bytes. A too-small buffer is refused rather than truncated. The
+same shape reads a `Bytes` field into a `Span<byte>`, and `ReadStringInto`/`ReadBytesInto` are the
+forms that tell a null field from an empty one, by returning -1.
+
+Where a byte field can be viewed in place rather than copied, it is:
+
+```csharp
+if (movie.TryGetBytes("Poster", out ReadOnlySpan<byte> poster))
+{
+    // a view straight into storage, no copy
+}
+```
+
+That succeeds only when the value sits inside a single storage segment. Variable-length data lives in
+a list of fixed-size pooled arrays, so a value long enough, or unlucky enough in where it starts, lies
+across a boundary and cannot be one span. `ReadOnlySequence<byte>` covers the general case with no
+copy either way — one sequence segment per piece, or a single-segment sequence when the value happens
+to be contiguous:
+
+```csharp
+ReadOnlySequence<byte> poster = movie.GetBytesSequence("Poster");
+SequenceReader<byte> reader = new(poster);
+```
+
+There is deliberately no `ReadOnlySequence<char>`. A string's characters are VarInt-encoded in
+storage, so there are no `char`s there to point at — a sequence over them would have to decode into a
+buffer first, which is what `GetString(name, Span<char>)` already does, honestly.
+`GetStringBytesSequence` exposes a string's encoded bytes for hashing or copying, where the bytes
+rather than the text are what is wanted.
+
 ## Porting the code generator
 
 Hollow's generator turns a data model into a typed client: instead of
@@ -226,20 +311,31 @@ the client API generator. The rest are three independent extras — a POJO gener
 "performance API" generator (~460), and a test-data builder generator (~870) — none of which anything
 else depends on.
 
-The harder half is the runtime the generated code sits on, none of which is ported:
+The harder half is the runtime the generated code sits on. Most of it is now ported — see [The typed
+API layer](#the-typed-api-layer):
 
-| Java package | Lines | What it is |
-| --- | --- | --- |
-| `api.custom` | ~450 | `HollowAPI`, `HollowObjectTypeAPI` and friends — the per-type field readers the generated code calls |
-| `api.objects` (+ `delegate`, `generic`, `provider`) | ~2,700 | `HollowObject`, `HollowList`, `HollowSet`, `HollowMap`, the delegate indirection and the object providers behind them |
-| `core.type` (+ `delegate`, `accessor`) | ~2,000 | The generated API for Hollow's built-in wrapper types: `HString`, `HInteger`, `HLong` and the rest |
-| `api.consumer.index` | ~1,450 | `UniqueKeyIndex` and `HashIndex`, the typed façades over the ported indexes |
-| `core.read.missing` | ~250 | The missing-data handler a generated accessor falls back to when the field is absent from the consumer's copy of the model |
-| `api.sampling` | ~780 | The field-access samplers every generated type API records through |
+| Java package | Lines | What it is | State |
+| --- | --- | --- | --- |
+| `api.custom` | ~450 | `HollowAPI`, `HollowObjectTypeAPI` and friends — the per-type field readers the generated code calls | Ported |
+| `api.objects` (+ `delegate`, `generic`, `provider`) | ~2,700 | `HollowObject`, `HollowList`, `HollowSet`, `HollowMap`, the delegate indirection and the object providers behind them | Ported |
+| `core.type` (+ `delegate`, `accessor`) | ~2,000 | The generated API for Hollow's built-in wrapper types: `HString`, `HInteger`, `HLong` and the rest | Ported, as ~150 lines |
+| `core.read.missing` | ~250 | The missing-data handler a generated accessor falls back to when the field is absent from the consumer's copy of the model | Ported |
+| `api.consumer.index` | ~1,450 | `UniqueKeyIndex` and `HashIndex`, the typed façades over the ported indexes | Not ported |
+| `api.sampling` | ~780 | The field-access samplers every generated type API records through | Deliberately not ported |
 
-So the work is roughly **7,600 lines of runtime plus 5,200 lines of generator**, and the runtime has
-to come first. The runtime is also worth having on its own: it is what makes a hand-written typed
-wrapper over a Hollow dataset pleasant, generator or not.
+`core.type` collapses because Java writes out a full generated API — a type API, two delegates, a
+record class and a factory — for each of `HString`, `HInteger`, `HLong`, `HDouble`, `HFloat` and
+`HBoolean`, which is the same code six times over a different primitive. One
+`HollowScalarTypeApi<TValue>` and one `HollowScalar<TValue>` cover all of them, plus `HDecimal` for
+this port's extension, in about 150 lines.
+
+`api.sampling` is not a gap to be filled later so much as a decision. It threads a sampler through
+every data-access method so a generated API can report which fields were actually read — useful
+observability, but it touches every read on the hot path, and nothing above it depends on it. If it is
+wanted in .NET, the idiomatic answer is probably an `EventSource` or a `Meter` rather than a sampler
+object per type API.
+
+So what is left is `api.consumer.index` (~1,450 lines) plus **~5,200 lines of generator**.
 
 ### The shape of the generated code
 
@@ -255,10 +351,15 @@ The C# equivalent differs in more than syntax:
 - **Getters become properties.** `movie.getTitle()` → `movie.Title`. Java's paired
   `getYear()`/`getYearBoxed()` — a primitive and its boxed form, because only the latter can be null
   — collapses into one `int? Year`, which removes a whole category of generated method.
-- **The collection wrappers should implement the BCL interfaces.** `HollowList<T>` as
-  `IReadOnlyList<T>`, `HollowSet<T>` as `IReadOnlySet<T>`, `HollowMap<TKey, TValue>` as
-  `IReadOnlyDictionary<TKey, TValue>`. Java's versions extend `AbstractList` and friends; the .NET
-  equivalents make LINQ and `foreach` work without a shim.
+- **The collection wrappers implement the BCL interfaces.** `HollowList<T>` is an `IReadOnlyList<T>`,
+  `HollowSet<T>` an `IReadOnlyCollection<T>` and `HollowMap<TKey, TValue>` an
+  `IReadOnlyCollection<KeyValuePair<TKey, TValue>>`. Java's versions extend `AbstractList` and
+  friends; the .NET equivalents make LINQ and `foreach` work without a shim. `IReadOnlySet<T>` and
+  `IReadOnlyDictionary<TKey, TValue>` are deliberately not implemented: their lookup members are
+  typed in the element type, whereas a Hollow lookup takes either a record handle or a raw key value
+  and so is typed `object?` — see [A declared hash key replaces ordinal-based
+  lookup](#a-declared-hash-key-replaces-ordinal-based-lookup). `Keys`, `Values`, `ContainsKey` and an
+  indexer are all there; only the interface is not claimed.
 - **Records are handles, not objects.** A generated accessor is an ordinal plus a delegate reference.
   A `readonly record struct` says that better than a class does, and avoids an allocation per record
   read — though it has to be measured, since the delegate reference makes it two words either way.
@@ -520,6 +621,21 @@ type. The systematic changes are:
   `IndexPredicate` delegate, for the same reason as `Populator`.
 - **`HollowSparseIntegerSet.size()` → `EstimateBitsUsed()`**, because `Size` reads as a count of
   members where the method returns a count of bits — `Cardinality()` is the one that counts members.
+- **An acronym of three letters or more is PascalCased**, per .NET's own guidance, so `HollowAPI` →
+  `HollowApi`, `HollowObjectTypeAPI` → `HollowObjectTypeApi`, and the namespace `api` → `Api`. Two-
+  letter acronyms keep both letters (`IO`), which is why `HollowBlobInput` and friends are unchanged.
+- **package `core.type` → namespace `Hollow.Core.Types`**, because `Hollow.Core.Type` would shadow
+  `System.Type` inside the `Hollow.Core` namespace: every unqualified `Type` in a file under it would
+  resolve to the namespace and fail to compile. The plural also reads correctly, since the namespace
+  holds several types rather than describing one.
+- **Java's six generated scalar APIs become two generic types.** `HString`, `HInteger`, `HLong`,
+  `HDouble`, `HFloat` and `HBoolean` each come with their own type API, two delegates, a record class
+  and a factory in Java. Here they are `HollowScalarTypeApi<TValue>` and `HollowScalar<TValue>`, with
+  the six names kept as thin subclasses so generated code and callers read the same as Java's.
+  `HDecimal` is added for this port's field type.
+- **`HollowRecordDelegate` and friends take the `I` prefix** under the interface rule, and Java's
+  `HollowObjectDelegate` pair — a lookup and a cached implementation per type — keeps that shape:
+  `IHollowObjectDelegate`, `HollowObjectAbstractDelegate`, `HollowObjectGenericDelegate`.
 
 ## Behavioural differences
 
@@ -803,6 +919,29 @@ Java's `HollowBlobInput` abstracts over `DataInputStream` and `RandomAccessFile`
 memory modes; .NET's `Stream` covers both, so the port wraps a stream and reports seekability through
 `CanSeek`.
 
+### A variable-length field with nothing in it has no storage behind it
+
+If a var-length field is null or empty in every record of a type, no byte storage is allocated for it
+at all. Java's readers dereference the storage before checking the length and so throw on such a
+field; the port checks first and reads it as empty. This only became visible with the span reads,
+which is where a type with one empty field is an ordinary case rather than a degenerate one.
+
+### The object mapper registers referenced types before the type that references them
+
+A type appears in the blob after everything it points at, so that a delta — applied type by type in
+that order — lets a listener on the referencing type follow a reference and find the new record rather
+than the one it is replacing. Java gets that order as a side effect of building its sub-mappers inside
+the mapper's constructor; the port's mapper builds them lazily, so it registers them explicitly.
+Nothing noticed until `HollowSparseIntegerSet` arrived, since it is the first delta listener that
+reads record data while the delta is being applied.
+
+### A delta publishes each shard before announcing it
+
+For the same reason, a type read state publishes its new shard array before notifying listeners and
+before returning the storage it replaced to the recycler. A listener may read the records it is being
+told about, and a concurrent reader must not be left pointing at storage that has gone back to the
+pool. Java's ordering is safe only because nothing there reads during the notification.
+
 ## Status
 
 ### Ported and tested
@@ -843,7 +982,14 @@ memory modes; .NET's `Stream` covers both, so the port wraps a stream and report
 | `api.producer` (incremental) | `HollowProducer.RunIncrementalCycle`, `IIncrementalWriteState`/`IncrementalPopulator`, `IIncrementalPopulateListener`, `RecordPrimaryKey`, `HollowObjectMapper.ExtractPrimaryKey`, and the `AddAllObjectsFromPreviousCycle`/`RemoveOrdinalFromThisCycle` family on the write state |
 | `api.producer.enforcer` | `ISingleProducerEnforcer`, `BasicSingleProducerEnforcer` |
 | `api.producer.fs` | `HollowFilesystemBlobStager`, `HollowInMemoryBlobStager`, `HollowFilesystemPublisher`, `HollowFilesystemAnnouncer` |
-| `core.read` (field access) | `HollowReadFieldUtils` |
+| `core.read` (field access) | `HollowReadFieldUtils`, and the allocation-free reads — `ReadStringInto`, `ReadBytesInto`, `TryGetBytesSpan`, `GetVarLengthSequence` on the object data access, with `TryGetSpan`/`CopyTo`/`GetSequence` on `IByteData` behind them |
+| `core.read.missing` | `IMissingDataHandler`, `DefaultMissingDataHandler` |
+| `api.custom` | `HollowApi`, `HollowTypeApi`, `HollowObjectTypeApi`, `HollowListTypeApi`, `HollowSetTypeApi`, `HollowMapTypeApi` |
+| `api.objects` | `IHollowRecord`, `HollowObject`, `HollowList`, `HollowSet`, `HollowMap` |
+| `api.objects.delegate` | `IHollowRecordDelegate`, `IHollowCachedDelegate`, the object delegates, and the list/set/map delegates in both lookup and cached form |
+| `api.objects.generic` | `GenericHollowObject`, `GenericHollowList`, `GenericHollowSet`, `GenericHollowMap` |
+| `api.objects.provider` | `HollowObjectProvider`, `HollowFactory`, `HollowObjectFactoryProvider`, `HollowObjectCacheProvider` |
+| `core.type` | `HollowScalarTypeApi<TValue>` and `HollowScalar<TValue>` with `HString`, `HInteger`, `HLong`, `HDouble`, `HFloat`, `HBoolean` and `HDecimal` over them |
 
 Test coverage is carried over from the Java tests where they exist — `VarIntTest`, `HashCodesTest`,
 `FixedLengthElementArrayTest`, `FreeOrdinalTrackerTest`, `ThreadSafeBitSetTest`,
@@ -913,6 +1059,25 @@ tests are about which sub-records go with a deleted record and which stay — re
 reference to a string drops it, removing one of two does not. `TransitiveSetTraverserTests` covers the
 traversal underneath on its own, over object fields, list elements, set elements and map entries.
 
+`PrefixIndexTests` and `SparseIntegerSetTests` cover the two later indexes, including what each does
+when a delta moves the data underneath it — which is where both went wrong first, and where the two
+delta-ordering differences noted above came from.
+
+`GenericRecordTests` exercises the typed runtime without any generated code, which is the only way to
+test it before a generator exists: every reference is followed by name and comes back as another
+generic record, so the wrappers, the delegates and the missing-data fallback are all on the path.
+`TypedApiTests` covers the other direction with a hand-written API of exactly the shape a generator
+would emit — a `MovieApi`, a `MovieTypeApi`, a delegate, a record wrapper and a factory — since the
+question that matters for the generator is whether that shape works, not whether a string was
+emitted correctly. It includes a client whose model has a field the dataset does not, which is the
+case the missing-data handler exists for.
+
+`SpanReadTests` asserts that an allocation-free read returns exactly what the allocating one does, for
+both strings and bytes, and pins the cases where the cheap path is not available: a string is never a
+view, a byte field straddling a segment boundary is copied rather than viewed, and a value inside one
+segment is a view into storage. The multi-segment sequence is read back through a `SequenceReader` on
+the theory that if it composes with the BCL's own reader it is a real `ReadOnlySequence`.
+
 `FilesystemProducerTests` is the only test where a real producer and a real consumer share a real
 directory. Everything else uses in-memory stand-ins on one side or the other, so this is what would
 catch a producer and a consumer that each work but do not agree on a file name, a staging step or the
@@ -944,14 +1109,16 @@ sets of `TypeFilter` exist; the recursive rule DSL is still absent.
   a self-contained addition.
 - **The consumer's optional layers.** Object longevity, metrics collection
   (`api.consumer.metrics`), `api.consumer.data`, and `api.consumer.index` — the last of which wraps
-  the ported indexes in a generated-API-typed façade.
+  the ported indexes in a generated-API-typed façade. That façade is now the only unported part of the
+  runtime the generator targets; see [Porting the code
+  generator](#porting-the-code-generator).
 - **The deprecated `api.client.HollowClient`**, superseded by `HollowConsumer`; only the parts of
   `api.client` that `HollowConsumer` uses are ported.
 - **Tools** (`tools`: diff, history, combine, split, patch — `tools.checksum` is ported because the
   producer's integrity check needs it, and `tools.traverse` because the incremental producer does),
   **code generation** (`api.codegen` — see [Porting the code
   generator](#porting-the-code-generator)), **sampling**
-  (`api.sampling`), and every module outside
+  (`api.sampling`, deliberately — see the same section), and every module outside
   `hollow` — `hollow-diff-ui`, `hollow-explorer-ui`, `hollow-jsonadapter`, `hollow-protoadapter`,
   `hollow-zenoadapter`, `hollow-test`, `hollow-fakedata`.
 - **`GarbageCollectorAwareRecycler`**, which picks a pooling strategy by inspecting the JVM's
@@ -977,10 +1144,10 @@ wide and every other fixed-length field is 64 or fewer.
 The loop is closed: a producer publishes, a consumer follows, and a restarted producer stays on the
 chain. What is left is either an optimisation or a feature on top.
 
-1. The typed API layer — `api.custom`, `api.objects`, `core.type` — which is the prerequisite for
-   everything generated and is useful on its own. See [Porting the code
-   generator](#porting-the-code-generator).
-2. The generator itself, on top of that layer.
+1. `api.consumer.index` — the typed `UniqueKeyIndex` and `HashIndex` façades over the ported indexes.
+   The last piece of the generator's runtime, and the only one a generated API needs that is not
+   there. See [Porting the code generator](#porting-the-code-generator).
+2. The generator itself, on top of the typed layer.
 3. The bulk-copy fast path in the delta applicators, which is a pure optimisation the existing tests
    already guard. The resharding splitters and joiners copy record by record for the same reason and
    would benefit from the same treatment.
