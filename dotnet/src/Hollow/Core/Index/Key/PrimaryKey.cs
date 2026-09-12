@@ -35,9 +35,44 @@ public sealed class PrimaryKey : IEquatable<PrimaryKey>
     private readonly string[] _fieldPaths;
 
     /// <summary>
-    /// Defines a primary key over <paramref name="fieldPaths"/> of <paramref name="type"/>.
+    /// Defines a primary key over <paramref name="fieldPaths"/>, which carry the type they identify.
     /// </summary>
-    /// <exception cref="ArgumentException"><paramref name="fieldPaths"/> is empty.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="fieldPaths"/> is empty, or its paths do not all start at one type.
+    /// </exception>
+    public PrimaryKey(params FieldPath[] fieldPaths)
+        : this(RootOf(fieldPaths), [.. fieldPaths.Select(path => path.Path)])
+    {
+    }
+
+    /// <summary>
+    /// The one type every path in <paramref name="fieldPaths"/> starts at.
+    /// </summary>
+    /// <exception cref="ArgumentException">
+    /// There are no paths, or they do not all start at the same type.
+    /// </exception>
+    private static string RootOf(FieldPath[] fieldPaths)
+    {
+        ArgumentNullException.ThrowIfNull(fieldPaths);
+
+        if (fieldPaths.Length == 0)
+        {
+            throw new ArgumentException("a key needs at least one field path", nameof(fieldPaths));
+        }
+
+        string root = fieldPaths[0].RootTypeName;
+
+        foreach (FieldPath path in fieldPaths)
+        {
+            path.RequireRoot(root);
+        }
+
+        return root;
+    }
+
+    /// <inheritdoc cref="PrimaryKey(FieldPath[])" />
+    /// <param name="type">The type the key identifies.</param>
+    /// <param name="fieldPaths">The key's field paths, written out as text.</param>
     public PrimaryKey(string type, params string[] fieldPaths)
     {
         ArgumentNullException.ThrowIfNull(fieldPaths);

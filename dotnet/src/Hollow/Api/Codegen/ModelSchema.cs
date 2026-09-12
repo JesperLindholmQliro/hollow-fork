@@ -267,4 +267,7 @@ internal sealed class EmitterOptions
 
     /// <summary>Whether to emit a cached delegate per object type.</summary>
     internal bool GenerateCachedDelegates { get; init; } = true;
+
+    /// <summary>Whether to emit the typed field paths.</summary>
+    internal bool GenerateFieldPaths { get; init; } = true;
 }

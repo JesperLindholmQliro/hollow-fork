@@ -87,6 +87,24 @@ internal static class CodeNames
     internal static string ApiKeyLookup(string typeName) => "Find" + Pascal(typeName);
 
     /// <summary>
+    /// The class name for paths that have arrived at <paramref name="typeName"/>.
+    /// </summary>
+    internal static string PathType(string typeName) => Pascal(typeName) + "Path";
+
+    /// <summary>The class name of the container holding every root a path can start at.</summary>
+    /// <remarks>
+    /// A trailing <c>Api</c> is dropped first, so a <c>CatalogueApi</c> client offers
+    /// <c>CataloguePaths</c> rather than <c>CatalogueApiPaths</c>.
+    /// </remarks>
+    internal static string PathRoots(string apiClassName)
+    {
+        string name = Pascal(apiClassName);
+
+        return (name.EndsWith("Api", StringComparison.Ordinal) ? name.Substring(0, name.Length - 3) : name)
+            + "Paths";
+    }
+
+    /// <summary>
     /// The property name for <paramref name="fieldName"/> on a wrapper of <paramref name="typeName"/>.
     /// </summary>
     /// <remarks>

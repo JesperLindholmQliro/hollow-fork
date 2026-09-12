@@ -158,7 +158,7 @@ public class TypedIndexTests
     {
         (HollowConsumer consumer, _, _, _) = Publish(TheMatrix, JohnWick, Rush);
 
-        UniqueKeyIndex<Movie, int> byId = UniqueKeyIndex.From<Movie>(consumer).UsingPath<int>("Id");
+        UniqueKeyIndex<Movie, int> byId = UniqueKeyIndex.From<Movie>(consumer).UsingPathRaw<int>("Id");
 
         Assert.Equal("John Wick", byId.FindMatch(2)?.Title);
         Assert.Equal("Rush", byId.FindMatch(3)?.Title);
@@ -176,7 +176,7 @@ public class TypedIndexTests
 
         UniqueKeyIndex<Movie, int> byId = UniqueKeyIndex.From<Movie>(consumer)
             .BindToPrimaryKey()
-            .UsingPath<int>("Id");
+            .UsingPathRaw<int>("Id");
 
         Assert.Equal("The Matrix", byId.FindMatch(1)?.Title);
     }
@@ -226,15 +226,15 @@ public class TypedIndexTests
 
         // A key member whose type cannot match the field its path resolves to.
         Assert.Throws<ArgumentException>(
-            () => UniqueKeyIndex.From<Movie>(consumer).UsingPath<long>("Id"));
+            () => UniqueKeyIndex.From<Movie>(consumer).UsingPathRaw<long>("Id"));
 
         // A path that is not in the schema at all.
         Assert.Throws<FieldPathException>(
-            () => UniqueKeyIndex.From<Movie>(consumer).UsingPath<int>("NoSuchField"));
+            () => UniqueKeyIndex.From<Movie>(consumer).UsingPathRaw<int>("NoSuchField"));
 
         // An empty match path.
         Assert.Throws<ArgumentException>(
-            () => UniqueKeyIndex.From<Movie>(consumer).UsingPath<int>(string.Empty));
+            () => UniqueKeyIndex.From<Movie>(consumer).UsingPathRaw<int>(string.Empty));
 
         // A type that declares no primary key cannot be bound to one.
         Assert.Throws<InvalidOperationException>(
@@ -254,7 +254,7 @@ public class TypedIndexTests
 
         // The path stops at the reference rather than expanding through it.
         UniqueKeyIndex<Movie, HString> byTitleRecord = UniqueKeyIndex.From<Movie>(consumer)
-            .UsingPath<HString>("Title!");
+            .UsingPathRaw<HString>("Title!");
 
         HString title = api.AllMovies.Single(movie => movie.Title == "John Wick").TitleRecord!;
 
@@ -274,7 +274,7 @@ public class TypedIndexTests
         (HollowConsumer consumer, InMemoryBlobStore store, HollowObjectMapper mapper,
             HollowWriteStateEngine writeEngine) = Publish(TheMatrix);
 
-        UniqueKeyIndex<Movie, int> byId = UniqueKeyIndex.From<Movie>(consumer).UsingPath<int>("Id");
+        UniqueKeyIndex<Movie, int> byId = UniqueKeyIndex.From<Movie>(consumer).UsingPathRaw<int>("Id");
         consumer.AddRefreshListener(byId);
 
         Assert.NotNull(byId.FindMatch(1));
@@ -317,7 +317,7 @@ public class TypedIndexTests
     {
         (HollowConsumer consumer, InMemoryBlobStore store, _, _) = Publish(TheMatrix);
 
-        UniqueKeyIndex<Movie, int> byId = UniqueKeyIndex.From<Movie>(consumer).UsingPath<int>("Id");
+        UniqueKeyIndex<Movie, int> byId = UniqueKeyIndex.From<Movie>(consumer).UsingPathRaw<int>("Id");
 
         HollowConsumer other = new HollowConsumerBuilder()
             .WithBlobRetriever(store)
@@ -328,6 +328,69 @@ public class TypedIndexTests
         Assert.Throws<InvalidOperationException>(() => other.AddRefreshListener(byId));
     }
 
+    // ---- Typed field paths ----
+
+    /// <summary>
+    /// A path given as a value rather than as a string picks the same records, and types the index from
+    /// where it arrives instead of from a type argument the caller has to get right.
+    /// </summary>
+    /// <remarks>
+    /// The generated routes are what a caller actually writes; these are built by hand because this
+    /// test's wrappers stand in for generated ones and have no generator behind them.
+    /// </remarks>
+    [Fact]
+    public void AnIndexTakesAPathAsAValue()
+    {
+        (HollowConsumer consumer, _, _, _) = Publish(TheMatrix, JohnWick, Rush);
+
+        FieldPath<Movie, string> studioName = new("Movie", "Studio.Name.value");
+
+        // No type argument on UsingPath: string comes from the path.
+        HashIndex<Movie, string> byStudio = HashIndex.From<Movie>(consumer).UsingPath(studioName);
+
+        Assert.Equal(
+            ["John Wick", "Rush"],
+            byStudio.FindMatches("Lionsgate").Select(movie => movie.Title).Order(StringComparer.Ordinal));
+
+        using UniqueKeyIndex<Movie, int> byId =
+            UniqueKeyIndex.From<Movie>(consumer).UsingPath(new FieldPath<Movie, int>("Movie", "Id"));
+
+        Assert.Equal("Rush", byId.FindMatch(3)?.Title);
+    }
+
+    /// <summary>
+    /// A select path taken as a value returns the records it arrives at, which is the type argument the
+    /// string form makes the caller repeat.
+    /// </summary>
+    [Fact]
+    public void ASelectPathTakenAsAValueTypesItsResults()
+    {
+        (HollowConsumer consumer, _, _, _) = Publish(TheMatrix, JohnWick, Rush);
+
+        HashIndexSelect<Movie, Actor, string> castByStudio = HashIndex.From<Movie>(consumer)
+            .SelectField(new FieldPath<Movie, Actor>("Movie", "Cast.element"))
+            .UsingPath(new FieldPath<Movie, string>("Movie", "Studio.Name.value"));
+
+        Assert.Equal(
+            ["Chris Hemsworth", "Keanu Reeves"],
+            castByStudio.FindMatches("Lionsgate").Select(actor => actor.Name).Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// A path from another type is caught when it is handed over, since the index's type name is a
+    /// string the compiler cannot tie to the path's root.
+    /// </summary>
+    [Fact]
+    public void AnIndexRefusesAPathFromAnotherType()
+    {
+        (HollowConsumer consumer, _, _, _) = Publish(TheMatrix);
+
+        ArgumentException e = Assert.Throws<ArgumentException>(
+            () => HashIndex.From<Movie>(consumer).UsingPath(new FieldPath<Movie, string>("Actor", "Name.value")));
+
+        Assert.Contains("starts at Actor", e.Message, StringComparison.Ordinal);
+    }
+
     // ---- HashIndex ----
 
     [Fact]
@@ -336,7 +399,7 @@ public class TypedIndexTests
         (HollowConsumer consumer, _, _, _) = Publish(TheMatrix, JohnWick, Rush);
 
         HashIndex<Movie, string> byStudio = HashIndex.From<Movie>(consumer)
-            .UsingPath<string>("Studio.Name.value");
+            .UsingPathRaw<string>("Studio.Name.value");
 
         Assert.Equal(
             ["John Wick", "Rush"],
@@ -356,7 +419,7 @@ public class TypedIndexTests
         (HollowConsumer consumer, _, _, _) = Publish(TheMatrix, JohnWick, Rush);
 
         HashIndex<Movie, string> byActor = HashIndex.From<Movie>(consumer)
-            .UsingPath<string>("Cast.element.Name.value");
+            .UsingPathRaw<string>("Cast.element.Name.value");
 
         Assert.Equal(
             ["John Wick", "The Matrix"],
@@ -373,8 +436,8 @@ public class TypedIndexTests
         (HollowConsumer consumer, _, _, _) = Publish(TheMatrix, JohnWick, Rush);
 
         HashIndexSelect<Movie, Actor, string> castByStudio = HashIndex.From<Movie>(consumer)
-            .SelectField<Actor>("Cast.element")
-            .UsingPath<string>("Studio.Name.value");
+            .SelectFieldRaw<Actor>("Cast.element")
+            .UsingPathRaw<string>("Studio.Name.value");
 
         Assert.Equal(
             ["Chris Hemsworth", "Keanu Reeves"],
@@ -391,8 +454,8 @@ public class TypedIndexTests
         (HollowConsumer consumer, _, _, _) = Publish(TheMatrix, JohnWick);
 
         HashIndexSelect<Movie, GenericHollowObject, int> byYear = HashIndex.From<Movie>(consumer)
-            .SelectField<GenericHollowObject>("Title")
-            .UsingPath<int>("Year");
+            .SelectFieldRaw<GenericHollowObject>("Title")
+            .UsingPathRaw<int>("Year");
 
         Assert.Equal("The Matrix", byYear.FindMatches(1999).Single().GetString("value"));
     }
@@ -405,14 +468,14 @@ public class TypedIndexTests
         // "Year" is an int field, not a reference, so there is no record to select.
         Assert.Throws<ArgumentException>(
             () => HashIndex.From<Movie>(consumer)
-                .SelectField<GenericHollowObject>("Year")
-                .UsingPath<int>("Year"));
+                .SelectFieldRaw<GenericHollowObject>("Year")
+                .UsingPathRaw<int>("Year"));
 
         // A select type with no accessor on the API and no generic form.
         Assert.Throws<ArgumentException>(
             () => HashIndex.From<Movie>(consumer)
-                .SelectField<Studio>("Studio")
-                .UsingPath<int>("Year"));
+                .SelectFieldRaw<Studio>("Studio")
+                .UsingPathRaw<int>("Year"));
     }
 
     /// <summary>
@@ -428,7 +491,7 @@ public class TypedIndexTests
             HollowWriteStateEngine writeEngine) = Publish(TheMatrix, JohnWick);
 
         HashIndex<Movie, string> byActor = HashIndex.From<Movie>(consumer)
-            .UsingPath<string>("Cast.element.Name.value");
+            .UsingPathRaw<string>("Cast.element.Name.value");
         consumer.AddRefreshListener(byActor);
 
         Assert.Equal(2, byActor.FindMatches("Keanu Reeves").Count());
@@ -459,11 +522,11 @@ public class TypedIndexTests
 
         Assert.Equal(
             "UniqueKeyIndex(Movie: Id)",
-            UniqueKeyIndex.From<Movie>(consumer).UsingPath<int>("Id").ToString());
+            UniqueKeyIndex.From<Movie>(consumer).UsingPathRaw<int>("Id").ToString());
 
         Assert.Equal(
             "HashIndex(Movie: select (root) matching Year)",
-            HashIndex.From<Movie>(consumer).UsingPath<int>("Year").ToString());
+            HashIndex.From<Movie>(consumer).UsingPathRaw<int>("Year").ToString());
     }
 
     // ---- Key types, as a caller would declare them. ----

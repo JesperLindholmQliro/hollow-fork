@@ -85,6 +85,7 @@ public sealed class HollowApiSourceGenerator : IIncrementalGenerator
             UseErgonomicShortcuts = first.UseErgonomicShortcuts,
             GenerateUniqueKeyIndexes = first.GenerateUniqueKeyIndexes,
             GenerateCachedDelegates = first.GenerateCachedDelegates,
+            GenerateFieldPaths = first.GenerateFieldPaths,
         };
 
         IReadOnlyDictionary<string, string> files;
@@ -127,6 +128,7 @@ public sealed class HollowApiSourceGenerator : IIncrementalGenerator
         bool useErgonomicShortcuts,
         bool generateUniqueKeyIndexes,
         bool generateCachedDelegates,
+        bool generateFieldPaths,
         Location location)
     {
         internal INamedTypeSymbol Type { get; } = type;
@@ -142,6 +144,8 @@ public sealed class HollowApiSourceGenerator : IIncrementalGenerator
         internal bool GenerateUniqueKeyIndexes { get; } = generateUniqueKeyIndexes;
 
         internal bool GenerateCachedDelegates { get; } = generateCachedDelegates;
+
+        internal bool GenerateFieldPaths { get; } = generateFieldPaths;
 
         internal Location Location { get; } = location;
 
@@ -179,6 +183,7 @@ public sealed class HollowApiSourceGenerator : IIncrementalGenerator
                 Named(attribute, "UseErgonomicShortcuts") as bool? ?? true,
                 Named(attribute, "GenerateUniqueKeyIndexes") as bool? ?? true,
                 Named(attribute, "GenerateCachedDelegates") as bool? ?? true,
+                Named(attribute, "GenerateFieldPaths") as bool? ?? true,
                 context.TargetNode.GetLocation());
         }
 

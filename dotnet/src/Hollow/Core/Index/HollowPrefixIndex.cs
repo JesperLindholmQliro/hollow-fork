@@ -57,13 +57,12 @@ public sealed class HollowPrefixIndex : IHollowTypeStateListener, IDisposable
     private bool _disposed;
 
     /// <summary>
-    /// Indexes the strings <paramref name="fieldPath"/> reaches from <paramref name="type"/>.
+    /// Indexes the strings <paramref name="fieldPath"/> reaches, from the type it starts at.
     /// </summary>
     /// <param name="readStateEngine">The state to index.</param>
-    /// <param name="type">The type whose ordinals a query returns.</param>
     /// <param name="fieldPath">
-    /// The dot-separated path to a string field. It may cross a list, set or map, in which case one
-    /// record is indexed under several keys.
+    /// The path to a string field, which carries the type it starts at. It may cross a list, set or
+    /// map, in which case one record is indexed under several keys.
     /// </param>
     /// <param name="estimatedMaxStringDuplicates">
     /// How many records are expected to share an exactly equal key. A higher value reserves more room
@@ -79,6 +78,34 @@ public sealed class HollowPrefixIndex : IHollowTypeStateListener, IDisposable
     /// a title rather than only at the start of it.
     /// </param>
     /// <exception cref="ArgumentException">The path does not lead to a string field.</exception>
+    public HollowPrefixIndex(
+        HollowReadStateEngine readStateEngine,
+        FieldPath fieldPath,
+        int estimatedMaxStringDuplicates = 1,
+        bool caseSensitive = false,
+        Func<IEnumerable<string>, IEnumerable<string>>? tokenizer = null)
+        : this(
+            readStateEngine,
+            (fieldPath ?? throw new ArgumentNullException(nameof(fieldPath))).RootTypeName,
+            fieldPath.Path,
+            estimatedMaxStringDuplicates,
+            caseSensitive,
+            tokenizer)
+    {
+    }
+
+    /// <inheritdoc cref="HollowPrefixIndex(HollowReadStateEngine, FieldPath, int, bool, Func{IEnumerable{string}, IEnumerable{string}})" />
+    /// <param name="readStateEngine">The state to index.</param>
+    /// <param name="type">The type whose ordinals a query returns.</param>
+    /// <param name="fieldPath">The path to the string field, written out as text.</param>
+    /// <param name="estimatedMaxStringDuplicates">
+    /// How many records are expected to share a key, which sizes the tree's buckets.
+    /// </param>
+    /// <param name="caseSensitive">Whether indexing and querying preserve case.</param>
+    /// <param name="tokenizer">
+    /// Turns a record's strings into the keys it is indexed under, or <see langword="null"/> to index
+    /// each string whole.
+    /// </param>
     public HollowPrefixIndex(
         HollowReadStateEngine readStateEngine,
         string type,

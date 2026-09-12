@@ -82,10 +82,20 @@ public class CodeGeneratorTests
         ["action"],
         new Dictionary<string, Actor> { ["John"] = new Actor("Keanu Reeves", 34) });
 
-    private const string GeneratedNamespace = "Acme.Movies";
+    internal const string GeneratedNamespace = "Acme.Movies";
+
+    /// <summary>
+    /// The generated client, compiled once and shared, for a test that only reads what was emitted
+    /// rather than what it does with data.
+    /// </summary>
+    internal static Assembly CompiledClient() =>
+        GeneratedApiCompiler.Compile(Generator().Generate(typeof(Movie)));
 
     private static HollowCodeGenerator Generator(HollowCodeGeneratorOptions? options = null) =>
         new(options ?? new HollowCodeGeneratorOptions { Namespace = GeneratedNamespace });
+
+    /// <summary>A read state holding the two films, for a test that only needs data to point at.</summary>
+    internal static HollowReadStateEngine TwoFilmsReadState() => Populate(TheMatrix, JohnWick).Read;
 
     /// <summary>Writes the movies and returns a read state over them.</summary>
     private static (HollowWriteStateEngine Write, HollowReadStateEngine Read, HollowObjectMapper Mapper)

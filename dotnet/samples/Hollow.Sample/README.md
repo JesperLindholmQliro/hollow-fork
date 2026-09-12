@@ -32,6 +32,8 @@ time and emits the client the consumer reads them back through.
 - following a delta in place rather than reloading, and asking the result what the cycle changed
 - four ways to find a record by key, from `api.FindMovie(new MoviePrimaryKey(5))` down to the untyped
   core index the rest are built on
+- typed field paths — `CataloguePaths.Movie.Studio.Name.Value` rather than `"Studio.Name.value"` —
+  which the indexes take in place of a string and take their own query type from
 - a hash index matching many records, and one that matches on one type and returns another
 - prefix search over titles, with a tokenizer that makes a query match a word anywhere in one
 - reading a string into a stack buffer instead of allocating one

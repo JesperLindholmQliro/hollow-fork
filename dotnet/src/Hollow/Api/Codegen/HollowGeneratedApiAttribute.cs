@@ -81,4 +81,10 @@ public sealed class HollowGeneratedApiAttribute : Attribute
     /// default.
     /// </summary>
     public bool GenerateCachedDelegates { get; init; } = true;
+
+    /// <summary>
+    /// Whether to emit the typed field paths, which let an index be given a route through the model
+    /// rather than a string.
+    /// </summary>
+    public bool GenerateFieldPaths { get; init; } = true;
 }

@@ -79,11 +79,28 @@ public sealed class HashIndexBuilder<T>
         new(_consumer, _typeName, string.Empty, matchPath: null, typeof(TQuery));
 
     /// <summary>
-    /// Matches on one field path, where the query is the value itself, and returns the root records
-    /// that match.
+    /// Matches on <paramref name="queryFieldPath"/>, where the query is the value the path arrives at,
+    /// and returns the root records that match.
+    /// </summary>
+    /// <remarks>
+    /// The query type comes from the path, so there is nothing to state twice and nothing to get
+    /// wrong: <c>UsingPath(CataloguePaths.Movie.Tags.Element.Value)</c> is a
+    /// <see cref="HashIndex{T, TQuery}"/> of <c>string</c> because the path is.
+    /// </remarks>
+    public HashIndex<T, TQuery> UsingPath<TQuery>(FieldPath<T, TQuery> queryFieldPath)
+    {
+        ArgumentNullException.ThrowIfNull(queryFieldPath);
+
+        queryFieldPath.RequireRoot(_typeName);
+
+        return UsingPathRaw<TQuery>(queryFieldPath.Path);
+    }
+
+    /// <summary>
+    /// Matches on one field path written out as text, for a path the generated ones cannot express.
     /// </summary>
     /// <typeparam name="TQuery">The query type.</typeparam>
-    public HashIndex<T, TQuery> UsingPath<TQuery>(string queryFieldPath)
+    public HashIndex<T, TQuery> UsingPathRaw<TQuery>(string queryFieldPath)
     {
         ArgumentException.ThrowIfNullOrEmpty(queryFieldPath);
 
@@ -94,12 +111,30 @@ public sealed class HashIndexBuilder<T>
     /// Returns the records at <paramref name="selectFieldPath"/> rather than the root records that
     /// match.
     /// </summary>
+    /// <remarks>
+    /// The path has to arrive at a record rather than at a value, which the generated paths make plain:
+    /// <c>CataloguePaths.Movie.Cast.Element</c> is an <c>Actor</c>, and its <c>.Name</c> is not.
+    /// </remarks>
+    public HashIndexSelectBuilder<T, TSelect> SelectField<TSelect>(FieldPath<T, TSelect> selectFieldPath)
+        where TSelect : IHollowRecord
+    {
+        ArgumentNullException.ThrowIfNull(selectFieldPath);
+
+        selectFieldPath.RequireRoot(_typeName);
+
+        return SelectFieldRaw<TSelect>(selectFieldPath.Path);
+    }
+
+    /// <summary>
+    /// Returns the records at a select path written out as text, for a path the generated ones cannot
+    /// express.
+    /// </summary>
     /// <typeparam name="TSelect">The type the path resolves to.</typeparam>
     /// <remarks>
     /// The path has to name a record — <c>"cast.element"</c>, not <c>"cast.element.name"</c>. Java
     /// takes the select type as a <c>Class</c> argument; here it is the type argument.
     /// </remarks>
-    public HashIndexSelectBuilder<T, TSelect> SelectField<TSelect>(string selectFieldPath)
+    public HashIndexSelectBuilder<T, TSelect> SelectFieldRaw<TSelect>(string selectFieldPath)
         where TSelect : IHollowRecord
     {
         ArgumentNullException.ThrowIfNull(selectFieldPath);
@@ -144,7 +179,20 @@ public sealed class HashIndexSelectBuilder<T, TSelect>
     /// Matches on one field path, where the query is the value itself.
     /// </summary>
     /// <typeparam name="TQuery">The query type.</typeparam>
-    public HashIndexSelect<T, TSelect, TQuery> UsingPath<TQuery>(string queryFieldPath)
+    public HashIndexSelect<T, TSelect, TQuery> UsingPath<TQuery>(FieldPath<T, TQuery> queryFieldPath)
+    {
+        ArgumentNullException.ThrowIfNull(queryFieldPath);
+
+        queryFieldPath.RequireRoot(_typeName);
+
+        return UsingPathRaw<TQuery>(queryFieldPath.Path);
+    }
+
+    /// <summary>
+    /// Matches on one field path written out as text, for a path the generated ones cannot express.
+    /// </summary>
+    /// <typeparam name="TQuery">The query type.</typeparam>
+    public HashIndexSelect<T, TSelect, TQuery> UsingPathRaw<TQuery>(string queryFieldPath)
     {
         ArgumentException.ThrowIfNullOrEmpty(queryFieldPath);
 

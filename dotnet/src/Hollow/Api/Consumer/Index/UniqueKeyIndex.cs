@@ -132,10 +132,26 @@ public sealed class UniqueKeyIndexBuilder<T>
     /// type argument, so the two cannot disagree.
     /// </remarks>
     /// <exception cref="ArgumentException">
+    /// <paramref name="keyFieldPath"/> starts at another type.
+    /// </exception>
+    public UniqueKeyIndex<T, TKey> UsingPath<TKey>(FieldPath<T, TKey> keyFieldPath)
+    {
+        ArgumentNullException.ThrowIfNull(keyFieldPath);
+
+        keyFieldPath.RequireRoot(_typeName);
+
+        return UsingPathRaw<TKey>(keyFieldPath.Path);
+    }
+
+    /// <summary>
+    /// Matches on one field path written out as text, for a path the generated ones cannot express.
+    /// </summary>
+    /// <typeparam name="TKey">The key type.</typeparam>
+    /// <exception cref="ArgumentException">
     /// <paramref name="keyFieldPath"/> is empty or invalid, or <typeparamref name="TKey"/> cannot match
     /// the field it resolves to.
     /// </exception>
-    public UniqueKeyIndex<T, TKey> UsingPath<TKey>(string keyFieldPath)
+    public UniqueKeyIndex<T, TKey> UsingPathRaw<TKey>(string keyFieldPath)
     {
         ArgumentException.ThrowIfNullOrEmpty(keyFieldPath);
 

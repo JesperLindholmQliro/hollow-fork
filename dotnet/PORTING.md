@@ -499,6 +499,50 @@ Making the API own an index is what turned up a latent bug: nothing in this port
 that had since been overwritten. `HollowDataHolder` now detaches the outgoing API before building the
 new one.
 
+### A field path is a value, not a string
+
+Java's indexes take their paths as text: `usingPath("Studio.Name.value", String.class)`. A typo is a
+runtime failure, the type the path arrives at is something the caller has to know and repeat, and
+nothing stops a path for one type being handed to an index over another.
+
+The generator emits the paths instead, modelled on Swift's `KeyPath`:
+
+```csharp
+HashIndex<Movie, string> byStudio =
+    HashIndex.From<Movie>(consumer).UsingPath(CataloguePaths.Movie.Studio.Name.Value);
+
+HashIndexSelect<Movie, Actor, string> castByStudio = HashIndex.From<Movie>(consumer)
+    .SelectField(CataloguePaths.Movie.Cast.Element)
+    .UsingPath(CataloguePaths.Movie.Studio.Name.Value);
+```
+
+`CataloguePaths.Movie.Studio.Name.Value` is a `FieldPath<Movie, string>`, so `UsingPath` infers its
+query type rather than being told it. Both ends are type arguments, as in `KeyPath<Root, Value>`: the
+value so an index can type itself, and the root so a path cannot be handed to an index over some other
+type. The root is also carried as a type *name*, because the index underneath binds against the schema
+rather than against CLR types — `RequireRoot` checks it where the compiler cannot.
+
+Each step is itself a path, which is what makes a route that stops early as usable as one that runs to
+a value: `CataloguePaths.Movie.Studio` is a `FieldPath<Movie, Studio>` and also the thing `.Name` hangs
+off. That works because a generated step class *derives from* the path type rather than converting to
+one. The root is a type parameter on the step class rather than baked into it, so the generator emits a
+class per type rather than per route — which is what stops a model that references itself generating
+forever.
+
+Two things follow from the schema rather than from the model, and surprise people:
+
+- A route crosses a reference where the model looks like it holds a value. A `string Title` is a
+  reference to the shared `String` type, so the route is `Title.Value`, not `Title`. So is a nullable
+  `decimal` or `byte[]`.
+- A collection step is named for the schema's own field: `.Element` on a list or set, `.Key` and
+  `.Value` on a map, spelling `element`, `key` and `value`.
+
+The methods that still take text are suffixed `Raw` — `UsingPathRaw`, `SelectFieldRaw` — for a path the
+generated routes cannot express. Constructors could not be renamed, so `HollowPrefixIndex`,
+`HollowPrimaryKeyIndex`, `HollowUniqueKeyIndex` and `PrimaryKey` gained overloads taking paths
+alongside the string ones they already had. `[FieldPath]`, which `UsingBean` reads, is still a string:
+an attribute argument cannot be anything else.
+
 ### Testing it
 
 Java's generator tests write the output to a temporary directory and shell out to the JDK compiler,
@@ -509,6 +553,11 @@ of every type, which is what catches a field position resolved wrongly.
 
 The emitted text itself is deliberately not pinned. It is an implementation detail, and a test over it
 turns every improvement into a test change.
+
+`FieldPathTests` compiles a client and walks its generated routes by reflection, checking that each
+spells the text the string form spelled and arrives at the type it claims — and then builds a real
+index from one, because the schema has the last word on whether a path resolves. The two ends matter
+separately: the spelling is the generator's, the resolution is the dataset's.
 
 `SourceGeneratorTests` drives the source generator the way the compiler does, then compiles and runs
 what it produced. Its load-bearing test is the one that declares a model twice — once as source, once

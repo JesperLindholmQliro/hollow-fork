@@ -235,14 +235,15 @@ internal static class Consuming
         Output.Item($"the standalone index, id 5 → {byId.FindMatch(new MoviePrimaryKey(5))?.Title}");
 
         // An index on a path the model does not declare as unique, for when the key you have is not
-        // the key the producer enforces.
+        // the key the producer enforces. The path is a value rather than a string: the compiler wrote
+        // it from the model, and the index takes its key type from where the path arrives.
         using UniqueKeyIndex<Movie, string> byTitle =
-            UniqueKeyIndex.From<Movie>(consumer).UsingPath<string>("Title.value");
+            UniqueKeyIndex.From<Movie>(consumer).UsingPath(CataloguePaths.Movie.Title.Value);
 
         Output.Item($"by title, \"Casablanca\" → released {byTitle.FindMatch("Casablanca")?.ReleaseYear}");
 
         // And what all of them are built on, which returns an ordinal rather than a record.
-        using HollowPrimaryKeyIndex raw = new(consumer.StateEngine!, "Movie", "Id");
+        using HollowPrimaryKeyIndex raw = new(consumer.StateEngine!, CataloguePaths.Movie.Id);
 
         Output.Item($"the core index, id 5 → ordinal {Output.Number(raw.GetMatchingOrdinal(5))}");
     }
@@ -256,9 +257,9 @@ internal static class Consuming
         Output.Step("Finding many records by a value");
 
         // Every film carrying a tag. The path walks into the set, so one film with three tags is found
-        // by any of them.
+        // by any of them — and it walks there through Element, which is the set's own step.
         HashIndex<Movie, string> byTag =
-            HashIndex.From<Movie>(consumer).UsingPath<string>("Tags.element.value");
+            HashIndex.From<Movie>(consumer).UsingPath(CataloguePaths.Movie.Tags.Element.Value);
 
         foreach (string tag in (string[])["science fiction", "drama", "animation"])
         {
@@ -272,8 +273,8 @@ internal static class Consuming
         // Matching on one type and returning another: query by studio, get the actors. The select path
         // names a record rather than a value, which is what makes the result an Actor.
         HashIndexSelect<Movie, Actor, string> castByStudio = HashIndex.From<Movie>(consumer)
-            .SelectField<Actor>("Cast.element")
-            .UsingPath<string>("Studio.Name.value");
+            .SelectField(CataloguePaths.Movie.Cast.Element)
+            .UsingPath(CataloguePaths.Movie.Studio.Name.Value);
 
         Output.Item(
             "everyone billed in a Toho film: "
@@ -294,8 +295,7 @@ internal static class Consuming
         // "away" match "Spirited Away" rather than only titles that begin with it.
         using HollowPrefixIndex titles = new(
             consumer.StateEngine!,
-            "Movie",
-            "Title.value",
+            CataloguePaths.Movie.Title.Value,
             tokenizer: keys => keys.SelectMany(key => key.Split(' ', StringSplitOptions.RemoveEmptyEntries)));
 
         CatalogueApi api = Api(consumer);

@@ -53,9 +53,18 @@ public sealed class HollowUniqueKeyIndex : IHollowTypeStateListener, IDisposable
     private readonly UniqueKeyHashTable _hashTable;
 
     /// <summary>
-    /// Indexes <paramref name="type"/> of <paramref name="dataAccess"/> by <paramref name="fieldPaths"/>,
-    /// or by the type's declared primary key when none are given.
+    /// Indexes <paramref name="dataAccess"/> by <paramref name="fieldPaths"/>, which carry the type
+    /// they start at.
     /// </summary>
+    public HollowUniqueKeyIndex(IHollowDataAccess dataAccess, params FieldPath[] fieldPaths)
+        : this(dataAccess, new PrimaryKey(fieldPaths))
+    {
+    }
+
+    /// <inheritdoc cref="HollowUniqueKeyIndex(IHollowDataAccess, FieldPath[])" />
+    /// <param name="dataAccess">The dataset to index.</param>
+    /// <param name="type">The type whose records are indexed.</param>
+    /// <param name="fieldPaths">The key's field paths, written out as text.</param>
     public HollowUniqueKeyIndex(IHollowDataAccess dataAccess, string type, params string[] fieldPaths)
         : this(dataAccess, ResolveKey(dataAccess, type, fieldPaths))
     {

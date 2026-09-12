@@ -218,7 +218,8 @@ public class SourceGeneratorTests
                 ApiClassName = "BareApi",
                 UseErgonomicShortcuts = false,
                 GenerateUniqueKeyIndexes = false,
-                GenerateCachedDelegates = false)]
+                GenerateCachedDelegates = false,
+                GenerateFieldPaths = false)]
             [HollowPrimaryKey("Id")]
             public sealed record Thing(int Id, string Label);
             """;
@@ -240,6 +241,10 @@ public class SourceGeneratorTests
         // And no cached delegate was emitted for it.
         Assert.Null(assembly.GetType("Acme.Bare.ThingCachedDelegate"));
         Assert.NotNull(assembly.GetType("Acme.Bare.ThingLookupDelegate"));
+
+        // Nor any of the typed routes.
+        Assert.DoesNotContain("BareApi.BarePaths.cs", files);
+        Assert.Null(assembly.GetType("Acme.Bare.BarePaths"));
     }
 
     /// <summary>

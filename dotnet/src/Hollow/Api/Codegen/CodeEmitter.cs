@@ -70,6 +70,11 @@ internal sealed class CodeEmitter(EmitterOptions options)
 
         files[_options.ApiClassName + ".cs"] = GenerateApi(model);
 
+        if (_options.GenerateFieldPaths)
+        {
+            files[CodeNames.PathRoots(_options.ApiClassName) + ".cs"] = GenerateFieldPaths(model);
+        }
+
         return files;
     }
 
@@ -765,6 +770,169 @@ internal sealed class CodeEmitter(EmitterOptions options)
         writer.Line("            .Select(record => record!)");
         writer.Line("        : [];");
     }
+
+    // ---- The typed field paths ----
+
+    /// <summary>
+    /// Emits a class per type describing what can be reached from a record of it, and a container
+    /// naming every type a route may start at.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Each class both <em>is</em> a path — it derives from <c>FieldPath&lt;TRoot, TValue&gt;</c> — and
+    /// carries the steps that continue it, so <c>CataloguePaths.Movie.Studio</c> is a usable path to a
+    /// <c>Studio</c> and <c>CataloguePaths.Movie.Studio.Name.Value</c> is one to a <c>string</c>.
+    /// </para>
+    /// <para>
+    /// The root is a type parameter rather than baked into each class, so the number of classes is the
+    /// number of types rather than the number of routes — which is what keeps a model that references
+    /// itself from generating forever.
+    /// </para>
+    /// </remarks>
+    private string GenerateFieldPaths(GeneratedModel model)
+    {
+        CodeWriter writer = new();
+
+        Preamble(writer);
+
+        writer.Line("/// <summary>");
+        writer.Line("/// Every record type a path can start at.");
+        writer.Line("/// </summary>");
+        writer.Line("/// <remarks>");
+        writer.Line("/// A route written this way is checked by the compiler and carries what it arrives");
+        writer.Line("/// at, so an index takes it in place of a string and types itself from it.");
+        writer.Line("/// </remarks>");
+
+        using (writer.Open($"public static class {CodeNames.PathRoots(_options.ApiClassName)}"))
+        {
+            bool first = true;
+
+            foreach (GeneratedType type in model.Types.Where(CanRootAPath))
+            {
+                if (!first)
+                {
+                    writer.Blank();
+                }
+
+                first = false;
+
+                string pathType = $"{CodeNames.PathType(type.TypeName)}<{type.RecordType}>";
+
+                writer.Doc($"Routes that start at a <c>{type.TypeName}</c> record.");
+                writer.Line(
+                    $"public static {pathType} {CodeNames.Pascal(type.TypeName)} {{ get; }} ="
+                    + $" new({Quote(type.TypeName)}, \"\");");
+            }
+        }
+
+        foreach (GeneratedType type in model.Types)
+        {
+            writer.Blank();
+            EmitPathType(writer, model, type);
+        }
+
+        return writer.ToString();
+    }
+
+    /// <summary>
+    /// Whether a route can start at <paramref name="type"/>, which a collection or a scalar wrapper is
+    /// never the root of — nothing holds one without holding the record that references it.
+    /// </summary>
+    private static bool CanRootAPath(GeneratedType type) =>
+        type.Kind == ModelSchemaKind.Object && type.BuiltIn is null;
+
+    private void EmitPathType(CodeWriter writer, GeneratedModel model, GeneratedType type)
+    {
+        string pathType = CodeNames.PathType(type.TypeName);
+
+        writer.Doc(
+            $"A route that has arrived at a <c>{type.TypeName}</c> record, and what continues from it.");
+        writer.Line($"public sealed class {pathType}<TRoot> : FieldPath<TRoot, {type.RecordType}>");
+
+        using (writer.Open())
+        {
+            writer.Doc($"Creates the route <paramref name=\"path\"/> from <paramref name=\"rootTypeName\"/>.");
+            writer.Line($"public {pathType}(string rootTypeName, string path)");
+            writer.Line("    : base(rootTypeName, path)");
+            using (writer.Open())
+            {
+            }
+
+            foreach ((string name, string step, string segment, string documented) in PathSteps(model, type))
+            {
+                writer.Blank();
+                writer.Doc(documented);
+                writer.Line($"public {step} {name} => new(RootTypeName, Extend({Quote(segment)}));");
+            }
+        }
+    }
+
+    /// <summary>
+    /// The steps that continue a route standing at <paramref name="type"/>, as the property name, the
+    /// type it returns, the schema field it spells, and what to say about it.
+    /// </summary>
+    /// <remarks>
+    /// The property is named for the C# member rather than the schema field, so that a route reads like
+    /// the record wrapper it mirrors; the schema field name is what the path text carries.
+    /// </remarks>
+    private IEnumerable<(string Name, string StepType, string Segment, string Documentation)> PathSteps(
+        GeneratedModel model, GeneratedType type)
+    {
+        switch (type.Kind)
+        {
+            case ModelSchemaKind.Object:
+                foreach (GeneratedField field in type.Fields)
+                {
+                    yield return (
+                        CodeNames.Property(type.TypeName, field.Name),
+                        StepTypeFor(model, field),
+                        field.Name,
+                        $"The <c>{field.Name}</c> of this <c>{type.TypeName}</c>.");
+                }
+
+                break;
+
+            case ModelSchemaKind.List:
+            case ModelSchemaKind.Set:
+                yield return (
+                    "Element",
+                    RecordStepType(model, type.ElementType!),
+                    "element",
+                    $"Any one element of this <c>{type.TypeName}</c>.");
+
+                break;
+
+            case ModelSchemaKind.Map:
+                yield return (
+                    "Key",
+                    RecordStepType(model, type.KeyType!),
+                    "key",
+                    $"Any one key of this <c>{type.TypeName}</c>.");
+
+                yield return (
+                    "Value",
+                    RecordStepType(model, type.ValueType!),
+                    "value",
+                    $"The value under any one key of this <c>{type.TypeName}</c>.");
+
+                break;
+
+            default:
+                throw new ArgumentOutOfRangeException(nameof(type), type.Kind, "unknown record kind");
+        }
+    }
+
+    /// <summary>
+    /// The type a step along <paramref name="field"/> returns: another route where the field points at
+    /// a record, and the end of the line where it holds a value.
+    /// </summary>
+    private static string StepTypeFor(GeneratedModel model, GeneratedField field) =>
+        field.IsReference
+            ? RecordStepType(model, field.ReferencedType!)
+            : $"FieldPath<TRoot, {CodeNames.ValueTypeOf(field.Type).TrimEnd('?')}>";
+
+    private static string RecordStepType(GeneratedModel model, string typeName) =>
+        $"{CodeNames.PathType(typeName)}<TRoot>";
 
     // ---- The unique-key index ----
 
