@@ -66,6 +66,30 @@ public sealed class IntList
     /// <summary>Empties the list without releasing its storage.</summary>
     public void Clear() => Count = 0;
 
+    /// <summary>Puts the values in ascending order.</summary>
+    /// <remarks>
+    /// The diff compares two collections by the identities of their elements. A set has no order of its
+    /// own, so the two sides are only comparable once both have been put in one.
+    /// </remarks>
+    public void Sort() => Array.Sort(_values, 0, Count);
+
+    /// <summary>The values, in order, without copying them.</summary>
+    public ReadOnlySpan<int> AsSpan() => _values.AsSpan(0, Count);
+
+    /// <summary>
+    /// Whether <paramref name="other"/> holds the same values in the same order.
+    /// </summary>
+    /// <remarks>
+    /// Java overrides <c>equals</c> for this. Here it is a named method, because a mutable list that
+    /// compares by value is a trap as a dictionary key and nothing needs it to be one.
+    /// </remarks>
+    public bool ValuesEqual(IntList other)
+    {
+        ArgumentNullException.ThrowIfNull(other);
+
+        return AsSpan().SequenceEqual(other.AsSpan());
+    }
+
     private void EnsureCapacity(int required)
     {
         if (required <= _values.Length)
