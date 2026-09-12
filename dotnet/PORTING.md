@@ -469,6 +469,36 @@ renders itself in Hollow's schema syntax precisely so that comparison can be mad
 includes hash keys, which nothing the emitters produce depends on: describing the model in full rather
 than only in the part that matters today is what makes the check worth having.
 
+### A primary key is a record, not an argument list
+
+Java's generated index takes the key's fields positionally, as `Object...`. Two `String` key fields
+passed the wrong way round compile and then silently match nothing. The generator here emits a record
+for the key instead — `MoviePrimaryKey(int Id)`, `ScreeningPrimaryKey(string Title, int Year)` — and
+the index takes that, so the compiler checks the names, the types and the order.
+
+Each component is resolved by walking the model rather than by reading one segment of the path, so a
+key that crosses a reference still gets a real type: `@PrimaryKey(Name)` on a type whose `Name` is a
+`String` reference gives `string`, because that is what the index auto-expands the path to and matches
+on. Only a path the model cannot follow falls back to `object`. Two paths ending in the same segment
+would give the record two properties of one name, so where that happens the whole path names them.
+
+The API itself gets the lookup, which is the shape most callers want:
+
+```csharp
+Movie? film = api.FindMovie(new MoviePrimaryKey(5));
+```
+
+It builds the index on first use, keeps it, and has it follow deltas, so repeated lookups against one
+version cost one build. The index then lives exactly as long as the API does — a delta leaves both in
+place, and a snapshot replaces both. The standalone `{Type}UniqueKeyIndex` is still generated for an
+application that would rather the build happened on refresh than on the first lookup, and it is still
+what a `HollowConsumer` registers as a refresh listener. Java offers only the standalone index.
+
+Making the API own an index is what turned up a latent bug: nothing in this port ever called
+`HollowApi.DetachCaches`, so a replaced API's cached delegates stayed registered against type states
+that had since been overwritten. `HollowDataHolder` now detaches the outgoing API before building the
+new one.
+
 ### Testing it
 
 Java's generator tests write the output to a temporary directory and shell out to the JDK compiler,
@@ -490,6 +520,35 @@ share, so it is the only one that can drift.
 
 Java's three independent extras — a POJO generator, a "performance API" generator and a test-data
 builder generator, around 1,900 lines between them — are not ported, and nothing else depends on them.
+
+
+## The sample
+
+`samples/Hollow.Sample` is a runnable console application that is the whole loop in one process: a
+producer publishing a catalogue of films to a directory of blobs, and a consumer following it and
+reading it back through a client the source generator wrote at compile time.
+
+```
+dotnet run --project samples/Hollow.Sample
+```
+
+It exists partly as documentation and partly as a test nothing else is: every other test either
+exercises one layer or builds its own scaffolding, whereas the sample uses the library the way a
+caller would, from the filesystem publisher through to the generated indexes. Two defects in this port
+were found by writing it — the code generator naming every API `GeneratedApi`, and an ergonomic
+shortcut emitting the wrong property name for an enum — neither of which the unit tests had noticed.
+
+Its `README.md` lists what it covers. Two things in it are worth naming here because they are not
+obvious:
+
+- **A refused cycle's blobs are still published.** Publication happens before validation; only the
+  announcement is withheld. So a cycle the validators refuse leaves a second delta hanging off the
+  version before it, and a consumer can only follow one of them — the next announced version is then
+  reached by a snapshot rather than by a delta. Java behaves the same way. The sample runs its refused
+  cycle last so that the chain it demonstrates stays clean.
+- **A consumer with an announcement watcher cannot be pointed at a version.** It follows what was
+  announced, and `TriggerRefreshTo` throws. The sample uses a version-pinned consumer to walk the
+  chain step by step and a watcher-driven one to show what production looks like.
 
 
 ## Culture-invariant formatting and parsing
@@ -630,6 +689,7 @@ where a record lands in a blob has to keep producing the same answer across runt
 | --- | --- |
 | `hollow/src/main/java/com/netflix/hollow/...` | `dotnet/src/Hollow/...` |
 | `hollow/src/test/java/com/netflix/hollow/...` | `dotnet/tests/Hollow.Tests/...` |
+| (no equivalent) | `dotnet/samples/Hollow.Sample/` |
 | package `com.netflix.hollow.core.memory.encoding` | namespace `Hollow.Core.Memory.Encoding` |
 | package `com.netflix.hollow.api.error` | namespace `Hollow.Api.Error` |
 | package `com.netflix.hollow.api.consumer` | namespace `Hollow.Api.Consumer` |
@@ -915,6 +975,27 @@ A validator that throws is a separate case, and here Java and this port agree: a
 cannot vouch for the data, so it becomes an `Error` result and fails the cycle. The other validators
 still run first, so one report says everything that is wrong at once.
 
+### The change validators tell a replacement from an add and a remove themselves
+
+`ObjectModificationValidator` and `RecordCountPercentChangeValidator` judge what a cycle *did* rather
+than what it holds, which the blob format does not record: an ordinal holds one value forever, so a
+record is only ever added or removed. Telling a replacement apart needs the type's primary key, and
+Java does that inside `AbstractHollowDataAccessor` — the base class of the `api.consumer.data` record
+collections, which are not ported. Here it is `RecordChangeSet.Compute`, standing on its own. That
+also makes it usable without materialising a record per change, which the Java base class forces.
+
+Three departures in the validators themselves:
+
+- `ChangeThreshold` leaves an unset bound **unchecked**, where Java encodes "unset" as a negative
+  number. A caller cannot pass Java's sentinel by accident because there is nothing to pass.
+- A constant bound is range-checked **where it is written**, not cycles later. A threshold read afresh
+  each cycle cannot be, so that one is checked when it is read and a nonsensical value becomes an
+  `Error` result rather than an exception escaping `OnValidate`.
+- `ObjectModificationValidator<T>` takes one function from data access and ordinal to record, where
+  Java takes two — one building the API, one reading a record out of it — and is generic in the API
+  type as well. A generated API's accessor fits the single function directly:
+  `(dataAccess, ordinal) => new CatalogueApi(dataAccess).GetMovie(ordinal)!`.
+
 ### The blob compressor compresses staging, not the blob store
 
 `IBlobCompressor` wraps the bytes a blob is *staged* as. A publisher reads a staged blob back through
@@ -1074,7 +1155,8 @@ pool. Java's ordering is safe only because nothing there reads during the notifi
 | `api.client` | `HollowUpdatePlan`, `HollowUpdatePlanner`, `FailedTransitionTracker`, `HollowDataHolder`, `HollowClientUpdater` |
 | `api.producer` | `HollowProducer` and `HollowProducerBuilder`, the cycle with its rollback, `Restore`, `Blob`/`HeaderBlob`/`IPublishArtifact`, `IBlobStager`, `IPublisher`, `IAnnouncer`, `IVersionMinter`/`VersionMinterWithCounter`, `IBlobCompressor`, `IWriteState`/`IReadState`/`Populator`, `Status`, `ReadStateHelper` |
 | `api.producer.listener` | The per-stage listener interfaces, `HollowProducerListener` as a no-op base, `IVetoableListener`/`ListenerVetoException` |
-| `api.producer.validation` | `IValidatorListener`, `ValidationResult` and its builder, `ValidationStatus`, `ValidationStatusException`, `DuplicateDataDetectionValidator`, `RecordCountVarianceValidator` |
+| `api.producer.validation` | `IValidatorListener`, `ValidationResult` and its builder, `ValidationStatus`, `ValidationStatusException`, `DuplicateDataDetectionValidator`, `RecordCountVarianceValidator`, `MinimumRecordCountValidator`, `NullPrimaryKeyFieldValidator`, `ObjectModificationValidator`, `RecordCountPercentChangeValidator` with `ChangeThreshold` |
+| `core.read.engine` (change set) | `RecordChangeSet`, the added/removed/replaced computation Java keeps inside `AbstractHollowDataAccessor` |
 | `api.producer` (incremental) | `HollowProducer.RunIncrementalCycle`, `IIncrementalWriteState`/`IncrementalPopulator`, `IIncrementalPopulateListener`, `RecordPrimaryKey`, `HollowObjectMapper.ExtractPrimaryKey`, and the `AddAllObjectsFromPreviousCycle`/`RemoveOrdinalFromThisCycle` family on the write state |
 | `api.producer.enforcer` | `ISingleProducerEnforcer`, `BasicSingleProducerEnforcer` |
 | `api.producer.fs` | `HollowFilesystemBlobStager`, `HollowInMemoryBlobStager`, `HollowFilesystemPublisher`, `HollowFilesystemAnnouncer` |
@@ -1215,11 +1297,8 @@ sets of `TypeFilter` exist; the recursive rule DSL is still absent.
 - **Shared-memory mode.** `MemoryMode.SharedMemoryLazy` and the `BlobByteBuffer`, `EncodedByteBuffer`
   and `EncodedLongBuffer` types behind it. Constructing a read state engine with it throws.
 - **Optional blob parts**, which split a snapshot across several streams.
-- **Producer metrics** (`api.producer.metrics`), asynchronous snapshot publishing, the blob storage
-  cleaner, and the remaining validators
-  (`MinimumRecordCountValidator`, `NullPrimaryKeyFieldValidator`, `ObjectModificationValidator`,
-  `RecordCountPercentChangeValidator`). The validation framework they plug into is ported, so each is
-  a self-contained addition.
+- **Producer metrics** (`api.producer.metrics`), asynchronous snapshot publishing, and the blob
+  storage cleaner.
 - **The consumer's optional layers.** Object longevity, metrics collection
   (`api.consumer.metrics`) and `api.consumer.data`.
 - **The deprecated `api.client.HollowClient`**, superseded by `HollowConsumer`; only the parts of
@@ -1258,5 +1337,4 @@ optimisation or a feature on top.
 1. The bulk-copy fast path in the delta applicators, which is a pure optimisation the existing tests
    already guard. The resharding splitters and joiners copy record by record for the same reason and
    would benefit from the same treatment.
-2. The remaining validators, each a self-contained addition to the ported framework.
-3. Partitioned ordinal maps, which is the last write-side difference from Java's defaults.
+2. Partitioned ordinal maps, which is the last write-side difference from Java's defaults.

@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Hollow.Sample</RootNamespace>
+
+    <!-- A sample explains itself in prose rather than in XML doc comments. -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+
+    <!-- Writes the generated client to obj/generated so it can be read like any other source. -->
+    <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+    <CompilerGeneratedFilesOutputPath>$(BaseIntermediateOutputPath)generated</CompilerGeneratedFilesOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Hollow/Hollow.csproj" />
+
+    <!-- The generator runs inside the compiler, so it is referenced as an analyzer rather than as
+         something the sample itself links against. -->
+    <ProjectReference Include="../../src/Hollow.SourceGenerator/Hollow.SourceGenerator.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+</Project>

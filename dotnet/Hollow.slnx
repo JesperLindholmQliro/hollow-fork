@@ -3,6 +3,9 @@
     <Project Path="src/Hollow/Hollow.csproj" />
     <Project Path="src/Hollow.SourceGenerator/Hollow.SourceGenerator.csproj" />
   </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/Hollow.Sample/Hollow.Sample.csproj" />
+  </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Hollow.Tests/Hollow.Tests.csproj" />
   </Folder>
