@@ -31,9 +31,10 @@ written in as the data grows or shrinks, and a consumer rearranges the records i
 match before applying the delta that says so. The incremental producer is here too, for a caller whose
 source of truth is a change feed rather than a table.
 
-Code generation is here: point `HollowCodeGenerator` at a data model and it emits a typed C# client —
-`api.GetMovie(17).Title` rather than field 3 of ordinal 17 — with a unique-key index for each type that
-declares a primary key. The typed runtime it sits on is useful without it, since the generic records
+Code generation is here, in both forms: mark a model root `[HollowGeneratedApi]` and a Roslyn source
+generator emits a typed C# client at compile time — `api.GetMovie(17).Title` rather than field 3 of
+ordinal 17 — or call `HollowCodeGenerator` to write the same client out as text. Either way a type that
+declares a primary key also gets a unique-key index. The typed runtime it sits on is useful without it, since the generic records
 traverse any dataset by name. Variable-length fields can be read into a caller's buffer, or viewed in
 place where the storage layout allows it, rather than always allocating.
 
@@ -404,21 +405,69 @@ the missing-data handler, `TypeApi.IsTypePresent` says so, and the type enumerat
 marker is an interface, `IHollowMissingTypeDataAccess`, where Java names all four concrete classes at
 each check.
 
-### A text emitter, not a source generator
+### Two front ends, one set of emitters
 
-.NET has two ways to do this and the choice shapes the design. What is built is the **text emitter**:
-it reuses `HollowObjectMapper` as it stands, so it proves the generated shape immediately, and the
-output is ordinary source a caller can read and step through. It needs a build step, and checked-in
-generated code goes stale.
+There are two ways to run the generator, and both end in the same emitters.
 
-The other option is a **Roslyn incremental source generator**, which is the more idiomatic .NET
-answer: the model is declared with attributes, the generator runs inside the compiler, and there is
-nothing to check in. The constraints are real, though. A source generator cannot load the types it is
-generating for — it sees syntax and symbols, not runtime types — so the schema derivation
-`HollowObjectMapper` does today would have to be reimplemented against Roslyn's symbol model, or
-factored so both share a description of the rules. Doing it first would have meant solving that before
-knowing what the output should look like. It is the obvious next step, and it can share these
-templates.
+**`HollowCodeGenerator` is the text emitter.** Point it at CLR types or at any dataset carrying
+schemas, get `.cs` files, write them where you like. Reach for it when the model is a dataset rather
+than declared types, or when reading the generated source matters.
+
+**`Hollow.SourceGenerator` is a Roslyn incremental source generator.** Mark a model root and the
+client appears in the compilation — nothing to check in, nothing to regenerate when the model changes:
+
+```csharp
+[HollowGeneratedApi]
+[HollowPrimaryKey("Id")]
+public sealed record Movie(int Id, string Title, List<Actor> Cast);
+```
+
+For a model in `Acme.Catalogue` that emits `Acme.Catalogue.Generated.CatalogueApi`. The generated
+namespace defaults to the model's own with `.Generated` appended, because the wrapper generated for a
+type is named after that type and would otherwise collide with it; the API is named for where the
+*model* lives, so it is `CatalogueApi` rather than `GeneratedApi`. Both, and the emitter options, are
+settable on the attribute. Several roots may be marked; those naming the same namespace and API class
+become one client, so a model with several entry points does not produce two APIs each knowing half of
+it. A model that cannot be mapped is `HOLLOW001` — a build error pointing at the declaration, rather
+than a silently missing client.
+
+Consume it as an analyser:
+
+```xml
+<ProjectReference Include="…/Hollow.SourceGenerator.csproj"
+                  OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+```
+
+### What sharing the emitters costs
+
+A Roslyn analyser targets `netstandard2.0` and loads into whatever host runs the compiler, so it
+**cannot reference the Hollow runtime at all**. That single constraint shapes the whole design.
+
+The emitters therefore depend on nothing. They work against `ModelSchema` — a description thin enough
+to carry no Hollow types — rather than `Hollow.Core.Schema`, and the generator project compiles the
+same five files by `<Compile Include="../Hollow/…" Link="Shared/…" />` rather than holding a copy of
+them. Everything in those files is `internal`, so the two assemblies' copies cannot collide. Sharing
+source is uglier than sharing a reference; the alternative was two sets of emitters that would drift.
+
+It also means those files keep to the `netstandard2.0` API surface: no `Index`/`Range` (`pascal[1..]`
+is `pascal.Substring(1)`), no `ArgumentException.ThrowIfNullOrEmpty`, no
+`string.Replace(string, string, StringComparison)`. Each is commented where it would otherwise read as
+a needless long way round.
+
+### The one seam that cannot be shared
+
+Deriving the model. The text emitter asks `HollowObjectMapper`, because it runs with the model's types
+loaded. The generator sees symbols rather than types, so `SymbolModel` applies the same rules again
+against Roslyn: the type-naming rules, `MapOf…To…`/`SetOf…`/`ListOf…`, scalar wrappers, enums as a
+`_name` field, which members map and in what order, when a scalar is inlined, and the derived hash
+keys.
+
+The two have to agree exactly — a client generated one way reads a blob written by a producer mapping
+the same types the other way. So `SourceGeneratorTests` declares one model twice, once as source and
+once as CLR types, and asserts the two derivations produce byte-identical schema text. `ModelSchema`
+renders itself in Hollow's schema syntax precisely so that comparison can be made directly. That
+includes hash keys, which nothing the emitters produce depends on: describing the model in full rather
+than only in the part that matters today is what makes the check worth having.
 
 ### Testing it
 
@@ -430,6 +479,12 @@ of every type, which is what catches a field position resolved wrongly.
 
 The emitted text itself is deliberately not pinned. It is an implementation detail, and a test over it
 turns every improvement into a test change.
+
+`SourceGeneratorTests` drives the source generator the way the compiler does, then compiles and runs
+what it produced. Its load-bearing test is the one that declares a model twice — once as source, once
+as CLR types — and asserts that the generator's symbol-based derivation and the object mapper's
+reflection-based one produce identical schema text. That is the only seam the two front ends do not
+share, so it is the only one that can drift.
 
 ### What is not ported
 
@@ -1035,6 +1090,7 @@ pool. Java's ordering is safe only because nothing there reads during the notifi
 | `api.consumer.index` | `FieldPathAttribute`, the match and select extractors, `UniqueKeyIndex` and `HashIndex`/`HashIndexSelect` with their builders |
 | `api.client` (API factory) | `IHollowApiFactory`, `DefaultHollowApiFactory`, `DelegateHollowApiFactory`, `GeneratedHollowApiFactory<TApi>`, and `HollowConsumer.Api` |
 | `api.codegen` (client API) | `HollowCodeGenerator` and its options, the model resolver, the naming rules and the emitters for all four record kinds, the API class, the API factory and the unique-key index |
+| `api.codegen` (source generator) | `Hollow.SourceGenerator`: `HollowApiSourceGenerator`, `SymbolModel` and the `HollowGeneratedApi` attribute — no Java counterpart, since Java has nothing that runs inside the compiler |
 
 Test coverage is carried over from the Java tests where they exist — `VarIntTest`, `HashCodesTest`,
 `FixedLengthElementArrayTest`, `FreeOrdinalTrackerTest`, `ThreadSafeBitSetTest`,
@@ -1196,14 +1252,11 @@ wide and every other fixed-length field is 64 or fewer.
 ### Suggested order for the remaining work
 
 The loop is closed end to end: a producer publishes, a consumer follows, a restarted producer stays on
-the chain, and a generated client reads it with types. What is left is either an optimisation or a
-feature on top.
+the chain, and a client generated at compile time reads it with types. What is left is either an
+optimisation or a feature on top.
 
-1. A Roslyn incremental source generator sharing the emitter's templates, so a caller declares the
-   model with attributes and there is nothing to check in. See [A text emitter, not a source
-   generator](#a-text-emitter-not-a-source-generator) for the one problem to solve first.
-2. The bulk-copy fast path in the delta applicators, which is a pure optimisation the existing tests
+1. The bulk-copy fast path in the delta applicators, which is a pure optimisation the existing tests
    already guard. The resharding splitters and joiners copy record by record for the same reason and
    would benefit from the same treatment.
-3. The remaining validators, each a self-contained addition to the ported framework.
-4. Partitioned ordinal maps, which is the last write-side difference from Java's defaults.
+2. The remaining validators, each a self-contained addition to the ported framework.
+3. Partitioned ordinal maps, which is the last write-side difference from Java's defaults.
