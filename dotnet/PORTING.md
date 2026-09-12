@@ -38,6 +38,11 @@ declares a primary key also gets a unique-key index. The typed runtime it sits o
 traverse any dataset by name. Variable-length fields can be read into a caller's buffer, or viewed in
 place where the storage layout allows it, rather than always allocating.
 
+A dataset can also be read by a person rather than a program: `Hollow.Explorer` is the port of
+`hollow-explorer-ui` as ASP.NET Core MVC, carrying over the original pages' HTML. Mount it into the
+application that already holds the dataset, or run it on a loopback port of its own. See
+[The explorer](#the-explorer).
+
 What is **not** here is object longevity and the diff/history tools. The status section says exactly
 what is and is not ported.
 
@@ -1213,6 +1218,101 @@ before returning the storage it replaced to the recycler. A listener may read th
 told about, and a concurrent reader must not be left pointing at storage that has gone back to the
 pool. Java's ordering is safe only because nothing there reads during the notification.
 
+## The explorer
+
+`Hollow.Explorer` is the port of `hollow-explorer-ui`: four pages over a dataset — every type and what
+it costs, a page of one type's records with one of them written out, a schema as a tree opened a branch
+at a time, and a search built a clause at a time.
+
+### It is ASP.NET Core MVC, not Blazor
+
+These pages are documents with links, and every bit of state a link needs is already in the URL. A
+component model would add a connection to keep open and buy nothing back. The HTML is carried over
+from the Velocity templates close to verbatim, inline styles and all — what changed is only what was
+framework rather than page:
+
+| Velocity | Razor |
+| --- | --- |
+| `$esc.html($x)` | `@x` — the framework's own encoding, not a tool placed in the context |
+| `$esc.url($x)` | `Uri.EscapeDataString(x)` |
+| `#showSchema` recursing on itself | `_SchemaDisplay.cshtml` rendering itself as a partial |
+| header template + page + footer template | a layout with `@RenderBody()` |
+| a page class building a `VelocityContext` | a controller action returning a view model |
+
+Java's four page classes each existed to build a context and merge three templates, so each page is
+now one method rather than one class.
+
+### The record is written through the response, and escaped by hand
+
+A record holding a large collection is large, so the browse page writes it straight into the response
+rather than building it up as a string first — which is what Java's `HtmlEscapingWriter` is for, and
+why `HtmlEscapingTextWriter` is here rather than being replaced by Razor.
+
+It escapes by hand rather than through `System.Text.Encodings.Web`. Every encoder that class offers
+escapes newlines: they are control characters, and no set of allowed Unicode ranges can let one
+through, because `ForbidUndefinedCharacters` removes the whole `Cc` category after the ranges are
+applied. A record laid out over twenty lines would arrive inside its `<pre>` as one line of `&#xA;`.
+What is left — replacing `&`, `<`, `>`, `"` and `'` — is what Java's `escapeHtml4` does to the same
+text, and is enough because the destination is element content and nothing else.
+
+The rest of the page still uses Razor's default encoder, which does escape newlines. That shows up in
+the schema column as `&#xA;` in the markup; it renders correctly, because a browser decodes character
+references inside `<pre>`. Registering a laxer encoder would have fixed the markup at the cost of
+changing the encoder for every view in whatever application the explorer was mounted in, which is not
+a library's call to make.
+
+### Session state is the explorer's own, not ASP.NET Core's
+
+Two things outlive a request: the search being built, and which schema branches the reader has opened.
+Neither is data — both are a place in the data that took several requests to reach and that a URL is
+the wrong size to carry. ASP.NET Core's session state stores `byte[]`, so using it would mean
+serialising a result set and a schema tree on every request to deserialise them on the next. Java
+keeps the objects themselves in the servlet session, and so does `ExplorerSessionStore`, behind a
+cookie of its own so that a host embedding the explorer does not have to wire up session middleware to
+get a working page.
+
+This keeps a reader's state in the process serving them. Behind a load balancer without sticky
+sessions they would lose their place on whichever request landed elsewhere — which is the same
+constraint Java has, and acceptable for what the explorer is.
+
+### Two places where the port does not reproduce a bug
+
+- `browse-selected-type-top.vm` guards the record block with `#if($ordinal != $null)`. The ordinal is
+  an `int` boxed into the context, so it is never null, and a page showing no record still renders
+  the FORMAT links and `ordinal: -1`. The port asks what the template meant to ask.
+- `HollowRecordJsonStringifier` breaks the line between a list's elements but not a set's, so a
+  pretty-printed set arrives with every element after the first on one line. It is the same JSON
+  either way, and nothing reads the output but a person.
+
+The template's `</td>...</th>` mismatch on the home page's type cell is also corrected.
+
+### An empty field submits nothing
+
+Java's query page adds a clause for whatever the form contained, so submitting it empty leaves the
+reader with a search matching nothing and no way back but clearing it. The port requires a field name
+before it will add a clause.
+
+### Where `formatBytes` went
+
+`hollow-ui-tools`' `HollowDiffUtil.formatBytes` is `Hollow.Explorer.ByteSize.Format`, named for what
+it does rather than the class it happened to live in. Its arithmetic runs in `double` throughout,
+which is what Java's does as soon as it takes a logarithm — so the rounding matches, and
+`long.MinValue` comes out as `-8 EiB` rather than overflowing the way negating it would. Java's test
+is ported alongside it.
+
+Nothing else in `hollow-ui-tools` needed porting: `HollowUIRouter`, `HollowUIWebServer`,
+`HttpHandlerWithServletSupport`, `HollowUISession` and `EscapingTool` are all plumbing that ASP.NET
+Core replaces outright.
+
+### Mounting it
+
+`AddHollowExplorer(explorer, basePath)` and `MapHollowExplorer()` put the pages into an application
+that already exists — usually the one already holding the dataset, which is also the one that already
+has authentication. `HollowExplorerServer` is the other way in, mirroring Java's Jetty server: it
+binds the loopback address rather than `localhost`, because a dev tool showing a whole dataset has no
+business being reachable from the network, and because Kestrel will not take an ephemeral port under
+the name.
+
 ## Status
 
 ### Ported and tested
@@ -1393,13 +1493,17 @@ sets of `TypeFilter` exist; the recursive rule DSL is still absent.
   (`api.consumer.metrics`) and `api.consumer.data`.
 - **The deprecated `api.client.HollowClient`**, superseded by `HollowConsumer`; only the parts of
   `api.client` that `HollowConsumer` uses are ported.
-- **Tools** (`tools`: diff, history, combine, split, patch — `tools.checksum` is ported because the
-  producer's integrity check needs it, and `tools.traverse` because the incremental producer does),
+- **Tools** (`tools`: diff, history, combine, split, patch. `tools.checksum` is ported because the
+  producer's integrity check needs it, `tools.traverse` because the incremental producer does, and
+  `tools.query`, `tools.stringifier` and `tools.util` because the explorer does),
   **`api.codegen`'s three extras** (the POJO, "performance API" and test-data builder generators; the
   client API generator itself is ported — see [The code generator](#the-code-generator)),
   **sampling** (`api.sampling`, deliberately — see below), and every module outside
-  `hollow` — `hollow-diff-ui`, `hollow-explorer-ui`, `hollow-jsonadapter`, `hollow-protoadapter`,
-  `hollow-zenoadapter`, `hollow-test`, `hollow-fakedata`.
+  `hollow` except the explorer — `hollow-diff-ui`, `hollow-jsonadapter`, `hollow-protoadapter`,
+  `hollow-zenoadapter`, `hollow-test`, `hollow-fakedata`. `hollow-explorer-ui` is ported as
+  `Hollow.Explorer`; see [The explorer](#the-explorer). Of `hollow-ui-tools`, only `HollowDiffUtil`'s
+  `formatBytes` and `HtmlEscapingWriter` had anything to port — the rest is Jetty and servlet plumbing
+  that ASP.NET Core replaces outright.
 - **`GarbageCollectorAwareRecycler`**, which picks a pooling strategy by inspecting the JVM's
   collector through `ManagementFactory`. The decision it encodes does not transfer to .NET; pick
   `RecyclingRecycler` or `WastefulRecycler` explicitly.
@@ -1426,4 +1530,11 @@ optimisation or a feature on top.
 
 Nothing is outstanding from the original list. What remains unported is listed above, and each item
 there is a feature on top rather than a gap in the loop: object longevity and the history it serves,
-shared-memory mode, optional blob parts, producer metrics, and the tools and UI modules.
+shared-memory mode, optional blob parts, producer metrics, and the diff tools and the UI over them.
+
+The explorer is the first thing in this port that is read rather than called, and the next module
+along — `hollow-diff-ui` — shares its shape: the same navigation bar, the same Velocity templates,
+the same session-scoped place-in-the-data. Whoever takes it on should read
+[The explorer](#the-explorer) first; the decisions there about Razor, escaping and session state were
+made once and should not be made differently twice. The diff engine itself (`tools.diff`) is the
+larger half of that job and is not started.
