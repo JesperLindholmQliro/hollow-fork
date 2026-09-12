@@ -23,12 +23,11 @@ namespace Hollow.Core.Read.Engine.List;
 /// Delta support for a list type's record storage.
 /// </summary>
 /// <remarks>
-/// <strong>Port note.</strong> As with the object type, only Java's record-at-a-time merge is ported,
-/// not its bulk-copy fast path. See <c>PORTING.md</c>.
+/// Two paths, as with the object type: a run of records the delta neither adds nor removes is copied
+/// wholesale when the widths allow it, and anything else is merged record by record.
 /// </remarks>
 public sealed partial class HollowListTypeDataElements
 {
-
 
     /// <summary>
     /// Reads one shard's delta records from <paramref name="input"/>.
@@ -82,10 +81,29 @@ public sealed partial class HollowListTypeDataElements
         long writeElement = 0;
         int deltaOrdinal = 0;
 
+        // Unchanged records keep their ordinals, so when neither width moved their pointers and
+        // elements can be copied and shifted rather than rebuilt. See CopyUnchangedRun.
+        bool widthsUnchanged = target.BitsPerElement == from.BitsPerElement
+            && target.BitsPerListPointer == from.BitsPerListPointer;
+
+        int lastCarryable = Math.Min(from.MaxOrdinal, target.MaxOrdinal);
+
         for (int ordinal = 0; ordinal <= target.MaxOrdinal; ordinal++)
         {
             bool addedByDelta = additions.NextElement() == ordinal;
             bool removed = removals.NextElement() == ordinal;
+
+            if (widthsUnchanged && !addedByDelta && !removed && ordinal <= lastCarryable)
+            {
+                // A removal inside the run would drop its elements and shift everything after it by a
+                // different amount, so the run stops at the next one of either kind.
+                int runEnd = Math.Min(
+                    lastCarryable, Math.Min(additions.NextElement(), removals.NextElement()) - 1);
+
+                writeElement = CopyUnchangedRun(target, from, ordinal, runEnd, writeElement);
+                ordinal = runEnd;
+                continue;
+            }
 
             if (addedByDelta)
             {
@@ -108,6 +126,51 @@ public sealed partial class HollowListTypeDataElements
         }
 
         return target;
+    }
+
+    /// <summary>
+    /// Carries ordinals <paramref name="firstOrdinal"/> through <paramref name="lastOrdinal"/> across
+    /// unchanged, returning where the next record's elements start.
+    /// </summary>
+    /// <remarks>
+    /// The elements of a run with no removals in it are contiguous on both sides, so they move in one
+    /// copy. Their pointers move too, all by the same amount, because everything the run displaced lies
+    /// before it — which is what makes one strided pass enough to correct them.
+    /// </remarks>
+    private static long CopyUnchangedRun(
+        HollowListTypeDataElements target,
+        HollowListTypeDataElements from,
+        int firstOrdinal,
+        int lastOrdinal,
+        long writeElement)
+    {
+        int recordCount = lastOrdinal - firstOrdinal + 1;
+        long sourceStart = from.GetStartElement(firstOrdinal);
+        long elementCount = from.GetEndElement(lastOrdinal) - sourceStart;
+
+        target.ElementData!.CopyBits(
+            from.ElementData!,
+            sourceStart * from.BitsPerElement,
+            writeElement * target.BitsPerElement,
+            elementCount * target.BitsPerElement);
+
+        long pointerStartBit = (long)firstOrdinal * target.BitsPerListPointer;
+
+        target.ListPointerData!.CopyBits(
+            from.ListPointerData!,
+            pointerStartBit,
+            pointerStartBit,
+            (long)recordCount * target.BitsPerListPointer);
+
+        if (writeElement != sourceStart)
+        {
+            target.ListPointerData.IncrementMany(
+                pointerStartBit, writeElement - sourceStart, target.BitsPerListPointer, recordCount);
+        }
+
+        DeltaDiagnostics.BulkCopiedLists += recordCount;
+
+        return writeElement + elementCount;
     }
 
     private static long CopyElements(

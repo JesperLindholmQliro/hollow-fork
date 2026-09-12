@@ -237,6 +237,69 @@ public class CollectionDeltaTests
         }
     }
 
+    /// <summary>
+    /// The same as <see cref="AssertDeltasMatchSnapshots"/>, reporting how many records of each kind the
+    /// applicators carried across in bulk rather than merging one at a time.
+    /// </summary>
+    private static (long Objects, long Lists, long Sets, long Maps) RunCyclesCountingBulkCopies(
+        int numShards, params Cycle[] cycles)
+    {
+        HollowObjectSchema valueSchema = ValueSchema();
+        HollowWriteStateEngine engine = NewEngine(valueSchema, numShards);
+
+        WriteCycle(engine, valueSchema, cycles[0]);
+        HollowReadStateEngine consumer = ReadSnapshot(engine);
+
+        DeltaDiagnostics.Reset();
+
+        for (int i = 1; i < cycles.Length; i++)
+        {
+            engine.PrepareForNextCycle();
+            engine.RandomizedTag = i + 1;
+            WriteCycle(engine, valueSchema, cycles[i]);
+
+            Contents viaSnapshot = ReadAll(ReadSnapshot(engine));
+            ApplyDelta(engine, consumer);
+
+            AssertEquivalent(viaSnapshot, ReadAll(consumer));
+        }
+
+        return (
+            DeltaDiagnostics.BulkCopiedObjects,
+            DeltaDiagnostics.BulkCopiedLists,
+            DeltaDiagnostics.BulkCopiedSets,
+            DeltaDiagnostics.BulkCopiedMaps);
+    }
+
+    /// <summary>A cycle of collections over a stable set of values, with one collection of each kind
+    /// differing from the last cycle's.</summary>
+    private static Cycle StableCycle(int generation)
+    {
+        int[] values = [.. Enumerable.Range(0, 200)];
+
+        int[][] lists =
+        [
+            .. Enumerable.Range(0, 200).Select(i =>
+                i == 100 ? new[] { generation, 1, 2 } : new[] { i, (i + 1) % 200, (i + 2) % 200 }),
+        ];
+
+        int[][] sets =
+        [
+            .. Enumerable.Range(0, 200).Select(i =>
+                i == 100 ? new[] { generation, 3, 4 } : new[] { i, (i + 3) % 200, (i + 5) % 200 }),
+        ];
+
+        (int Key, int Value)[][] maps =
+        [
+            .. Enumerable.Range(0, 200).Select(i =>
+                i == 100
+                    ? new[] { (generation, 6), (7, 8) }
+                    : new[] { (i, (i + 7) % 200), ((i + 11) % 200, (i + 13) % 200) }),
+        ];
+
+        return CycleOf(values, lists, sets, maps);
+    }
+
     private static Cycle CycleOf(int[] values, int[][] lists, int[][] sets, (int Key, int Value)[][] maps) =>
         new(values, lists, sets, maps);
 
@@ -433,5 +496,32 @@ public class CollectionDeltaTests
             Assert.Equal(2, state.PreviousOrdinals.Cardinality());
             Assert.NotEqual(state.PopulatedOrdinals, state.PreviousOrdinals);
         }
+    }
+
+    /// <summary>
+    /// A dataset large enough that one edit per kind leaves every other record untouched, and stable
+    /// enough that no width moves — which is when each applicator stops merging record by record and
+    /// carries the untouched run across wholesale.
+    /// </summary>
+    /// <remarks>
+    /// This is the shape of a real delta, and the only shape that reaches the bulk path at all, so
+    /// without a case like it that path would be dead code the other tests never run. The second cycle
+    /// also proves the case a first delta cannot: by then the previous cycle's removals are pending, so
+    /// a run has to stop at one and what follows has to be shifted by a different amount.
+    /// </remarks>
+    [Fact]
+    public void AnUnchangedRunOfEachCollectionIsCarriedAcrossInBulk()
+    {
+        (long objects, long lists, long sets, long maps) =
+            RunCyclesCountingBulkCopies(1, StableCycle(10), StableCycle(11), StableCycle(12));
+
+        // 200 records of each kind carried across each of the two deltas.
+        Assert.Equal(400, lists);
+        Assert.Equal(400, sets);
+        Assert.Equal(400, maps);
+
+        // And none at all for the values, which no cycle touches: a type that did not change is left
+        // out of the delta entirely, so there is nothing to carry across in the first place.
+        Assert.Equal(0, objects);
     }
 }

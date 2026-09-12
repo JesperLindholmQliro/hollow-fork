@@ -25,14 +25,13 @@ namespace Hollow.Core.Read.Engine.Object;
 /// Delta support for an object type's record storage.
 /// </summary>
 /// <remarks>
-/// <strong>Port note.</strong> Java's <c>HollowObjectDeltaApplicator</c> has a fast path that bulk-copies
-/// runs of unchanged records with <c>copyBits</c> and then fixes up their variable-length pointers with
-/// <c>incrementMany</c>. Only the record-at-a-time path is ported: it produces identical output and is
-/// far easier to verify, at the cost of a slower delta application.
+/// Two paths, as in Java's <c>HollowObjectDeltaApplicator</c>: a run of records the delta leaves alone
+/// is copied wholesale when the record layout is unchanged, and anything else is re-encoded field by
+/// field. The two produce identical output, which is what <c>DeltaTests</c> asserts by comparing an
+/// applied delta against a snapshot of the same cycle.
 /// </remarks>
 public sealed partial class HollowObjectTypeDataElements
 {
-
 
     /// <summary>
     /// Reads one shard's delta records from <paramref name="input"/>.
@@ -136,9 +135,28 @@ public sealed partial class HollowObjectTypeDataElements
 
         int deltaOrdinal = 0;
 
+        // A record the delta leaves alone keeps its ordinal, so when the layout is unchanged its bits
+        // are identical in both states at the same offset — a run of them is one memory copy rather
+        // than a field-by-field re-encode. See CopyUnchangedRun.
+        bool layoutUnchanged = LayoutUnchanged(target, from);
+
         for (int ordinal = 0; ordinal <= target.MaxOrdinal; ordinal++)
         {
             bool addedByDelta = additions.NextElement() == ordinal;
+
+            if (!addedByDelta && layoutUnchanged && ordinal <= from.MaxOrdinal)
+            {
+                // The run ends where the delta's next addition begins, or where either state's ordinals
+                // run out, whichever comes first. An exhausted reader reports int.MaxValue, which the
+                // other two bounds then decide.
+                int runEnd = Math.Min(
+                    Math.Min(from.MaxOrdinal, target.MaxOrdinal), additions.NextElement() - 1);
+
+                CopyUnchangedRun(target, from, ordinal, runEnd, varLengthWritePointers);
+
+                ordinal = runEnd;
+                continue;
+            }
 
             HollowObjectTypeDataElements? source;
             int sourceOrdinal;
@@ -204,6 +222,108 @@ public sealed partial class HollowObjectTypeDataElements
         }
 
         return target;
+    }
+
+    /// <summary>
+    /// Whether a record occupies the same bits in <paramref name="target"/> as it did in
+    /// <paramref name="from"/>, which is what lets a run of unchanged records be copied rather than
+    /// re-encoded.
+    /// </summary>
+    /// <remarks>
+    /// The two share a schema, so the fields are in the same order; all that can differ is a width,
+    /// which the delta widens when the new state needs more bits for a value or a var-length offset.
+    /// </remarks>
+    private static bool LayoutUnchanged(
+        HollowObjectTypeDataElements target, HollowObjectTypeDataElements from)
+    {
+        if (target.BitsPerRecord != from.BitsPerRecord)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < target.Schema.FieldCount; i++)
+        {
+            if (target.BitsPerField[i] != from.BitsPerField[i])
+            {
+                return false;
+            }
+
+            // A var-length field's bytes are copied wholesale, which needs both sides segmented.
+            if (target.Schema.GetFieldType(i).IsVariableLength()
+                && from.VarLengthData[i] is not SegmentedByteArray)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Copies ordinals <paramref name="firstOrdinal"/> through <paramref name="lastOrdinal"/> from
+    /// <paramref name="from"/> in bulk, which they are only eligible for when the layout is unchanged.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Three memory copies replace a field-by-field re-encode of every record in the run: the records'
+    /// fixed-length bits, which are identical because the layout and the ordinals both are; and per
+    /// var-length field, one copy of the run's bytes.
+    /// </para>
+    /// <para>
+    /// Those bytes land at a different offset than they had in the source, so every pointer in the run
+    /// is off by the same amount and is corrected in one strided pass. The correction cannot disturb
+    /// the null flag in the pointer's top bit: the flag survives because the corrected offset still
+    /// fits below it, which is exactly what the field was widened to guarantee.
+    /// </para>
+    /// </remarks>
+    private static void CopyUnchangedRun(
+        HollowObjectTypeDataElements target,
+        HollowObjectTypeDataElements from,
+        int firstOrdinal,
+        int lastOrdinal,
+        long[] varLengthWritePointers)
+    {
+        HollowObjectSchema schema = target.Schema;
+        int recordCount = lastOrdinal - firstOrdinal + 1;
+        DeltaDiagnostics.BulkCopiedObjects += recordCount;
+        long bitsPerRecord = target.BitsPerRecord;
+        long runStartBit = bitsPerRecord * firstOrdinal;
+
+        target.FixedLengthData!.CopyBits(
+            from.FixedLengthData!, runStartBit, runStartBit, bitsPerRecord * recordCount);
+
+        for (int fieldIndex = 0; fieldIndex < schema.FieldCount; fieldIndex++)
+        {
+            if (!schema.GetFieldType(fieldIndex).IsVariableLength())
+            {
+                continue;
+            }
+
+            // Offsets never decrease, so the run's bytes are one contiguous range even where a record
+            // inside it holds nothing.
+            long sourceStart = from.GetVarLengthRange(firstOrdinal, fieldIndex).Start;
+            long sourceEnd = from.GetVarLengthRange(lastOrdinal, fieldIndex).End;
+            long length = sourceEnd - sourceStart;
+
+            long writePointer = varLengthWritePointers[fieldIndex];
+
+            if (length > 0)
+            {
+                ((SegmentedByteArray)target.VarLengthData[fieldIndex]!).Copy(
+                    from.VarLengthData[fieldIndex]!, sourceStart, writePointer, length);
+            }
+
+            if (writePointer != sourceStart)
+            {
+                target.FixedLengthData.IncrementMany(
+                    runStartBit + target.BitOffsetPerField[fieldIndex],
+                    writePointer - sourceStart,
+                    bitsPerRecord,
+                    recordCount);
+            }
+
+            varLengthWritePointers[fieldIndex] = writePointer + length;
+        }
     }
 
     private static void CopyVarLengthField(

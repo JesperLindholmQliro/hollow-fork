@@ -1047,14 +1047,25 @@ last word winning. Nothing is applied to the write state until the populator ret
 throws therefore leaves the previous version exactly as it was, and the version consumers are on is
 still announced.
 
-### Delta application copies record by record
+### Delta application has two paths, and a test that proves it
 
-Java's delta applicators have a fast path that bulk-copies runs of unchanged records with `copyBits`
-and then fixes up their variable-length pointers with `incrementMany`. Only the record-at-a-time path
-is ported. The output is identical — `DeltaTests` checks that applying a delta leaves a consumer in
-exactly the state a snapshot of the same cycle would have produced — but applying a large delta is
-slower than it needs to be. The fast path is the obvious next optimisation, and the tests already in
-place would catch a mistake in it.
+Each applicator carries a run of records the delta leaves alone across wholesale — one `CopyBits` for
+the records, one byte copy per variable-length field, and one strided `IncrementMany` to correct the
+pointers that moved — and falls back to merging record by record when it cannot. It cannot when any
+width moved, since then a record no longer occupies the same bits it did; the collections also stop a
+run at a pending removal, whose elements are dropped and which therefore shifts what follows it by a
+different amount.
+
+The two paths produce identical output by design, which is exactly what makes the choice invisible:
+`DeltaTests` and `CollectionDeltaTests` compare an applied delta against a snapshot of the same cycle
+and would pass whichever ran. So `DeltaDiagnostics` counts the records carried across in bulk, and the
+tests named `…CarriedAcrossInBulk` assert the count. Without them the bulk path would be dead code the
+suite never reaches: it takes a large dataset changed in one place to get there, and every other test
+is small enough that a width moves on every cycle.
+
+One case needs saying because it is invisible in the counts: a type whose records did not change at
+all is left out of the delta entirely by `HollowBlobWriter`, so nothing is applied for it and nothing
+is carried across.
 
 ### Concurrency primitives
 

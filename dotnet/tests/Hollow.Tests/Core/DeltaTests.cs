@@ -189,6 +189,98 @@ public class DeltaTests
         AssertDeltaMatchesSnapshot(first, second);
     }
 
+    /// <summary>
+    /// Runs the cycles in order against one consumer, checking after each that applying the delta left
+    /// it holding exactly what reading that cycle's snapshot outright would have.
+    /// </summary>
+    /// <returns>How many records the bulk path carried across, over the whole sequence.</returns>
+    private static long RunCyclesCountingBulkCopies(params Movie[][] cycles)
+    {
+        HollowObjectSchema schema = MovieSchema();
+
+        HollowWriteStateEngine engine = new() { RandomizedTag = 1 };
+        engine.AddTypeState(new HollowObjectTypeWriteState(schema));
+
+        AddMovies(engine, schema, cycles[0]);
+        HollowReadStateEngine consumer = ReadSnapshot(engine);
+
+        long before = DeltaDiagnostics.BulkCopiedObjects;
+
+        foreach (Movie[] cycle in cycles.Skip(1))
+        {
+            engine.PrepareForNextCycle();
+            AddMovies(engine, schema, cycle);
+
+            HollowReadStateEngine viaSnapshot = ReadSnapshot(engine);
+            ApplyDelta(engine, consumer);
+
+            Assert.Equal(ReadAll(viaSnapshot), ReadAll(consumer));
+            Assert.Equal(
+                viaSnapshot.GetTypeState("Movie")!.MaxOrdinal, consumer.GetTypeState("Movie")!.MaxOrdinal);
+        }
+
+        return DeltaDiagnostics.BulkCopiedObjects - before;
+    }
+
+    /// <summary>
+    /// A catalogue large enough that one edit leaves every other record untouched, and stable enough
+    /// that no field has to be widened — which is when the applicator stops re-encoding record by
+    /// record and copies the whole run.
+    /// </summary>
+    /// <remarks>
+    /// This is what the fast path is for, and the shape of a real delta: a small change to a large
+    /// dataset. Without a case like it the bulk path is never reached, so this test asserts that it was
+    /// as well as that the result is right.
+    /// </remarks>
+    [Fact]
+    public void AnUnchangedRunIsCarriedAcrossInBulk()
+    {
+        Movie[] first =
+            [.. Enumerable.Range(0, 200).Select(i => new Movie(i, $"title-{i:D4}", i, $"tag-{i:D4}"))];
+
+        // One record rewritten, at the same widths: same id range, same string lengths.
+        Movie[] second = [.. first.Select(m => m.Id == 100 ? m with { Title = "title-XXXX" } : m)];
+
+        long bulkCopied = RunCyclesCountingBulkCopies(first, second);
+
+        Assert.Equal(200, bulkCopied);
+    }
+
+    /// <summary>
+    /// The same, but with the run starting after an addition rather than at ordinal zero, so the bytes
+    /// it carries land at a different offset than they had — which is what the strided pointer fix-up
+    /// exists to correct, and the one part of the bulk path a run starting at zero never exercises.
+    /// </summary>
+    /// <remarks>
+    /// Every record is the same width on purpose. A cycle that changes a length can widen a field, and
+    /// a widened field sends the whole delta down the re-encoding path, where this proves nothing.
+    /// </remarks>
+    [Fact]
+    public void ARunAfterAnAdditionHasItsPointersCorrected()
+    {
+        // A null tagline every seventh record, so the run being copied contains the null flag that
+        // shares a var-length pointer's top bit and has to survive the correction.
+        Movie[] first =
+        [
+            .. Enumerable.Range(0, 200).Select(i =>
+                new Movie(i, $"title-{i:D4}", i, i % 7 == 0 ? null : $"tag-{i:D4}")),
+        ];
+
+        // Dropping a record leaves a hole low in the ordinal space…
+        Movie[] second = [.. first.Where(m => m.Id != 5)];
+
+        // …which this cycle's addition reuses. A removed ordinal keeps its bytes until something takes
+        // its place, so the run after ordinal 5 only moves if what replaces it is a different length —
+        // which is the whole point here. Different by a few bytes, not enough to widen anything.
+        Movie[] third = [.. second, new Movie(5, "title-0005-and-then-some", 5, null)];
+
+        long bulkCopied = RunCyclesCountingBulkCopies(first, second, third);
+
+        // 200 carried across the second cycle, then 199 across the third: the addition at ordinal 5
+        // splits that one into the run before it and the run after.
+        Assert.Equal(399, bulkCopied);
+    }
+
     [Fact]
     public void SeveralDeltasInSequence()
     {

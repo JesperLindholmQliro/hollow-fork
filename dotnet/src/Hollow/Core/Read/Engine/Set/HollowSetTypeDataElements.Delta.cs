@@ -84,10 +84,30 @@ public sealed partial class HollowSetTypeDataElements
         long writeBucket = 0;
         int deltaOrdinal = 0;
 
+        // The empty-bucket sentinel is all-ones at the element width, so buckets can only be copied
+        // rather than rewritten when that width is unchanged. See CopyUnchangedRun.
+        bool widthsUnchanged = target.BitsPerElement == from.BitsPerElement
+            && target.BitsPerFixedLengthSetPortion == from.BitsPerFixedLengthSetPortion
+            && target.BitsPerSetPointer == from.BitsPerSetPointer;
+
+        int lastCarryable = Math.Min(from.MaxOrdinal, target.MaxOrdinal);
+
         for (int ordinal = 0; ordinal <= target.MaxOrdinal; ordinal++)
         {
             bool addedByDelta = additions.NextElement() == ordinal;
             bool removed = removals.NextElement() == ordinal;
+
+            if (widthsUnchanged && !addedByDelta && !removed && ordinal <= lastCarryable)
+            {
+                // A removal inside the run would drop its buckets and shift everything after it by a
+                // different amount, so the run stops at the next one of either kind.
+                int runEnd = Math.Min(
+                    lastCarryable, Math.Min(additions.NextElement(), removals.NextElement()) - 1);
+
+                writeBucket = CopyUnchangedRun(target, from, ordinal, runEnd, writeBucket);
+                ordinal = runEnd;
+                continue;
+            }
 
             int size = 0;
 
@@ -110,6 +130,56 @@ public sealed partial class HollowSetTypeDataElements
         }
 
         return target;
+    }
+
+    /// <summary>
+    /// Carries ordinals <paramref name="firstOrdinal"/> through <paramref name="lastOrdinal"/> across
+    /// unchanged, returning where the next record's buckets start.
+    /// </summary>
+    /// <remarks>
+    /// Both the buckets and the pointer-and-size entries move in one copy each. Only the pointer half
+    /// of an entry is wrong afterwards, and only by the amount the run as a whole moved; the size half
+    /// sits above it and is left alone, which holds because a pointer corrected into its own width
+    /// cannot carry out of it.
+    /// </remarks>
+    private static long CopyUnchangedRun(
+        HollowSetTypeDataElements target,
+        HollowSetTypeDataElements from,
+        int firstOrdinal,
+        int lastOrdinal,
+        long writeBucket)
+    {
+        int recordCount = lastOrdinal - firstOrdinal + 1;
+        long sourceStart = from.GetStartBucket(firstOrdinal);
+        long bucketCount = from.GetEndBucket(lastOrdinal) - sourceStart;
+
+        target.ElementData!.CopyBits(
+            from.ElementData!,
+            sourceStart * from.BitsPerElement,
+            writeBucket * target.BitsPerElement,
+            bucketCount * target.BitsPerElement);
+
+        long portionStartBit = (long)firstOrdinal * target.BitsPerFixedLengthSetPortion;
+
+        target.SetPointerAndSizeData!.CopyBits(
+            from.SetPointerAndSizeData!,
+            portionStartBit,
+            portionStartBit,
+            (long)recordCount * target.BitsPerFixedLengthSetPortion);
+
+        if (writeBucket != sourceStart)
+        {
+            // The pointer is the low field of each entry, so it is the one this lands on.
+            target.SetPointerAndSizeData.IncrementMany(
+                portionStartBit,
+                writeBucket - sourceStart,
+                target.BitsPerFixedLengthSetPortion,
+                recordCount);
+        }
+
+        DeltaDiagnostics.BulkCopiedSets += recordCount;
+
+        return writeBucket + bucketCount;
     }
 
     private static (long WriteBucket, int Size) CopyBuckets(

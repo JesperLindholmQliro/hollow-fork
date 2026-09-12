@@ -88,10 +88,31 @@ public sealed partial class HollowMapTypeDataElements
         long writeBucket = 0;
         int deltaOrdinal = 0;
 
+        // The empty-bucket sentinel is all-ones at the key width, and an entry packs a key against a
+        // value, so buckets can only be copied when neither width moved. See CopyUnchangedRun.
+        bool widthsUnchanged = target.BitsPerKeyElement == from.BitsPerKeyElement
+            && target.BitsPerValueElement == from.BitsPerValueElement
+            && target.BitsPerFixedLengthMapPortion == from.BitsPerFixedLengthMapPortion
+            && target.BitsPerMapPointer == from.BitsPerMapPointer;
+
+        int lastCarryable = Math.Min(from.MaxOrdinal, target.MaxOrdinal);
+
         for (int ordinal = 0; ordinal <= target.MaxOrdinal; ordinal++)
         {
             bool addedByDelta = additions.NextElement() == ordinal;
             bool removed = removals.NextElement() == ordinal;
+
+            if (widthsUnchanged && !addedByDelta && !removed && ordinal <= lastCarryable)
+            {
+                // A removal inside the run would drop its buckets and shift everything after it by a
+                // different amount, so the run stops at the next one of either kind.
+                int runEnd = Math.Min(
+                    lastCarryable, Math.Min(additions.NextElement(), removals.NextElement()) - 1);
+
+                writeBucket = CopyUnchangedRun(target, from, ordinal, runEnd, writeBucket);
+                ordinal = runEnd;
+                continue;
+            }
 
             int size = 0;
 
@@ -114,6 +135,61 @@ public sealed partial class HollowMapTypeDataElements
         }
 
         return target;
+    }
+
+    /// <summary>
+    /// Carries ordinals <paramref name="firstOrdinal"/> through <paramref name="lastOrdinal"/> across
+    /// unchanged, returning where the next record's buckets start.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Both the entries and the pointer-and-size portions move in one copy each, and only the pointer
+    /// half of a portion needs correcting afterwards — by the amount the run as a whole moved.
+    /// </para>
+    /// <para>
+    /// The record-at-a-time path leaves an empty bucket's value bits zero where this carries whatever
+    /// the previous state held there. Nothing reads them: a lookup stops at the sentinel key, and so
+    /// does the checksum. Were that not so, the two paths would not agree.
+    /// </para>
+    /// </remarks>
+    private static long CopyUnchangedRun(
+        HollowMapTypeDataElements target,
+        HollowMapTypeDataElements from,
+        int firstOrdinal,
+        int lastOrdinal,
+        long writeBucket)
+    {
+        int recordCount = lastOrdinal - firstOrdinal + 1;
+        long sourceStart = from.GetStartBucket(firstOrdinal);
+        long bucketCount = from.GetEndBucket(lastOrdinal) - sourceStart;
+
+        target.EntryData!.CopyBits(
+            from.EntryData!,
+            sourceStart * from.BitsPerMapEntry,
+            writeBucket * target.BitsPerMapEntry,
+            bucketCount * target.BitsPerMapEntry);
+
+        long portionStartBit = (long)firstOrdinal * target.BitsPerFixedLengthMapPortion;
+
+        target.MapPointerAndSizeData!.CopyBits(
+            from.MapPointerAndSizeData!,
+            portionStartBit,
+            portionStartBit,
+            (long)recordCount * target.BitsPerFixedLengthMapPortion);
+
+        if (writeBucket != sourceStart)
+        {
+            // The pointer is the low field of each portion, so it is the one this lands on.
+            target.MapPointerAndSizeData.IncrementMany(
+                portionStartBit,
+                writeBucket - sourceStart,
+                target.BitsPerFixedLengthMapPortion,
+                recordCount);
+        }
+
+        DeltaDiagnostics.BulkCopiedMaps += recordCount;
+
+        return writeBucket + bucketCount;
     }
 
     private static (long WriteBucket, int Size) CopyBuckets(
