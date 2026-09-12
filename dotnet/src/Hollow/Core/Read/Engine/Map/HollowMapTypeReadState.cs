@@ -235,6 +235,10 @@ public sealed partial class HollowMapTypeReadState : HollowTypeReadState, IHollo
     }
 
     /// <inheritdoc />
+    private protected override int BitsPerRecord(HollowTypeReadStateShard shard) =>
+        ((Shard)shard).DataElements.BitsPerFixedLengthMapPortion;
+
+    /// <inheritdoc />
     public override void ReadSnapshot(HollowBlobInput input, IArraySegmentRecycler memoryRecycler, int numShards)
     {
         ArgumentNullException.ThrowIfNull(input);

@@ -67,6 +67,59 @@ public abstract class HollowTypeReadState : IHollowTypeDataAccess
     public abstract long ApproxHeapFootprintInBytes { get; }
 
     /// <summary>
+    /// An approximation of how much of <see cref="ApproxHeapFootprintInBytes"/> is spent on ordinals
+    /// holding nothing, in bytes.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A removed record leaves its ordinal behind, and the fixed-length storage is one flat run indexed
+    /// by ordinal, so the space that ordinal took is still allocated until something reuses it. This
+    /// counts that space, which is what says whether a type is worth compacting.
+    /// </para>
+    /// <para>
+    /// Only fixed-length storage is counted: a hole's variable-length bytes are still there too, but
+    /// finding out how many would mean reading a record that is no longer valid.
+    /// </para>
+    /// </remarks>
+    public long ApproxHoleCostInBytes
+    {
+        get
+        {
+            HollowTypeReadStateShard[] shards = ShardsVolatile.Shards;
+
+            if (shards.Length == 0)
+            {
+                return 0;
+            }
+
+            BitSet populatedOrdinals = PopulatedOrdinals;
+            int shardNumberMask = shards.Length - 1;
+            int maxOrdinal = MaxOrdinal;
+            long holeBits = 0;
+
+            for (int hole = populatedOrdinals.NextClearBit(0);
+                hole <= maxOrdinal;
+                hole = populatedOrdinals.NextClearBit(hole + 1))
+            {
+                holeBits += BitsPerRecord(shards[hole & shardNumberMask]);
+            }
+
+            return holeBits / 8;
+        }
+    }
+
+    /// <summary>
+    /// The fixed-length bits one record of <paramref name="shard"/> occupies.
+    /// </summary>
+    /// <remarks>
+    /// Each record kind lays its fixed-length portion out differently — an object's is its fields, a
+    /// collection's is the pointer ending its element run — so only the subclass can say. Java asks each
+    /// shard for its own hole cost instead; asking for the width and doing the counting once keeps the
+    /// four implementations from being the same loop four times.
+    /// </remarks>
+    private protected abstract int BitsPerRecord(HollowTypeReadStateShard shard);
+
+    /// <summary>
     /// The number of shards this type's records are split across, or 0 before a blob has been read.
     /// </summary>
     /// <remarks>
