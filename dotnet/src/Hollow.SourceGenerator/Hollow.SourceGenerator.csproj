@@ -1,0 +1,56 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      A Roslyn analyser has to load into whatever host runs the compiler, so it targets
+      netstandard2.0 rather than the net10.0 the rest of the repository uses. That is the constraint
+      behind the whole split: the emitters this project shares with Hollow cannot reference the Hollow
+      runtime, because this assembly cannot.
+    -->
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <RootNamespace>Hollow.SourceGenerator</RootNamespace>
+    <AssemblyName>Hollow.SourceGenerator</AssemblyName>
+    <IsRoslynComponent>true</IsRoslynComponent>
+    <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <Description>
+      A Roslyn incremental source generator that emits a typed Hollow client from a data model
+      declared with attributes, so there is nothing to check in and nothing to keep in step.
+    </Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The tests reach past the generator into its symbol reader, which is the seam worth checking. -->
+    <InternalsVisibleTo Include="Hollow.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Release tracking for the diagnostics this analyser reports; RS2008 requires it. -->
+    <AdditionalFiles Include="AnalyzerReleases.Shipped.md" />
+    <AdditionalFiles Include="AnalyzerReleases.Unshipped.md" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      The emitters, shared as source rather than as a reference: this assembly cannot reference
+      Hollow.dll, and duplicating them would let the two halves of code generation drift.
+    -->
+    <Compile Include="../Hollow/Api/Codegen/CodeEmitter.cs" Link="Shared/CodeEmitter.cs" />
+    <Compile Include="../Hollow/Api/Codegen/CodeNames.cs" Link="Shared/CodeNames.cs" />
+    <Compile Include="../Hollow/Api/Codegen/CodeWriter.cs" Link="Shared/CodeWriter.cs" />
+    <Compile Include="../Hollow/Api/Codegen/GeneratedModel.cs" Link="Shared/GeneratedModel.cs" />
+    <Compile Include="../Hollow/Api/Codegen/ModelSchema.cs" Link="Shared/ModelSchema.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Ship the analyser in the package's analyzer path, as a source generator has to be consumed. -->
+    <None Include="$(OutputPath)/$(AssemblyName).dll" Pack="true" PackagePath="analyzers/dotnet/cs"
+          Visible="false" />
+  </ItemGroup>
+
+</Project>

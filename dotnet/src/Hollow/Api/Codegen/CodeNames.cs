@@ -17,7 +17,6 @@
 
 using System.Globalization;
 using System.Text;
-using Hollow.Core.Schema;
 
 namespace Hollow.Api.Codegen;
 
@@ -122,21 +121,21 @@ internal static class CodeNames
     {
         string pascal = Pascal(name);
 
-        return char.ToLowerInvariant(pascal[0]) + pascal[1..];
+        return char.ToLowerInvariant(pascal[0]) + pascal.Substring(1);
     }
 
     /// <summary>The C# type a value field reads as, nullable where the field can be null.</summary>
-    internal static string ValueTypeOf(FieldType fieldType) =>
+    internal static string ValueTypeOf(ModelFieldType fieldType) =>
         fieldType switch
         {
-            FieldType.Int => "int",
-            FieldType.Long => "long",
-            FieldType.Float => "float",
-            FieldType.Double => "double",
-            FieldType.Boolean => "bool?",
-            FieldType.Decimal => "decimal?",
-            FieldType.String => "string?",
-            FieldType.Bytes => "byte[]?",
+            ModelFieldType.Int => "int",
+            ModelFieldType.Long => "long",
+            ModelFieldType.Float => "float",
+            ModelFieldType.Double => "double",
+            ModelFieldType.Boolean => "bool?",
+            ModelFieldType.Decimal => "decimal?",
+            ModelFieldType.String => "string?",
+            ModelFieldType.Bytes => "byte[]?",
             _ => throw new ArgumentOutOfRangeException(
                 nameof(fieldType), fieldType, "not a value field type"),
         };
@@ -177,7 +176,12 @@ internal static class CodeNames
     /// </summary>
     private static string Sanitise(string name)
     {
-        ArgumentException.ThrowIfNullOrEmpty(name);
+        // Written out rather than ArgumentException.ThrowIfNullOrEmpty, which is .NET 7 and up: this
+        // file is compiled into the netstandard2.0 source generator as well.
+        if (string.IsNullOrEmpty(name))
+        {
+            throw new ArgumentException("a name to turn into an identifier cannot be empty", nameof(name));
+        }
 
         StringBuilder sanitised = new(name.Length);
 

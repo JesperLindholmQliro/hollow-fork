@@ -22,6 +22,12 @@
 
   <ItemGroup>
     <ProjectReference Include="../../src/Hollow/Hollow.csproj" />
+    <!--
+      Referenced as an ordinary assembly rather than as an analyser: the tests drive the generator
+      through CSharpGeneratorDriver, which needs the type. The emitter source it shares with Hollow is
+      internal on both sides, so the two copies do not collide.
+    -->
+    <ProjectReference Include="../../src/Hollow.SourceGenerator/Hollow.SourceGenerator.csproj" />
   </ItemGroup>
 
 </Project>

@@ -72,4 +72,19 @@ public sealed class HollowCodeGeneratorOptions
     /// <summary>The API class name to use, resolved from <see cref="ApiClassName"/>.</summary>
     internal string ResolvedApiClassName =>
         ApiClassName ?? CodeNames.Pascal(Namespace.Split('.')[^1]) + "Api";
+
+    /// <summary>
+    /// These options in the form the emitters take, which is shared with the source generator and so
+    /// knows nothing about this class.
+    /// </summary>
+    internal EmitterOptions ToEmitterOptions() =>
+        new()
+        {
+            Namespace = Namespace,
+            ApiClassName = ResolvedApiClassName,
+            DefaultCachedTypes = DefaultCachedTypes,
+            UseErgonomicShortcuts = UseErgonomicShortcuts,
+            GenerateUniqueKeyIndexes = GenerateUniqueKeyIndexes,
+            GenerateCachedDelegates = GenerateCachedDelegates,
+        };
 }

@@ -15,9 +15,6 @@
  *
  */
 
-using Hollow.Core;
-using Hollow.Core.Schema;
-
 namespace Hollow.Api.Codegen;
 
 /// <summary>
@@ -29,10 +26,10 @@ namespace Hollow.Api.Codegen;
 /// <param name="ReferencedType">The type a reference field points at.</param>
 /// <param name="PropertyName">The name of the generated property.</param>
 internal sealed record GeneratedField(
-    string Name, int Position, FieldType Type, string? ReferencedType, string PropertyName)
+    string Name, int Position, ModelFieldType Type, string? ReferencedType, string PropertyName)
 {
     /// <summary>Whether this field points at another record rather than holding a value.</summary>
-    internal bool IsReference => Type == FieldType.Reference;
+    internal bool IsReference => Type == ModelFieldType.Reference;
 }
 
 /// <summary>
@@ -40,7 +37,7 @@ internal sealed record GeneratedField(
 /// </summary>
 internal sealed class GeneratedType
 {
-    internal required HollowSchema Schema { get; init; }
+    internal required ModelSchema Schema { get; init; }
 
     /// <summary>The type's name in the dataset.</summary>
     internal required string TypeName { get; init; }
@@ -65,8 +62,18 @@ internal sealed class GeneratedType
     /// </summary>
     internal string? ShortcutValueType { get; init; }
 
-    /// <summary>The name of the single value field, where there is one.</summary>
-    internal string? ShortcutFieldName { get; init; }
+    /// <summary>
+    /// The property on this type's wrapper that the shortcut reads.
+    /// </summary>
+    /// <remarks>
+    /// <c>Value</c> on a built-in scalar, and the single field's own property on anything else — an
+    /// enum maps to a one-field type whose field is <c>_name</c>, so its wrapper has a <c>Name</c>
+    /// property and no <c>Value</c>.
+    /// </remarks>
+    internal string? ShortcutProperty { get; init; }
+
+    /// <summary>The declared primary key's field paths, where the type declares one.</summary>
+    internal IReadOnlyList<string>? PrimaryKeyFieldPaths { get; init; }
 
     internal IReadOnlyList<GeneratedField> Fields { get; init; } = [];
 
@@ -79,7 +86,7 @@ internal sealed class GeneratedType
     /// <summary>The value type of a map.</summary>
     internal string? ValueType { get; init; }
 
-    internal SchemaType Kind => Schema.SchemaType;
+    internal ModelSchemaKind Kind => Schema.Kind;
 
     /// <summary>Whether the generator emits a wrapper class for this type.</summary>
     internal bool IsGenerated => BuiltIn is null;
@@ -99,26 +106,26 @@ internal sealed class GeneratedType
 /// <param name="ValueType">The CLR type its value reads as.</param>
 /// <param name="FieldType">The field type its single field has.</param>
 internal sealed record BuiltInScalar(
-    string TypeName, string RecordType, string TypeApiType, string ValueType, FieldType FieldType)
+    string TypeName, string RecordType, string TypeApiType, string ValueType, ModelFieldType FieldType)
 {
     internal static readonly IReadOnlyList<BuiltInScalar> All =
     [
-        new("String", "HString", "HStringTypeApi", "string?", FieldType.String),
-        new("Integer", "HInteger", "HIntegerTypeApi", "int?", FieldType.Int),
-        new("Long", "HLong", "HLongTypeApi", "long?", FieldType.Long),
-        new("Double", "HDouble", "HDoubleTypeApi", "double?", FieldType.Double),
-        new("Float", "HFloat", "HFloatTypeApi", "float?", FieldType.Float),
-        new("Boolean", "HBoolean", "HBooleanTypeApi", "bool?", FieldType.Boolean),
-        new("Decimal", "HDecimal", "HDecimalTypeApi", "decimal?", FieldType.Decimal),
+        new("String", "HString", "HStringTypeApi", "string?", ModelFieldType.String),
+        new("Integer", "HInteger", "HIntegerTypeApi", "int?", ModelFieldType.Int),
+        new("Long", "HLong", "HLongTypeApi", "long?", ModelFieldType.Long),
+        new("Double", "HDouble", "HDoubleTypeApi", "double?", ModelFieldType.Double),
+        new("Float", "HFloat", "HFloatTypeApi", "float?", ModelFieldType.Float),
+        new("Boolean", "HBoolean", "HBooleanTypeApi", "bool?", ModelFieldType.Boolean),
+        new("Decimal", "HDecimal", "HDecimalTypeApi", "decimal?", ModelFieldType.Decimal),
     ];
 
     /// <summary>
     /// The built-in wrapper for <paramref name="schema"/>, or <see langword="null"/> if it is not one.
     /// </summary>
-    internal static BuiltInScalar? For(HollowSchema schema) =>
-        schema is HollowObjectSchema { FieldCount: 1 } objectSchema
+    internal static BuiltInScalar? For(ModelSchema schema) =>
+        schema is ModelObjectSchema { Fields.Count: 1 } objectSchema
             ? All.FirstOrDefault(
-                scalar => scalar.TypeName == schema.Name && scalar.FieldType == objectSchema.GetFieldType(0))
+                scalar => scalar.TypeName == schema.Name && scalar.FieldType == objectSchema.Fields[0].Type)
             : null;
 }
 
@@ -141,14 +148,12 @@ internal sealed class GeneratedModel
 
     internal IReadOnlyList<GeneratedType> Types { get; }
 
-    /// <summary>Resolves every schema of <paramref name="dataset"/>, in name order.</summary>
-    internal static GeneratedModel From(IHollowDataset dataset)
+    /// <summary>Resolves every schema of <paramref name="schemas"/>, in name order.</summary>
+    internal static GeneratedModel From(IEnumerable<ModelSchema> schemas)
     {
-        ArgumentNullException.ThrowIfNull(dataset);
+        List<ModelSchema> ordered = [.. schemas.OrderBy(schema => schema.Name, StringComparer.Ordinal)];
 
-        List<HollowSchema> schemas = [.. dataset.Schemas.OrderBy(schema => schema.Name, StringComparer.Ordinal)];
-
-        return new GeneratedModel([.. schemas.Select(Describe)]);
+        return new GeneratedModel([.. ordered.Select(Describe)]);
     }
 
     /// <summary>The resolved type named <paramref name="typeName"/>, if the model has it.</summary>
@@ -162,35 +167,37 @@ internal sealed class GeneratedModel
     internal string RecordTypeOf(string? typeName) =>
         typeName is not null && Find(typeName) is { } type ? type.RecordType : "IHollowRecord";
 
-    private static GeneratedType Describe(HollowSchema schema)
+    private static GeneratedType Describe(ModelSchema schema)
     {
         BuiltInScalar? builtIn = BuiltInScalar.For(schema);
 
         return schema switch
         {
-            HollowObjectSchema objectSchema => new GeneratedType
+            ModelObjectSchema objectSchema => new GeneratedType
             {
                 Schema = objectSchema,
                 TypeName = objectSchema.Name,
                 RecordType = builtIn?.RecordType ?? CodeNames.RecordType(objectSchema.Name),
                 BuiltIn = builtIn,
                 ShortcutValueType = ShortcutValueTypeOf(objectSchema),
-                ShortcutFieldName = ShortcutValueTypeOf(objectSchema) is null
+                ShortcutProperty = ShortcutValueTypeOf(objectSchema) is null
                     ? null
-                    : objectSchema.GetFieldName(0),
+                    : builtIn is not null
+                        ? "Value"
+                        : CodeNames.Property(objectSchema.Name, objectSchema.Fields[0].Name),
+                PrimaryKeyFieldPaths = objectSchema.PrimaryKeyFieldPaths,
                 Fields =
                 [
-                    .. Enumerable.Range(0, objectSchema.FieldCount)
-                        .Select(index => new GeneratedField(
-                            objectSchema.GetFieldName(index),
-                            index,
-                            objectSchema.GetFieldType(index),
-                            objectSchema.GetReferencedType(index),
-                            CodeNames.Property(objectSchema.Name, objectSchema.GetFieldName(index)))),
+                    .. objectSchema.Fields.Select((field, index) => new GeneratedField(
+                        field.Name,
+                        index,
+                        field.Type,
+                        field.ReferencedType,
+                        CodeNames.Property(objectSchema.Name, field.Name))),
                 ],
             },
 
-            HollowListSchema listSchema => new GeneratedType
+            ModelListSchema listSchema => new GeneratedType
             {
                 Schema = listSchema,
                 TypeName = listSchema.Name,
@@ -198,7 +205,7 @@ internal sealed class GeneratedModel
                 ElementType = listSchema.ElementType,
             },
 
-            HollowSetSchema setSchema => new GeneratedType
+            ModelSetSchema setSchema => new GeneratedType
             {
                 Schema = setSchema,
                 TypeName = setSchema.Name,
@@ -206,7 +213,7 @@ internal sealed class GeneratedModel
                 ElementType = setSchema.ElementType,
             },
 
-            HollowMapSchema mapSchema => new GeneratedType
+            ModelMapSchema mapSchema => new GeneratedType
             {
                 Schema = mapSchema,
                 TypeName = mapSchema.Name,
@@ -215,8 +222,7 @@ internal sealed class GeneratedModel
                 ValueType = mapSchema.ValueType,
             },
 
-            _ => throw new ArgumentOutOfRangeException(
-                nameof(schema), schema.SchemaType, "unknown record kind"),
+            _ => throw new ArgumentOutOfRangeException(nameof(schema), schema.Kind, "unknown record kind"),
         };
     }
 
@@ -224,18 +230,19 @@ internal sealed class GeneratedModel
     /// The CLR type a reference to this schema collapses to under the ergonomic shortcut, or
     /// <see langword="null"/> where it does not collapse.
     /// </summary>
-    private static string? ShortcutValueTypeOf(HollowObjectSchema schema)
+    private static string? ShortcutValueTypeOf(ModelObjectSchema schema)
     {
-        if (schema.FieldCount != 1 || schema.GetFieldType(0) == FieldType.Reference)
+        if (schema.Fields.Count != 1 || schema.Fields[0].Type == ModelFieldType.Reference)
         {
             return null;
         }
 
         // Always nullable: the reference taking the shortcut may itself be null, quite apart from
         // whether the value behind it is.
-        string valueType = CodeNames.ValueTypeOf(schema.GetFieldType(0));
+        string valueType = CodeNames.ValueTypeOf(schema.Fields[0].Type);
 
-        return valueType.EndsWith('?') || valueType.EndsWith("[]", StringComparison.Ordinal)
+        return valueType.EndsWith("?", StringComparison.Ordinal)
+            || valueType.EndsWith("[]", StringComparison.Ordinal)
             ? valueType
             : valueType + "?";
     }
