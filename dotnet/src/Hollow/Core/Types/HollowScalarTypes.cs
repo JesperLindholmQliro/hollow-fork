@@ -152,6 +152,73 @@ public sealed class HDecimal(IHollowObjectDelegate objectDelegate, int ordinal)
     public override decimal? Value => GetDecimal("value");
 }
 
+/// <summary>Reads the <c>String</c> type's single field.</summary>
+public sealed class HStringTypeApi(HollowApi api, IHollowObjectTypeDataAccess typeDataAccess)
+    : HollowScalarTypeApi<string?>(api, typeDataAccess)
+{
+    /// <inheritdoc />
+    public override string? GetValue(int ordinal) => ReadStringField(ordinal, ValueFieldPosition);
+
+    /// <summary>
+    /// Whether the record at <paramref name="ordinal"/> holds <paramref name="testValue"/>, without
+    /// materialising the stored string.
+    /// </summary>
+    public bool IsValueEqual(int ordinal, string? testValue) =>
+        IsStringFieldEqual(ordinal, ValueFieldPosition, testValue);
+}
+
+/// <summary>Reads the <c>Integer</c> type's single field.</summary>
+public sealed class HIntegerTypeApi(HollowApi api, IHollowObjectTypeDataAccess typeDataAccess)
+    : HollowScalarTypeApi<int?>(api, typeDataAccess)
+{
+    /// <inheritdoc />
+    public override int? GetValue(int ordinal) =>
+        IsNull(ordinal) ? null : ReadIntField(ordinal, ValueFieldPosition);
+}
+
+/// <summary>Reads the <c>Long</c> type's single field.</summary>
+public sealed class HLongTypeApi(HollowApi api, IHollowObjectTypeDataAccess typeDataAccess)
+    : HollowScalarTypeApi<long?>(api, typeDataAccess)
+{
+    /// <inheritdoc />
+    public override long? GetValue(int ordinal) =>
+        IsNull(ordinal) ? null : ReadLongField(ordinal, ValueFieldPosition);
+}
+
+/// <summary>Reads the <c>Double</c> type's single field.</summary>
+public sealed class HDoubleTypeApi(HollowApi api, IHollowObjectTypeDataAccess typeDataAccess)
+    : HollowScalarTypeApi<double?>(api, typeDataAccess)
+{
+    /// <inheritdoc />
+    public override double? GetValue(int ordinal) =>
+        IsNull(ordinal) ? null : ReadDoubleField(ordinal, ValueFieldPosition);
+}
+
+/// <summary>Reads the <c>Float</c> type's single field.</summary>
+public sealed class HFloatTypeApi(HollowApi api, IHollowObjectTypeDataAccess typeDataAccess)
+    : HollowScalarTypeApi<float?>(api, typeDataAccess)
+{
+    /// <inheritdoc />
+    public override float? GetValue(int ordinal) =>
+        IsNull(ordinal) ? null : ReadFloatField(ordinal, ValueFieldPosition);
+}
+
+/// <summary>Reads the <c>Boolean</c> type's single field.</summary>
+public sealed class HBooleanTypeApi(HollowApi api, IHollowObjectTypeDataAccess typeDataAccess)
+    : HollowScalarTypeApi<bool?>(api, typeDataAccess)
+{
+    /// <inheritdoc />
+    public override bool? GetValue(int ordinal) => ReadBooleanField(ordinal, ValueFieldPosition);
+}
+
+/// <summary>Reads the <c>Decimal</c> type's single field.</summary>
+public sealed class HDecimalTypeApi(HollowApi api, IHollowObjectTypeDataAccess typeDataAccess)
+    : HollowScalarTypeApi<decimal?>(api, typeDataAccess)
+{
+    /// <inheritdoc />
+    public override decimal? GetValue(int ordinal) => ReadDecimalField(ordinal, ValueFieldPosition);
+}
+
 /// <summary>
 /// Builds handles to the built-in scalar wrapper types.
 /// </summary>
@@ -194,6 +261,39 @@ public static class HollowScalarTypes
             _ => throw new ArgumentException(
                 $"{schema.Name}'s only field is a {schema.GetFieldType(0)}, which is not a scalar.",
                 nameof(typeDataAccess)),
+        };
+    }
+
+    /// <summary>
+    /// The type API for a built-in scalar wrapper type, or <see langword="null"/> if
+    /// <paramref name="typeDataAccess"/> does not read one.
+    /// </summary>
+    /// <remarks>
+    /// A generated API calls this rather than naming the concrete type APIs, so that the mapping from
+    /// field type to wrapper lives in one place.
+    /// </remarks>
+    public static HollowObjectTypeApi? TypeApiFor(
+        HollowApi api, IHollowObjectTypeDataAccess typeDataAccess)
+    {
+        ArgumentNullException.ThrowIfNull(typeDataAccess);
+
+        HollowObjectSchema schema = typeDataAccess.Schema;
+
+        if (schema.FieldCount != 1)
+        {
+            return null;
+        }
+
+        return schema.GetFieldType(0) switch
+        {
+            FieldType.String => new HStringTypeApi(api, typeDataAccess),
+            FieldType.Int => new HIntegerTypeApi(api, typeDataAccess),
+            FieldType.Long => new HLongTypeApi(api, typeDataAccess),
+            FieldType.Double => new HDoubleTypeApi(api, typeDataAccess),
+            FieldType.Float => new HFloatTypeApi(api, typeDataAccess),
+            FieldType.Boolean => new HBooleanTypeApi(api, typeDataAccess),
+            FieldType.Decimal => new HDecimalTypeApi(api, typeDataAccess),
+            _ => null,
         };
     }
 

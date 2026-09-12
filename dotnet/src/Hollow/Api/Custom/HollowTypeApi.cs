@@ -56,6 +56,16 @@ public abstract class HollowTypeApi
     /// <summary>Read access to this type's records.</summary>
     public IHollowTypeDataAccess TypeDataAccess { get; }
 
+    /// <summary>
+    /// Whether the loaded dataset has this type at all.
+    /// </summary>
+    /// <remarks>
+    /// <see langword="false"/> when a generated API was built against a model that has a type this
+    /// dataset does not. Every read of it then goes to the missing-data handler, and it holds no
+    /// records.
+    /// </remarks>
+    public bool IsTypePresent => TypeDataAccess is not IHollowMissingTypeDataAccess;
+
     /// <summary>Answers reads of fields this dataset does not have.</summary>
     protected IMissingDataHandler MissingDataHandler => Api.DataAccess.MissingDataHandler;
 }
@@ -89,6 +99,14 @@ public abstract class HollowObjectTypeApi : HollowTypeApi
         _fieldNames = fieldNames;
         _fieldIndexes = new int[fieldNames.Length];
 
+        if (typeDataAccess is IHollowMissingTypeDataAccess)
+        {
+            // The whole type is absent, so every field is, and there is no schema to ask.
+            Array.Fill(_fieldIndexes, MissingField);
+
+            return;
+        }
+
         HollowObjectSchema schema = typeDataAccess.Schema;
 
         for (int i = 0; i < fieldNames.Length; i++)
@@ -103,8 +121,12 @@ public abstract class HollowObjectTypeApi : HollowTypeApi
     /// <summary>The schema of this type as the loaded dataset declares it.</summary>
     public HollowObjectSchema Schema => TypeDataAccess.Schema;
 
-    /// <summary>The name of this type.</summary>
-    public string TypeName => Schema.Name;
+    /// <summary>
+    /// The name of this type, which is known even when the dataset does not have it — that name is what
+    /// every read of a missing type is reported under.
+    /// </summary>
+    public string TypeName =>
+        base.TypeDataAccess is IHollowMissingTypeDataAccess missing ? missing.MissingTypeName : Schema.Name;
 
     /// <summary>
     /// The position of the field the generated API knows as <paramref name="fieldPosition"/>, or

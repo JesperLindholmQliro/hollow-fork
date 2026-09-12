@@ -9,6 +9,12 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!--
+      The code generator's tests compile its output in process and run it, which is the only way to
+      know the emitted text is valid C# that does what it claims. Java's equivalent shells out to the
+      JDK compiler and only checks that it compiles.
+    -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageReference Include="xunit.v3" Version="3.1.0" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" />
