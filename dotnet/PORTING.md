@@ -31,14 +31,14 @@ written in as the data grows or shrinks, and a consumer rearranges the records i
 match before applying the delta that says so. The incremental producer is here too, for a caller whose
 source of truth is a change feed rather than a table.
 
-The typed API layer is here — the record wrappers, delegates and per-type field readers that generated
-code is written against — so a dataset can be traversed by name today, with or without a generator.
-Variable-length fields can be read into a caller's buffer, or viewed in place where the storage layout
-allows it, rather than always allocating.
+Code generation is here: point `HollowCodeGenerator` at a data model and it emits a typed C# client —
+`api.GetMovie(17).Title` rather than field 3 of ordinal 17 — with a unique-key index for each type that
+declares a primary key. The typed runtime it sits on is useful without it, since the generic records
+traverse any dataset by name. Variable-length fields can be read into a caller's buffer, or viewed in
+place where the storage layout allows it, rather than always allocating.
 
-What is **not** here is object longevity, code generation, and the diff/history tools. The status
-section says exactly what is and is not ported; [Porting the code
-generator](#porting-the-code-generator) sets out what the largest of those would take.
+What is **not** here is object longevity and the diff/history tools. The status section says exactly
+what is and is not ported.
 
 ## Building and testing
 
@@ -297,125 +297,145 @@ buffer first, which is what `GetString(name, Span<char>)` already does, honestly
 `GetStringBytesSequence` exposes a string's encoded bytes for hashing or copying, where the bytes
 rather than the text are what is wanted.
 
-## Porting the code generator
+## The typed value indexes
 
-Hollow's generator turns a data model into a typed client: instead of
-`stateEngine.GetTypeState("Movie")` and reading field 3 of ordinal 17, a caller writes
-`api.GetMovie(17).Title`. In .NET the generated code would be C# — that part is the easy half. What
-follows is what a port actually involves, because the generator itself is not the bulk of it.
+`HollowPrimaryKeyIndex` and `HollowHashIndex` take an `object[]` and hand back ordinals.
+`UniqueKeyIndex` and `HashIndex` are the typed façades over them: the query is an object of the
+caller's own type, the match comes back as a record wrapper, and both ends are bound to the schemas
+when the index is built rather than at the first query that gets them wrong.
 
-### What is actually being ported
+```csharp
+UniqueKeyIndex<Movie, int> byId = UniqueKeyIndex.From<Movie>(consumer)
+    .BindToPrimaryKey()
+    .UsingPath<int>("Id");
 
-The `api.codegen` package is about 7,100 lines across 42 classes, but only around 5,200 of those are
-the client API generator. The rest are three independent extras — a POJO generator (~590 lines), a
-"performance API" generator (~460), and a test-data builder generator (~870) — none of which anything
-else depends on.
+consumer.AddRefreshListener(byId);
 
-The harder half is the runtime the generated code sits on. Most of it is now ported — see [The typed
-API layer](#the-typed-api-layer):
+Movie? found = byId.FindMatch(42);
+```
 
-| Java package | Lines | What it is | State |
-| --- | --- | --- | --- |
-| `api.custom` | ~450 | `HollowAPI`, `HollowObjectTypeAPI` and friends — the per-type field readers the generated code calls | Ported |
-| `api.objects` (+ `delegate`, `generic`, `provider`) | ~2,700 | `HollowObject`, `HollowList`, `HollowSet`, `HollowMap`, the delegate indirection and the object providers behind them | Ported |
-| `core.type` (+ `delegate`, `accessor`) | ~2,000 | The generated API for Hollow's built-in wrapper types: `HString`, `HInteger`, `HLong` and the rest | Ported, as ~150 lines |
-| `core.read.missing` | ~250 | The missing-data handler a generated accessor falls back to when the field is absent from the consumer's copy of the model | Ported |
-| `api.consumer.index` | ~1,450 | `UniqueKeyIndex` and `HashIndex`, the typed façades over the ported indexes | Not ported |
-| `api.sampling` | ~780 | The field-access samplers every generated type API records through | Deliberately not ported |
+A composite key is an object with a `[FieldPath]` member per field, in any order — the index puts
+them in the order the declared primary key lists them, and refuses a key that is not the declared one:
 
-`core.type` collapses because Java writes out a full generated API — a type API, two delegates, a
-record class and a factory — for each of `HString`, `HInteger`, `HLong`, `HDouble`, `HFloat` and
-`HBoolean`, which is the same code six times over a different primitive. One
-`HollowScalarTypeApi<TValue>` and one `HollowScalar<TValue>` cover all of them, plus `HDecimal` for
-this port's extension, in about 150 lines.
+```csharp
+private sealed record ReleaseKey(
+    [property: FieldPath("Id")] int Id,
+    [property: FieldPath("Studio.Name", Order = 1)] string Studio,
+    [property: FieldPath("Year", Order = 2)] int Year);
+```
 
-`api.sampling` is not a gap to be filled later so much as a decision. It threads a sampler through
-every data-access method so a generated API can report which fields were actually read — useful
-observability, but it touches every read on the hot path, and nothing above it depends on it. If it is
-wanted in .NET, the idiomatic answer is probably an `EventSource` or a `Meter` rather than a sampler
-object per type API.
+`HashIndex` answers the question that is neither unique nor one-to-one, and its select form returns
+the records a path names rather than the roots that matched:
 
-So what is left is `api.consumer.index` (~1,450 lines) plus **~5,200 lines of generator**.
+```csharp
+HashIndexSelect<Movie, Actor, string> castByStudio = HashIndex.From<Movie>(consumer)
+    .SelectField<Actor>("Cast.element")
+    .UsingPath<string>("Studio.Name.value");
 
-### The shape of the generated code
+foreach (Actor actor in castByStudio.FindMatches("Lionsgate"))
+{
+    // every cast member of every film that studio made
+}
+```
 
-For a `Movie` with an `id`, a `title` and a `year`, Java emits, per type: a `Movie` record class, a
-`MovieDelegate` interface with a cached and a lookup implementation, a `MovieTypeAPI`, a
-`MovieHollowFactory`, a `MovieDataAccessor`, and a `MoviePrimaryKeyIndex`; plus one `MoviesAPI`, an
-API factory and a hash index for the model as a whole. The delegate is the indirection that lets a
-record be read either straight from the blob or from a cache, without the accessor class knowing
-which.
+Register an index with the consumer to have it follow the data, and remove it when it is no longer
+wanted: a registered index is still being rebuilt on every snapshot, and still holds the state it was
+built over.
 
-The C# equivalent differs in more than syntax:
+Turning an ordinal into a record needs the typed API, so the consumer now builds one. Give it an
+`IHollowApiFactory` and it hands the result out as `HollowConsumer.Api`:
 
-- **Getters become properties.** `movie.getTitle()` → `movie.Title`. Java's paired
-  `getYear()`/`getYearBoxed()` — a primitive and its boxed form, because only the latter can be null
-  — collapses into one `int? Year`, which removes a whole category of generated method.
-- **The collection wrappers implement the BCL interfaces.** `HollowList<T>` is an `IReadOnlyList<T>`,
-  `HollowSet<T>` an `IReadOnlyCollection<T>` and `HollowMap<TKey, TValue>` an
-  `IReadOnlyCollection<KeyValuePair<TKey, TValue>>`. Java's versions extend `AbstractList` and
-  friends; the .NET equivalents make LINQ and `foreach` work without a shim. `IReadOnlySet<T>` and
-  `IReadOnlyDictionary<TKey, TValue>` are deliberately not implemented: their lookup members are
-  typed in the element type, whereas a Hollow lookup takes either a record handle or a raw key value
-  and so is typed `object?` — see [A declared hash key replaces ordinal-based
-  lookup](#a-declared-hash-key-replaces-ordinal-based-lookup). `Keys`, `Values`, `ContainsKey` and an
-  indexer are all there; only the interface is not claimed.
-- **Records are handles, not objects.** A generated accessor is an ordinal plus a delegate reference.
-  A `readonly record struct` says that better than a class does, and avoids an allocation per record
-  read — though it has to be measured, since the delegate reference makes it two words either way.
-- **Nullability annotations are part of the contract.** A reference field that can be null generates
-  `Movie? Sequel { get; }`; a non-nullable one does not. The port is nullable-enabled throughout, so
-  generated code that is not would be a wart.
-- **Naming follows the port's conventions**, as set out under [Naming
-  changes](#naming-changes): PascalCase members, an `I` prefix on generated delegate interfaces.
-- **The `Decimal` extension needs an accessor.** A `decimal` field generates `decimal? Price`, which
-  Java has no equivalent of — see [Format extension: the `Decimal` field
+```csharp
+new HollowConsumerBuilder()
+    .WithBlobRetriever(blobRetriever)
+    .WithApiFactory(new MoviesApiFactory())
+    .Build();
+```
+
+The API is rebuilt on each snapshot and kept across deltas, since the type APIs read through the state
+engine itself and anything caching underneath is its own delta listener.
+
+## The code generator
+
+`Hollow.Api.Codegen` turns a data model into the typed client the layer above was built for. Point it
+at the CLR types a producer maps, or at any dataset that carries schemas, and it emits C#:
+
+```csharp
+HollowCodeGenerator generator = new(new HollowCodeGeneratorOptions { Namespace = "Acme.Movies" });
+
+HollowCodeGenerator.WriteTo("obj/generated", generator.Generate(typeof(Movie)));
+```
+
+What comes out, per type: a type API that resolves each field's position once, a delegate interface
+with a lookup and a cached implementation, a record wrapper with a property per field, and a factory.
+Plus one API class holding them all, a factory for a consumer to take, and a unique-key index for each
+type that declares a primary key. The schemas are derived by `HollowObjectMapper`, the same code the
+write path uses, so the generated client reads exactly what a producer mapping those types writes.
+
+### What C# changes
+
+- **Getters become properties**, and Java's paired `getYear()`/`getYearBoxed()` — a primitive and its
+  boxed form, because only the latter can be null — collapses into one `int? Year`. That removes a
+  whole category of generated method.
+- **A reference to a single-value type reads as that value.** `movie.Title` is a `string`, not an
+  `HString`; the wrapper is still there as `movie.TitleRecord`. Java has the same shortcut and it
+  matters more here, where a wrapper type in a property signature reads as noise. Turn it off with
+  `UseErgonomicShortcuts = false` and the property is the wrapper.
+- **A string reference also generates a comparison.** `movie.IsTitleEqual("Rush")` goes through the
+  shared `String` record's type API, so the stored text is never built — the one read the typed layer
+  can do that a naive wrapper cannot.
+- **The six built-in scalar wrappers are not emitted.** Java generates `HString`, `HInteger` and the
+  rest into every generated package; they are in `Hollow.Core.Types` here, so the generated API just
+  names them.
+- **Nullability is part of the contract.** The output is emitted `#nullable enable` and has to compile
+  without a warning — a warning in generated source is one the caller cannot fix.
+- **The collection wrappers are the BCL interfaces.** A generated `ListOfActor` is an
+  `IReadOnlyList<Actor>`, so LINQ and `foreach` work over it with nothing materialised.
+- **The `Decimal` extension generates an accessor** like any other field, which Java has no equivalent
+  of — see [Format extension: the `Decimal` field
   type](#format-extension-the-decimal-field-type).
 
-Java's *ergonomic shortcuts* carry over unchanged in spirit: where a field references a type with a
-single value field, the accessor returns that value directly rather than a wrapper, so `movie.Title`
-is a `string` rather than an `HString`. That is a per-model decision the generator already computes,
-and it matters more in C#, where the wrapper types read as noise.
+### A type the dataset does not have
 
-### Emitting text or generating at compile time
+A client generated from one model may be pointed at a dataset written from another, and a whole type
+can be missing. The generated API holds a stand-in for it
+(`core.read.dataaccess.missing`, ported for this) rather than failing to construct: every read goes to
+the missing-data handler, `TypeApi.IsTypePresent` says so, and the type enumerates as empty. The
+marker is an interface, `IHollowMissingTypeDataAccess`, where Java names all four concrete classes at
+each check.
 
-Java writes `.java` files to a directory and the caller compiles them. .NET has a second option that
-is more idiomatic, and the choice shapes the whole design:
+### A text emitter, not a source generator
 
-**A text emitter**, as a CLI tool or MSBuild task. The direct analogue: point it at a set of schemas
-or CLR types, get `.cs` files, check them in or generate them into `obj/`. Simple, debuggable, and the
-generated code is ordinary source a caller can read and step through. It needs a build step, and
-checked-in generated code goes stale.
+.NET has two ways to do this and the choice shapes the design. What is built is the **text emitter**:
+it reuses `HollowObjectMapper` as it stands, so it proves the generated shape immediately, and the
+output is ordinary source a caller can read and step through. It needs a build step, and checked-in
+generated code goes stale.
 
-**A Roslyn incremental source generator.** The idiomatic .NET answer: the model is declared with
-attributes on CLR types, the generator runs inside the compiler, and there is nothing to check in or
-keep in step. The constraints are real, though. A source generator cannot load the types it is
-generating for — it sees syntax and symbols, not runtime types — so the data model has to be derivable
-from the declarations alone, or from a schema file passed as `AdditionalFiles`. It also cannot
-reference the Hollow assembly's runtime logic, so the schema derivation that `HollowObjectMapper` does
-today would have to be reimplemented against Roslyn's symbol model, or factored so that both share a
-description of the rules.
-
-**The recommendation is both, in order**: build the text emitter first, because it can reuse
-`HollowObjectMapper` and `HollowWriteStateCreator` as they stand and so proves the generated shape
-quickly; then, if it earns its keep, add a source generator that shares the templates. Doing the
-source generator first means solving the Roslyn symbol-model problem before knowing what the output
-should look like.
-
-### Where the model comes from
-
-Java's generator takes either CLR classes (`addToDataModel`) or `.hollow` schema files
-(`addSchemaFileToDataModel`), and turns both into a `HollowDataset`. Both already work here:
-`HollowObjectMapper.InitializeTypeState` derives schemas from CLR types, and `HollowSchema.ReadFrom`
-parses schema text. A text emitter can take either with no new machinery.
+The other option is a **Roslyn incremental source generator**, which is the more idiomatic .NET
+answer: the model is declared with attributes, the generator runs inside the compiler, and there is
+nothing to check in. The constraints are real, though. A source generator cannot load the types it is
+generating for — it sees syntax and symbols, not runtime types — so the schema derivation
+`HollowObjectMapper` does today would have to be reimplemented against Roslyn's symbol model, or
+factored so both share a description of the rules. Doing it first would have meant solving that before
+knowing what the output should look like. It is the obvious next step, and it can share these
+templates.
 
 ### Testing it
 
-Java's generator tests write the output to a temporary directory and compile it with the JDK compiler,
-which is the only way to know the emitted text is valid. The .NET equivalent is better: compile the
-generated source in-process with Roslyn and assert there are no diagnostics, then load the assembly
-and exercise the generated API against a real read state. That turns "the output compiles" and "the
-output reads the right records" into ordinary tests rather than a separate build step.
+Java's generator tests write the output to a temporary directory and shell out to the JDK compiler,
+which tells them only that it compiles. `CodeGeneratorTests` compiles the output in process with
+Roslyn, asserts there is not even a warning, loads the assembly and reads real records through it —
+including a run that checks the generated client agrees with the untyped generic layer on every record
+of every type, which is what catches a field position resolved wrongly.
+
+The emitted text itself is deliberately not pinned. It is an implementation detail, and a test over it
+turns every improvement into a test change.
+
+### What is not ported
+
+Java's three independent extras — a POJO generator, a "performance API" generator and a test-data
+builder generator, around 1,900 lines between them — are not ported, and nothing else depends on them.
+
 
 ## Culture-invariant formatting and parsing
 
@@ -636,6 +656,19 @@ type. The systematic changes are:
 - **`HollowRecordDelegate` and friends take the `I` prefix** under the interface rule, and Java's
   `HollowObjectDelegate` pair — a lookup and a cached implementation per type — keeps that shape:
   `IHollowObjectDelegate`, `HollowObjectAbstractDelegate`, `HollowObjectGenericDelegate`.
+- **`@FieldPath` → `FieldPathAttribute`**, since .NET spells an attribute with the suffix, and Java's
+  `order()` element becomes the `Order` property: C# reflection defines no order over a type's
+  members, where Java's `getDeclaredFields` happens to be stable enough for Hollow to rely on.
+- **`UniqueKeyIndex.from(consumer, type)` → `UniqueKeyIndex.From<T>(consumer)`**, with the builders as
+  separate non-generic entry points. Java can hang a static factory with its own type parameters off
+  the generic class; C# cannot do it in a way that reads well, so `UniqueKeyIndex` and `HashIndex` are
+  static classes alongside `UniqueKeyIndex<T, TKey>` and `HashIndex<T, TQuery>`. The type arguments
+  that Java passes as `Class` objects — `usingPath(path, Integer.class)` — are type arguments here:
+  `UsingPath<int>(path)`, so the two cannot disagree.
+- **`HollowAPIFactory` → `IHollowApiFactory`**, with `DelegateHollowApiFactory` added for the case
+  Java has no name for: building a known API type without reflecting over its constructors.
+- **Java's four `Hollow*MissingDataAccess` classes are identified by a marker interface**,
+  `IHollowMissingTypeDataAccess`, rather than by naming all four concrete classes at each check.
 
 ## Behavioural differences
 
@@ -935,6 +968,14 @@ the mapper's constructor; the port's mapper builds them lazily, so it registers 
 Nothing noticed until `HollowSparseIntegerSet` arrived, since it is the first delta listener that
 reads record data while the delta is being applied.
 
+### A generated client reads a dataset that is missing a whole type
+
+Java's generated API constructs a `Hollow*MissingDataAccess` for a type the dataset does not have, and
+its `HollowObjectTypeAPI` special-cases that class so it never reads the absent schema. The port does
+the same through `IHollowMissingTypeDataAccess`, and adds `HollowTypeApi.IsTypePresent` so generated
+code can enumerate such a type as empty rather than walking populated ordinals that do not exist —
+Java's equivalent throws there.
+
 ### A delta publishes each shard before announcing it
 
 For the same reason, a type read state publishes its new shard array before notifying listeners and
@@ -989,7 +1030,11 @@ pool. Java's ordering is safe only because nothing there reads during the notifi
 | `api.objects.delegate` | `IHollowRecordDelegate`, `IHollowCachedDelegate`, the object delegates, and the list/set/map delegates in both lookup and cached form |
 | `api.objects.generic` | `GenericHollowObject`, `GenericHollowList`, `GenericHollowSet`, `GenericHollowMap` |
 | `api.objects.provider` | `HollowObjectProvider`, `HollowFactory`, `HollowObjectFactoryProvider`, `HollowObjectCacheProvider` |
-| `core.type` | `HollowScalarTypeApi<TValue>` and `HollowScalar<TValue>` with `HString`, `HInteger`, `HLong`, `HDouble`, `HFloat`, `HBoolean` and `HDecimal` over them |
+| `core.type` | `HollowScalarTypeApi<TValue>` and `HollowScalar<TValue>` with `HString`, `HInteger`, `HLong`, `HDouble`, `HFloat`, `HBoolean` and `HDecimal` over them, and a concrete type API for each |
+| `core.read.dataaccess.missing` | `HollowObjectMissingDataAccess` and its list, set and map counterparts, behind the `IHollowMissingTypeDataAccess` marker |
+| `api.consumer.index` | `FieldPathAttribute`, the match and select extractors, `UniqueKeyIndex` and `HashIndex`/`HashIndexSelect` with their builders |
+| `api.client` (API factory) | `IHollowApiFactory`, `DefaultHollowApiFactory`, `DelegateHollowApiFactory`, `GeneratedHollowApiFactory<TApi>`, and `HollowConsumer.Api` |
+| `api.codegen` (client API) | `HollowCodeGenerator` and its options, the model resolver, the naming rules and the emitters for all four record kinds, the API class, the API factory and the unique-key index |
 
 Test coverage is carried over from the Java tests where they exist — `VarIntTest`, `HashCodesTest`,
 `FixedLengthElementArrayTest`, `FreeOrdinalTrackerTest`, `ThreadSafeBitSetTest`,
@@ -1078,6 +1123,18 @@ view, a byte field straddling a segment boundary is copied rather than viewed, a
 segment is a view into storage. The multi-segment sequence is read back through a `SequenceReader` on
 the theory that if it composes with the BCL's own reader it is a real `ReadOnlySequence`.
 
+`TypedIndexTests` covers the typed façades over the two value indexes, against a consumer with a
+generated-shape API. Most of what is worth testing there is what the binding refuses — a key type
+whose member cannot match the field it names, a select path that resolves to a value rather than a
+record, a key that is not the primary key it claims to be — since the point of the layer is to catch
+those when the index is built rather than at a query that silently never matches.
+
+`CodeGeneratorTests` compiles the generator's output in process with Roslyn, refuses even a warning,
+and then reads real records through the loaded assembly. The assertion that matters most is that the
+generated client agrees with the untyped generic layer on every record of every type, which is what
+would catch a field position resolved wrongly. The emitted text itself is not pinned: it is an
+implementation detail, and a test over it turns every improvement into a test change.
+
 `FilesystemProducerTests` is the only test where a real producer and a real consumer share a real
 directory. Everything else uses in-memory stand-ins on one side or the other, so this is what would
 catch a producer and a consumer that each work but do not agree on a file name, a staging step or the
@@ -1108,17 +1165,14 @@ sets of `TypeFilter` exist; the recursive rule DSL is still absent.
   `RecordCountPercentChangeValidator`). The validation framework they plug into is ported, so each is
   a self-contained addition.
 - **The consumer's optional layers.** Object longevity, metrics collection
-  (`api.consumer.metrics`), `api.consumer.data`, and `api.consumer.index` — the last of which wraps
-  the ported indexes in a generated-API-typed façade. That façade is now the only unported part of the
-  runtime the generator targets; see [Porting the code
-  generator](#porting-the-code-generator).
+  (`api.consumer.metrics`) and `api.consumer.data`.
 - **The deprecated `api.client.HollowClient`**, superseded by `HollowConsumer`; only the parts of
   `api.client` that `HollowConsumer` uses are ported.
 - **Tools** (`tools`: diff, history, combine, split, patch — `tools.checksum` is ported because the
   producer's integrity check needs it, and `tools.traverse` because the incremental producer does),
-  **code generation** (`api.codegen` — see [Porting the code
-  generator](#porting-the-code-generator)), **sampling**
-  (`api.sampling`, deliberately — see the same section), and every module outside
+  **`api.codegen`'s three extras** (the POJO, "performance API" and test-data builder generators; the
+  client API generator itself is ported — see [The code generator](#the-code-generator)),
+  **sampling** (`api.sampling`, deliberately — see below), and every module outside
   `hollow` — `hollow-diff-ui`, `hollow-explorer-ui`, `hollow-jsonadapter`, `hollow-protoadapter`,
   `hollow-zenoadapter`, `hollow-test`, `hollow-fakedata`.
 - **`GarbageCollectorAwareRecycler`**, which picks a pooling strategy by inspecting the JVM's
@@ -1141,15 +1195,15 @@ wide and every other fixed-length field is 64 or fewer.
 
 ### Suggested order for the remaining work
 
-The loop is closed: a producer publishes, a consumer follows, and a restarted producer stays on the
-chain. What is left is either an optimisation or a feature on top.
+The loop is closed end to end: a producer publishes, a consumer follows, a restarted producer stays on
+the chain, and a generated client reads it with types. What is left is either an optimisation or a
+feature on top.
 
-1. `api.consumer.index` — the typed `UniqueKeyIndex` and `HashIndex` façades over the ported indexes.
-   The last piece of the generator's runtime, and the only one a generated API needs that is not
-   there. See [Porting the code generator](#porting-the-code-generator).
-2. The generator itself, on top of the typed layer.
-3. The bulk-copy fast path in the delta applicators, which is a pure optimisation the existing tests
+1. A Roslyn incremental source generator sharing the emitter's templates, so a caller declares the
+   model with attributes and there is nothing to check in. See [A text emitter, not a source
+   generator](#a-text-emitter-not-a-source-generator) for the one problem to solve first.
+2. The bulk-copy fast path in the delta applicators, which is a pure optimisation the existing tests
    already guard. The resharding splitters and joiners copy record by record for the same reason and
    would benefit from the same treatment.
-4. The remaining validators, each a self-contained addition to the ported framework.
-5. Partitioned ordinal maps, which is the last write-side difference from Java's defaults.
+3. The remaining validators, each a self-contained addition to the ported framework.
+4. Partitioned ordinal maps, which is the last write-side difference from Java's defaults.

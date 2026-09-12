@@ -35,7 +35,7 @@ namespace Hollow.Api.Codegen;
 /// <code>
 /// HollowCodeGenerator generator = new(new HollowCodeGeneratorOptions { Namespace = "Acme.Movies" });
 ///
-/// generator.WriteTo("obj/generated", generator.Generate(typeof(Movie)));
+/// HollowCodeGenerator.WriteTo("obj/generated", generator.Generate(typeof(Movie)));
 /// </code>
 /// <para>
 /// <strong>Port note.</strong> Java's <c>api.codegen</c> emits Java, and emits a good deal more of it:
