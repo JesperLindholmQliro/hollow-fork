@@ -187,7 +187,7 @@ public sealed partial class HollowMapTypeDataElements
                 recordCount);
         }
 
-        DeltaDiagnostics.BulkCopiedMaps += recordCount;
+        RecordCopyDiagnostics.BulkCopiedMaps += recordCount;
 
         return writeBucket + bucketCount;
     }
@@ -201,14 +201,34 @@ public sealed partial class HollowMapTypeDataElements
     /// the next one starts and how many entries were in it.
     /// </summary>
     /// <remarks>
-    /// The empty-bucket sentinel is all-ones at the key width, so an empty bucket has to be rewritten
-    /// at this shard's width rather than copied.
+    /// <para>
+    /// The empty-bucket sentinel is all-ones at the key width, and an entry packs a key against a
+    /// value, so where the two shards agree on both widths the whole table is one copy and where they
+    /// do not every bucket has to be rewritten. The delta merge, the resharding splitter and the joiner
+    /// all come through here.
+    /// </para>
+    /// <para>
+    /// Copying carries an empty bucket's value bits where rewriting leaves them zero. Nothing reads
+    /// them: a lookup stops at the sentinel key, and so does the checksum.
+    /// </para>
     /// </remarks>
     internal (long WriteBucket, int Size) CopyBucketsFrom(
         long writeBucket, HollowMapTypeDataElements source, int sourceOrdinal)
     {
         long start = source.GetStartBucket(sourceOrdinal);
         long end = source.GetEndBucket(sourceOrdinal);
+
+        if (BitsPerKeyElement == source.BitsPerKeyElement
+            && BitsPerValueElement == source.BitsPerValueElement)
+        {
+            EntryData!.CopyBits(
+                source.EntryData!,
+                start * BitsPerMapEntry,
+                writeBucket * BitsPerMapEntry,
+                (end - start) * BitsPerMapEntry);
+
+            return (writeBucket + (end - start), source.GetSize(sourceOrdinal));
+        }
 
         for (long bucket = start; bucket < end; bucket++)
         {

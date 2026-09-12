@@ -45,6 +45,40 @@ public sealed partial class HollowObjectTypeDataElements
     internal void CopyRecord(
         int toOrdinal, HollowObjectTypeDataElements from, int fromOrdinal, long[] varLengthWritePointers)
     {
+        if (LayoutMatches(from))
+        {
+            RecordCopyDiagnostics.BulkResharded++;
+
+            // Same widths in the same order, so the record's fixed-length half is the same bits here as
+            // it was there. Only its var-length pointers are wrong, and the loop below rewrites those.
+            FixedLengthData!.CopyBits(
+                from.FixedLengthData!,
+                (long)from.BitsPerRecord * fromOrdinal,
+                (long)BitsPerRecord * toOrdinal,
+                BitsPerRecord);
+
+            for (int fieldIndex = 0; fieldIndex < Schema.FieldCount; fieldIndex++)
+            {
+                if (!Schema.GetFieldType(fieldIndex).IsVariableLength())
+                {
+                    continue;
+                }
+
+                long fieldBitOffset = ((long)BitsPerRecord * toOrdinal) + BitOffsetPerField[fieldIndex];
+
+                // SetElementValue ORs into what is already there, because the storage it is designed
+                // for starts out zeroed. These bits do not: the copy above just filled them with the
+                // pointer this record had in the shard it came from.
+                FixedLengthData.ClearElementValue(fieldBitOffset, BitsPerField[fieldIndex]);
+
+                CopyVarLengthField(from, fromOrdinal, fieldIndex, fieldBitOffset, varLengthWritePointers);
+            }
+
+            return;
+        }
+
+        RecordCopyDiagnostics.ReencodedByReshard++;
+
         for (int fieldIndex = 0; fieldIndex < Schema.FieldCount; fieldIndex++)
         {
             long fieldBitOffset = ((long)BitsPerRecord * toOrdinal) + BitOffsetPerField[fieldIndex];
@@ -104,6 +138,32 @@ public sealed partial class HollowObjectTypeDataElements
         }
     }
 
+    /// <summary>
+    /// Whether a record occupies the same bits here as it does in <paramref name="from"/>.
+    /// </summary>
+    /// <remarks>
+    /// Splitting usually narrows the var-length fields and joining widens them, since their width
+    /// follows the bytes a shard holds — so this is mostly true of types with no var-length field at
+    /// all, and of a shard being moved rather than resized.
+    /// </remarks>
+    private bool LayoutMatches(HollowObjectTypeDataElements from)
+    {
+        if (BitsPerRecord != from.BitsPerRecord)
+        {
+            return false;
+        }
+
+        for (int fieldIndex = 0; fieldIndex < Schema.FieldCount; fieldIndex++)
+        {
+            if (BitsPerField[fieldIndex] != from.BitsPerField[fieldIndex])
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     private void CopyVarLengthField(
         HollowObjectTypeDataElements from,
         int fromOrdinal,
@@ -118,10 +178,7 @@ public sealed partial class HollowObjectTypeDataElements
             IVariableLengthData source = from.VarLengthData[fieldIndex]!;
             SegmentedByteArray target = (SegmentedByteArray)VarLengthData[fieldIndex]!;
 
-            for (long i = 0; i < end - start; i++)
-            {
-                target.Set(varLengthWritePointers[fieldIndex] + i, source.Get(start + i));
-            }
+            target.Copy(source, start, varLengthWritePointers[fieldIndex], end - start);
 
             varLengthWritePointers[fieldIndex] += end - start;
         }

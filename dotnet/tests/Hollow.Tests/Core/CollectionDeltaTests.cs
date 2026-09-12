@@ -250,7 +250,7 @@ public class CollectionDeltaTests
         WriteCycle(engine, valueSchema, cycles[0]);
         HollowReadStateEngine consumer = ReadSnapshot(engine);
 
-        DeltaDiagnostics.Reset();
+        RecordCopyDiagnostics.Reset();
 
         for (int i = 1; i < cycles.Length; i++)
         {
@@ -265,10 +265,10 @@ public class CollectionDeltaTests
         }
 
         return (
-            DeltaDiagnostics.BulkCopiedObjects,
-            DeltaDiagnostics.BulkCopiedLists,
-            DeltaDiagnostics.BulkCopiedSets,
-            DeltaDiagnostics.BulkCopiedMaps);
+            RecordCopyDiagnostics.BulkCopiedObjects,
+            RecordCopyDiagnostics.BulkCopiedLists,
+            RecordCopyDiagnostics.BulkCopiedSets,
+            RecordCopyDiagnostics.BulkCopiedMaps);
     }
 
     /// <summary>A cycle of collections over a stable set of values, with one collection of each kind

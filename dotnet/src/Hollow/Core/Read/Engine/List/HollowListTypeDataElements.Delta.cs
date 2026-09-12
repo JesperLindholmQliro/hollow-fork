@@ -168,7 +168,7 @@ public sealed partial class HollowListTypeDataElements
                 pointerStartBit, writeElement - sourceStart, target.BitsPerListPointer, recordCount);
         }
 
-        DeltaDiagnostics.BulkCopiedLists += recordCount;
+        RecordCopyDiagnostics.BulkCopiedLists += recordCount;
 
         return writeElement + elementCount;
     }
@@ -182,13 +182,25 @@ public sealed partial class HollowListTypeDataElements
     /// index one past the last element written.
     /// </summary>
     /// <remarks>
-    /// Copied value by value rather than bit by bit, because the element width may differ between the
-    /// two shards — which it does whenever they were sized for different record counts.
+    /// Bit for bit where the two shards store an element at the same width, and value by value where
+    /// they do not — which happens whenever they were sized for different record counts. The delta
+    /// merge, the resharding splitter and the joiner all come through here.
     /// </remarks>
     internal long CopyElementsFrom(long writeElement, HollowListTypeDataElements source, int sourceOrdinal)
     {
         long start = source.GetStartElement(sourceOrdinal);
         long end = source.GetEndElement(sourceOrdinal);
+
+        if (BitsPerElement == source.BitsPerElement)
+        {
+            ElementData!.CopyBits(
+                source.ElementData!,
+                start * BitsPerElement,
+                writeElement * BitsPerElement,
+                (end - start) * BitsPerElement);
+
+            return writeElement + (end - start);
+        }
 
         for (long element = start; element < end; element++)
         {

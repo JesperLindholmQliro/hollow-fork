@@ -157,6 +157,32 @@ public class ReshardingTests
             HollowChecksum.ForStateEngine(ReadAt(to)), HollowChecksum.ForStateEngine(resharded));
     }
 
+    /// <summary>
+    /// A record whose bits mean the same thing in the shard it is going to is moved rather than taken
+    /// apart and rebuilt — which is most of them, since resharding only resizes a field when the number
+    /// of bytes a shard holds changes what a var-length offset needs.
+    /// </summary>
+    /// <remarks>
+    /// The two paths produce identical records, so the checksum tests above pass whichever ran. This is
+    /// the one that says which did.
+    /// </remarks>
+    [Fact]
+    public void AReshardMovesRecordsItDoesNotHaveToRebuild()
+    {
+        HollowReadStateEngine resharded = ReadAt(8);
+
+        RecordCopyDiagnostics.Reset();
+        ReshardEveryType(resharded, 8, 1);
+
+        Assert.Equal(
+            HollowChecksum.ForStateEngine(ReadAt(1)), HollowChecksum.ForStateEngine(resharded));
+
+        Assert.True(
+            RecordCopyDiagnostics.BulkResharded > 0,
+            $"every record was rebuilt ({RecordCopyDiagnostics.ReencodedByReshard} of them), so the "
+            + "path that moves them was never taken and this test proved nothing");
+    }
+
     [Fact]
     public void ReshardingThereAndBackLeavesTheStateAsItWas()
     {

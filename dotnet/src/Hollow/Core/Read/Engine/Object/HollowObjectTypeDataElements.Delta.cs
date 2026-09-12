@@ -285,7 +285,7 @@ public sealed partial class HollowObjectTypeDataElements
     {
         HollowObjectSchema schema = target.Schema;
         int recordCount = lastOrdinal - firstOrdinal + 1;
-        DeltaDiagnostics.BulkCopiedObjects += recordCount;
+        RecordCopyDiagnostics.BulkCopiedObjects += recordCount;
         long bitsPerRecord = target.BitsPerRecord;
         long runStartBit = bitsPerRecord * firstOrdinal;
 
@@ -350,10 +350,8 @@ public sealed partial class HollowObjectTypeDataElements
                 long length = end - start;
                 IVariableLengthData sourceData = source.VarLengthData[sourceFieldIndex]!;
 
-                for (long i = 0; i < length; i++)
-                {
-                    ((SegmentedByteArray)targetData).Set(varLengthWritePointers[fieldIndex] + i, sourceData.Get(start + i));
-                }
+                ((SegmentedByteArray)targetData).Copy(
+                    sourceData, start, varLengthWritePointers[fieldIndex], length);
 
                 varLengthWritePointers[fieldIndex] += length;
             }

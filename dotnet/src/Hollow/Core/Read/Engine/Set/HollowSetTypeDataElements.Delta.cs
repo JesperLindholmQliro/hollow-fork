@@ -177,7 +177,7 @@ public sealed partial class HollowSetTypeDataElements
                 recordCount);
         }
 
-        DeltaDiagnostics.BulkCopiedSets += recordCount;
+        RecordCopyDiagnostics.BulkCopiedSets += recordCount;
 
         return writeBucket + bucketCount;
     }
@@ -191,14 +191,26 @@ public sealed partial class HollowSetTypeDataElements
     /// the next one starts and how many elements were in it.
     /// </summary>
     /// <remarks>
-    /// The empty-bucket sentinel is all-ones at the element width, so an empty bucket has to be
-    /// rewritten at this shard's width rather than copied.
+    /// The empty-bucket sentinel is all-ones at the element width, so where the two shards agree on
+    /// that width the whole table is one copy, and where they do not every bucket has to be rewritten.
+    /// The delta merge, the resharding splitter and the joiner all come through here.
     /// </remarks>
     internal (long WriteBucket, int Size) CopyBucketsFrom(
         long writeBucket, HollowSetTypeDataElements source, int sourceOrdinal)
     {
         long start = source.GetStartBucket(sourceOrdinal);
         long end = source.GetEndBucket(sourceOrdinal);
+
+        if (BitsPerElement == source.BitsPerElement)
+        {
+            ElementData!.CopyBits(
+                source.ElementData!,
+                start * BitsPerElement,
+                writeBucket * BitsPerElement,
+                (end - start) * BitsPerElement);
+
+            return (writeBucket + (end - start), source.GetSize(sourceOrdinal));
+        }
 
         for (long bucket = start; bucket < end; bucket++)
         {

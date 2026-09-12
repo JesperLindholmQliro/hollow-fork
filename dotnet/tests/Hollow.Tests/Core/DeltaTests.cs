@@ -204,7 +204,7 @@ public class DeltaTests
         AddMovies(engine, schema, cycles[0]);
         HollowReadStateEngine consumer = ReadSnapshot(engine);
 
-        long before = DeltaDiagnostics.BulkCopiedObjects;
+        long before = RecordCopyDiagnostics.BulkCopiedObjects;
 
         foreach (Movie[] cycle in cycles.Skip(1))
         {
@@ -219,7 +219,7 @@ public class DeltaTests
                 viaSnapshot.GetTypeState("Movie")!.MaxOrdinal, consumer.GetTypeState("Movie")!.MaxOrdinal);
         }
 
-        return DeltaDiagnostics.BulkCopiedObjects - before;
+        return RecordCopyDiagnostics.BulkCopiedObjects - before;
     }
 
     /// <summary>

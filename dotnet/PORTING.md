@@ -1067,6 +1067,19 @@ One case needs saying because it is invisible in the counts: a type whose record
 all is left out of the delta entirely by `HollowBlobWriter`, so nothing is applied for it and nothing
 is carried across.
 
+The resharding splitters and joiners have the same two paths, for the same reason and guarded the same
+way — `AReshardMovesRecordsItDoesNotHaveToRebuild` is the test that says which one ran. A split
+interleaves ordinals across the new shards, so there is never a run of them going to the same place;
+what is bulk-copied there is one record at a time, and one collection's elements at a time.
+
+### `SetElementValue` assumes the bits it is writing are zero
+
+It ORs, because the storage it was designed for is freshly allocated. That is fine everywhere the
+original port used it and a trap for anything that writes twice: bulk-copying a record and then
+correcting one of its fields leaves the two values ORed together. `HollowObjectTypeDataElements.CopyRecord`
+calls `ClearElementValue` first for exactly this reason. `IncrementMany` has no such problem — it is
+arithmetic on what is there, which is why the delta applicators correct pointers with it instead.
+
 ### Concurrency primitives
 
 Java's `AtomicLongArray` has no .NET equivalent. `ThreadSafeBitSet` and `ByteArrayOrdinalMap` use
