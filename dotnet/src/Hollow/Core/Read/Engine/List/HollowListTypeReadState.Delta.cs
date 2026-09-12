@@ -52,19 +52,22 @@ public sealed partial class HollowListTypeReadState
 
             shards[i] = new Shard(nextData, shards[i].ShardOrdinalShift);
 
+            if (shards.Length == 1)
+            {
+                _maxOrdinal = nextData.MaxOrdinal;
+            }
+
+            // Published before the listeners are told and before the storage it replaced is released:
+            // a listener may read the records it is being told about, and a concurrent reader must not
+            // be left pointing at storage that has gone back to the recycler.
+            _shardsVolatile = new ShardsHolder<Shard>([.. shards]);
+
             NotifyListenersAboutDeltaChanges(
                 deltaData.EncodedRemovals, deltaData.EncodedAdditions, i, shards.Length);
 
             fromData.Destroy();
             deltaData.Destroy();
         }
-
-        if (shards.Length == 1)
-        {
-            _maxOrdinal = shards[0].DataElements.MaxOrdinal;
-        }
-
-        _shardsVolatile = new ShardsHolder<Shard>(shards);
     }
 
     /// <summary>

@@ -138,8 +138,12 @@ public sealed class HollowObjectMapper
         HollowTypeMapper mapper = CreateMapper(key, hashKeyFieldPaths);
         mapper = _typeMappers.GetOrAdd(key, mapper);
 
-        mapper.EnsureRegistered(_stateEngine);
+        // The referenced types register first, so a type appears in the blob after everything it points
+        // at. A delta is applied type by type in that order, so a listener on the referencing type can
+        // follow a reference and find the new record rather than the one it is replacing. Java gets the
+        // same order by building its sub-mappers inside the mapper's constructor.
         mapper.RegisterReferencedTypes(this);
+        mapper.EnsureRegistered(_stateEngine);
 
         return mapper;
     }
