@@ -15,6 +15,7 @@
  *
  */
 
+using System.Buffers;
 using System.Collections;
 using Hollow.Api.Objects.Delegate;
 using Hollow.Core.Read.DataAccess;
@@ -122,6 +123,124 @@ public abstract class HollowObject : IHollowRecord, IEquatable<HollowObject>
 
     /// <summary>Reads a bytes field, which may be null.</summary>
     public byte[]? GetBytes(string fieldName) => ObjectDelegate.GetBytes(Ordinal, fieldName);
+
+    /// <summary>
+    /// How many bytes a variable-length field is stored in, or -1 when it is null.
+    /// </summary>
+    /// <remarks>
+    /// How big a buffer <see cref="GetString(string, Span{char})"/> and
+    /// <see cref="GetBytes(string, Span{byte})"/> need. For a string it is an upper bound rather than
+    /// the exact character count, since a character is stored as one or more bytes.
+    /// </remarks>
+    public int GetVarLengthByteLength(string fieldName) =>
+        ObjectDelegate.GetVarLengthByteLength(Ordinal, fieldName);
+
+    /// <summary>
+    /// Reads a string field into <paramref name="destination"/> and returns a span over what was
+    /// written, allocating nothing.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The returned span points into <paramref name="destination"/>, so it is valid for as long as that
+    /// buffer is. Size the buffer with <see cref="GetVarLengthByteLength"/>, or from what the field can
+    /// hold:
+    /// </para>
+    /// <code>
+    /// Span&lt;char&gt; buffer = stackalloc char[64];
+    /// ReadOnlySpan&lt;char&gt; title = movie.GetString("title", buffer);
+    /// </code>
+    /// <para>
+    /// A null field and an empty one both come back empty. Use <see cref="IsNull"/>, or
+    /// <see cref="ReadStringInto"/>, where the difference matters.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="ArgumentException"><paramref name="destination"/> is too short.</exception>
+    public ReadOnlySpan<char> GetString(string fieldName, Span<char> destination)
+    {
+        int written = ObjectDelegate.ReadStringInto(Ordinal, fieldName, destination);
+
+        return written <= 0 ? [] : destination[..written];
+    }
+
+    /// <summary>
+    /// Reads a string field into <paramref name="destination"/>, returning the characters written or -1
+    /// when the field is null.
+    /// </summary>
+    /// <remarks>
+    /// The form of <see cref="GetString(string, Span{char})"/> that tells null from empty.
+    /// </remarks>
+    /// <exception cref="ArgumentException"><paramref name="destination"/> is too short.</exception>
+    public int ReadStringInto(string fieldName, Span<char> destination) =>
+        ObjectDelegate.ReadStringInto(Ordinal, fieldName, destination);
+
+    /// <summary>
+    /// Reads a bytes field into <paramref name="destination"/> and returns a span over what was
+    /// written, allocating nothing.
+    /// </summary>
+    /// <remarks>
+    /// Prefer <see cref="TryGetBytes"/>, which can often hand back a view over the blob itself and copy
+    /// nothing at all. A null field and an empty one both come back empty here.
+    /// </remarks>
+    /// <exception cref="ArgumentException"><paramref name="destination"/> is too short.</exception>
+    public ReadOnlySpan<byte> GetBytes(string fieldName, Span<byte> destination)
+    {
+        int written = ObjectDelegate.ReadBytesInto(Ordinal, fieldName, destination);
+
+        return written <= 0 ? [] : destination[..written];
+    }
+
+    /// <summary>
+    /// Reads a bytes field into <paramref name="destination"/>, returning the bytes written or -1 when
+    /// the field is null.
+    /// </summary>
+    /// <exception cref="ArgumentException"><paramref name="destination"/> is too short.</exception>
+    public int ReadBytesInto(string fieldName, Span<byte> destination) =>
+        ObjectDelegate.ReadBytesInto(Ordinal, fieldName, destination);
+
+    /// <summary>
+    /// Views a bytes field as a span over the blob itself, copying nothing.
+    /// </summary>
+    /// <remarks>
+    /// Returns <see langword="false"/> for a null field, and for a value that straddles a storage
+    /// segment boundary and so has no contiguous view — fall back to
+    /// <see cref="GetBytes(string, Span{byte})"/> there.
+    /// </remarks>
+    public bool TryGetBytes(string fieldName, out ReadOnlySpan<byte> value) =>
+        ObjectDelegate.TryGetBytesSpan(Ordinal, fieldName, out value);
+
+    /// <summary>
+    /// Views a bytes field as a sequence over the blob itself, copying nothing, whether or not the
+    /// value is contiguous.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="TryGetBytes"/> without the failure case: a value that straddles a storage segment
+    /// boundary comes back as several pieces rather than not at all, so this always works and never
+    /// copies. Walk it with a <see cref="System.Buffers.SequenceReader{T}"/>, or <c>foreach</c> over
+    /// its spans.
+    /// </para>
+    /// <code>
+    /// foreach (ReadOnlyMemory&lt;byte&gt; piece in record.GetBytesSequence("blob"))
+    /// {
+    ///     hash.Append(piece.Span);
+    /// }
+    /// </code>
+    /// <para>A null field and an empty one both come back empty.</para>
+    /// </remarks>
+    public ReadOnlySequence<byte> GetBytesSequence(string fieldName) =>
+        ObjectDelegate.GetVarLengthSequence(Ordinal, fieldName);
+
+    /// <summary>
+    /// Views the <em>encoded</em> bytes of a string field as a sequence, copying nothing.
+    /// </summary>
+    /// <remarks>
+    /// A character is stored as a variable-length integer, so these bytes are not characters — they are
+    /// useful for hashing or copying the stored form, not for reading text. There is no
+    /// <c>ReadOnlySequence&lt;char&gt;</c> for the same reason: no characters are stored to point at.
+    /// Use <see cref="GetString(string, Span{char})"/>, which decodes into a buffer you own.
+    /// </remarks>
+    public ReadOnlySequence<byte> GetStringBytesSequence(string fieldName) =>
+        ObjectDelegate.GetVarLengthSequence(Ordinal, fieldName);
 
     /// <inheritdoc />
     public bool Equals(HollowObject? other) =>

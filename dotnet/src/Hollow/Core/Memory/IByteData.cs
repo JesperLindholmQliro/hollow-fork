@@ -15,6 +15,8 @@
  *
  */
 
+using System.Buffers;
+
 namespace Hollow.Core.Memory;
 
 /// <summary>
@@ -36,6 +38,64 @@ public interface IByteData
     /// <summary>The length of this range, in bytes.</summary>
     /// <exception cref="NotSupportedException">The implementation does not track a length.</exception>
     long Length => throw new NotSupportedException();
+
+    /// <summary>
+    /// Views <paramref name="length"/> bytes from <paramref name="position"/> as one contiguous span,
+    /// without copying, when the storage allows it.
+    /// </summary>
+    /// <remarks>
+    /// Storage is segmented, so a range that straddles a segment boundary has no contiguous view and
+    /// this returns <see langword="false"/>. A caller that must not allocate should fall back to
+    /// <see cref="CopyTo"/> rather than treating the failure as an error — which range falls where is
+    /// an artefact of how the blob was loaded, not of the data.
+    /// </remarks>
+    /// <returns>Whether <paramref name="span"/> was set.</returns>
+    bool TryGetSpan(long position, int length, out ReadOnlySpan<byte> span)
+    {
+        span = default;
+
+        return false;
+    }
+
+    /// <summary>
+    /// Copies <paramref name="destination"/>'s length of bytes from <paramref name="position"/>.
+    /// </summary>
+    void CopyTo(long position, Span<byte> destination)
+    {
+        for (int i = 0; i < destination.Length; i++)
+        {
+            destination[i] = Get(position + i);
+        }
+    }
+
+    /// <summary>
+    /// Views <paramref name="length"/> bytes from <paramref name="position"/> as a sequence, without
+    /// copying them.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// What <see cref="TryGetSpan"/> cannot do: a range that straddles a segment boundary has no
+    /// contiguous view, but it does have a perfectly good discontiguous one. A
+    /// <see cref="ReadOnlySequence{T}"/> is exactly that — one segment per piece, walked with
+    /// <c>foreach</c> or a <see cref="SequenceReader{T}"/> — so a caller never has to choose between
+    /// copying the value and handling the boundary itself.
+    /// </para>
+    /// <para>
+    /// A range inside one segment comes back as a single-segment sequence and allocates nothing.
+    /// </para>
+    /// </remarks>
+    ReadOnlySequence<byte> GetSequence(long position, int length)
+    {
+        if (TryGetSpan(position, length, out ReadOnlySpan<byte> contiguous))
+        {
+            return new ReadOnlySequence<byte>(contiguous.ToArray());
+        }
+
+        byte[] copy = new byte[length];
+        CopyTo(position, copy);
+
+        return new ReadOnlySequence<byte>(copy);
+    }
 }
 
 /// <summary>

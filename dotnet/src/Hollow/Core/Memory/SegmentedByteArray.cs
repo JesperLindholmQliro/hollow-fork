@@ -91,6 +91,94 @@ public sealed class SegmentedByteArray : IVariableLengthData
     public byte Get(long index) => _segments[(int)((ulong)index >> _log2OfSegmentSize)]![(int)(index & _bitmask)];
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Succeeds only where the range sits inside one segment. A range that crosses a boundary has no
+    /// contiguous view, because the segments are separate arrays drawn from the recycler.
+    /// </remarks>
+    public bool TryGetSpan(long position, int length, out ReadOnlySpan<byte> span)
+    {
+        int segmentIndex = (int)((ulong)position >> _log2OfSegmentSize);
+        int offsetInSegment = (int)(position & _bitmask);
+
+        if (position < 0
+            || length < 0
+            || segmentIndex >= _segments.Length
+            || _segments[segmentIndex] is not { } segment
+            || offsetInSegment + length > segment.Length)
+        {
+            span = default;
+
+            return false;
+        }
+
+        span = segment.AsSpan(offsetInSegment, length);
+
+        return true;
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// A range inside one segment comes back as a single-segment sequence, wrapping that segment's
+    /// memory and allocating nothing. A range that crosses a boundary comes back as one sequence
+    /// segment per storage segment it touches — a handful of small objects rather than a copy of the
+    /// value, which is the whole point of using a sequence here.
+    /// </remarks>
+    public ReadOnlySequence<byte> GetSequence(long position, int length)
+    {
+        if (length <= 0)
+        {
+            return ReadOnlySequence<byte>.Empty;
+        }
+
+        int firstSegment = (int)((ulong)position >> _log2OfSegmentSize);
+        int firstOffset = (int)(position & _bitmask);
+        int lastSegment = (int)((ulong)(position + length - 1) >> _log2OfSegmentSize);
+
+        if (firstSegment == lastSegment)
+        {
+            return new ReadOnlySequence<byte>(_segments[firstSegment].AsMemory(firstOffset, length));
+        }
+
+        ByteSequenceSegment? first = null;
+        ByteSequenceSegment? last = null;
+        int remaining = length;
+        int offsetInSegment = firstOffset;
+
+        for (int segmentIndex = firstSegment; remaining > 0; segmentIndex++)
+        {
+            byte[] segment = _segments[segmentIndex]!;
+            int fromThisSegment = Math.Min(segment.Length - offsetInSegment, remaining);
+
+            last = last is null
+                ? first = new ByteSequenceSegment(segment.AsMemory(offsetInSegment, fromThisSegment), 0)
+                : last.Append(segment.AsMemory(offsetInSegment, fromThisSegment));
+
+            remaining -= fromThisSegment;
+            offsetInSegment = 0;
+        }
+
+        return new ReadOnlySequence<byte>(first!, 0, last!, last!.Memory.Length);
+    }
+
+    /// <inheritdoc />
+    public void CopyTo(long position, Span<byte> destination)
+    {
+        int copied = 0;
+
+        while (copied < destination.Length)
+        {
+            int segmentIndex = (int)((ulong)(position + copied) >> _log2OfSegmentSize);
+            int offsetInSegment = (int)((position + copied) & _bitmask);
+
+            byte[] segment = _segments[segmentIndex]!;
+            int fromThisSegment = Math.Min(segment.Length - offsetInSegment, destination.Length - copied);
+
+            segment.AsSpan(offsetInSegment, fromThisSegment).CopyTo(destination[copied..]);
+            copied += fromThisSegment;
+        }
+    }
+
+    /// <inheritdoc />
     public void Copy(IByteData source, long sourcePosition, long destinationPosition, long length)
     {
         ArgumentNullException.ThrowIfNull(source);
@@ -358,5 +446,26 @@ public sealed class SegmentedByteArray : IVariableLengthData
         }
 
         _segments[segmentIndex] ??= _memoryRecycler.GetByteArray();
+    }
+
+    /// <summary>
+    /// One piece of a value that spans several storage segments.
+    /// </summary>
+    private sealed class ByteSequenceSegment : ReadOnlySequenceSegment<byte>
+    {
+        internal ByteSequenceSegment(ReadOnlyMemory<byte> memory, long runningIndex)
+        {
+            Memory = memory;
+            RunningIndex = runningIndex;
+        }
+
+        /// <summary>Links <paramref name="memory"/> on after this piece and returns it.</summary>
+        internal ByteSequenceSegment Append(ReadOnlyMemory<byte> memory)
+        {
+            ByteSequenceSegment next = new(memory, RunningIndex + Memory.Length);
+            Next = next;
+
+            return next;
+        }
     }
 }

@@ -177,6 +177,77 @@ public abstract class HollowObjectTypeApi : HollowTypeApi
             : TypeDataAccess.ReadBytes(ordinal, _fieldIndexes[fieldPosition]);
 
     /// <summary>
+    /// How many bytes a variable-length field is stored in, or -1 when it is null; how big a buffer the
+    /// allocation-free reads below need.
+    /// </summary>
+    protected int VarLengthFieldByteLength(int ordinal, int fieldPosition) =>
+        _fieldIndexes[fieldPosition] == MissingField
+            ? -1
+            : TypeDataAccess.VarLengthFieldByteLength(ordinal, _fieldIndexes[fieldPosition]);
+
+    /// <summary>
+    /// Decodes a string field into <paramref name="destination"/>, returning the characters written or
+    /// -1 when the field is null.
+    /// </summary>
+    protected int ReadStringFieldInto(int ordinal, int fieldPosition, Span<char> destination)
+    {
+        if (_fieldIndexes[fieldPosition] != MissingField)
+        {
+            return TypeDataAccess.ReadStringInto(ordinal, _fieldIndexes[fieldPosition], destination);
+        }
+
+        // A field the loaded dataset does not have has no stored bytes to decode.
+        string? missing = MissingDataHandler.HandleString(TypeName, ordinal, _fieldNames[fieldPosition]);
+
+        if (missing is null)
+        {
+            return -1;
+        }
+
+        missing.AsSpan().CopyTo(destination);
+
+        return missing.Length;
+    }
+
+    /// <summary>
+    /// Copies a bytes field into <paramref name="destination"/>, returning the bytes written or -1 when
+    /// the field is null.
+    /// </summary>
+    protected int ReadBytesFieldInto(int ordinal, int fieldPosition, Span<byte> destination)
+    {
+        if (_fieldIndexes[fieldPosition] != MissingField)
+        {
+            return TypeDataAccess.ReadBytesInto(ordinal, _fieldIndexes[fieldPosition], destination);
+        }
+
+        byte[]? missing = MissingDataHandler.HandleBytes(TypeName, ordinal, _fieldNames[fieldPosition]);
+
+        if (missing is null)
+        {
+            return -1;
+        }
+
+        missing.CopyTo(destination);
+
+        return missing.Length;
+    }
+
+    /// <summary>
+    /// Views a bytes field as a span over the blob itself, copying nothing, where the storage allows.
+    /// </summary>
+    protected bool TryGetBytesFieldSpan(int ordinal, int fieldPosition, out ReadOnlySpan<byte> value)
+    {
+        if (_fieldIndexes[fieldPosition] != MissingField)
+        {
+            return TypeDataAccess.TryGetBytesSpan(ordinal, _fieldIndexes[fieldPosition], out value);
+        }
+
+        value = MissingDataHandler.HandleBytes(TypeName, ordinal, _fieldNames[fieldPosition]);
+
+        return !value.IsEmpty;
+    }
+
+    /// <summary>
     /// Compares a string field against <paramref name="testValue"/> without materialising the stored
     /// string.
     /// </summary>

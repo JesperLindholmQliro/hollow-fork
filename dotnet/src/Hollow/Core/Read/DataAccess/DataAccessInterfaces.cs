@@ -15,6 +15,7 @@
  *
  */
 
+using System.Buffers;
 using Hollow.Core.Read.Engine;
 using Hollow.Core.Read.Iterator;
 using Hollow.Core.Read.Missing;
@@ -129,6 +130,84 @@ public interface IHollowObjectTypeDataAccess : IHollowTypeDataAccess
     /// Hashes the stored bytes of a variable-length field without materialising them.
     /// </summary>
     int FindVarLengthFieldHashCode(int ordinal, int fieldIndex);
+
+    /// <summary>
+    /// The number of bytes stored for a variable-length field, or -1 when the field is null.
+    /// </summary>
+    /// <remarks>
+    /// This is how big a buffer has to be to read the field without allocating. For a string field it
+    /// is an upper bound on the number of characters rather than the exact count, because a character
+    /// is stored as one or more bytes — so a buffer of this size is always big enough, and the count
+    /// that comes back from <see cref="ReadStringInto"/> is what was actually written.
+    /// </remarks>
+    int VarLengthFieldByteLength(int ordinal, int fieldIndex);
+
+    /// <summary>
+    /// Decodes a <see cref="FieldType.String"/> field into <paramref name="destination"/> without
+    /// allocating.
+    /// </summary>
+    /// <returns>
+    /// The number of characters written, or -1 when the field is null. An empty string writes nothing
+    /// and returns 0, which is what distinguishes it from null.
+    /// </returns>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="destination"/> is shorter than
+    /// <see cref="VarLengthFieldByteLength"/> allows for.
+    /// </exception>
+    int ReadStringInto(int ordinal, int fieldIndex, Span<char> destination);
+
+    /// <summary>
+    /// Copies a <see cref="FieldType.Bytes"/> field into <paramref name="destination"/> without
+    /// allocating.
+    /// </summary>
+    /// <returns>
+    /// The number of bytes written, or -1 when the field is null. An empty value writes nothing and
+    /// returns 0.
+    /// </returns>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="destination"/> is shorter than the stored value.
+    /// </exception>
+    int ReadBytesInto(int ordinal, int fieldIndex, Span<byte> destination);
+
+    /// <summary>
+    /// Views a <see cref="FieldType.Bytes"/> field as a span over the blob itself, copying nothing.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Succeeds only where the stored bytes sit inside one storage segment; a value that straddles a
+    /// boundary has no contiguous view, and a caller that must not allocate falls back to
+    /// <see cref="ReadBytesInto"/>. Where the range falls is an artefact of how the blob was loaded,
+    /// so this is a fast path to try rather than a property of the data.
+    /// </para>
+    /// <para>
+    /// A string field has no such fast path: a character is stored as a variable-length integer, so
+    /// the stored bytes are not characters and always have to be decoded.
+    /// </para>
+    /// </remarks>
+    /// <returns>Whether <paramref name="value"/> was set. A null field returns false.</returns>
+    bool TryGetBytesSpan(int ordinal, int fieldIndex, out ReadOnlySpan<byte> value);
+
+    /// <summary>
+    /// Views the stored bytes of a variable-length field as a sequence, copying nothing, whether or not
+    /// they sit inside one storage segment.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is <see cref="TryGetBytesSpan"/> without the failure case: where a value straddles a
+    /// segment boundary it comes back as one sequence segment per piece rather than not at all, so a
+    /// caller can walk it with a <see cref="System.Buffers.SequenceReader{T}"/> and never copy. A value
+    /// inside one segment comes back as a single-segment sequence and allocates nothing.
+    /// </para>
+    /// <para>
+    /// For a <see cref="FieldType.Bytes"/> field these are the value's bytes. For a
+    /// <see cref="FieldType.String"/> field they are the <em>encoded</em> bytes — a character is stored
+    /// as a variable-length integer — so they are useful for hashing or copying the stored form, not
+    /// for reading text. Use <see cref="ReadStringInto"/> for that; there is no
+    /// <c>ReadOnlySequence&lt;char&gt;</c> because no characters are stored to point at.
+    /// </para>
+    /// <para>An empty sequence comes back for a null field as well as an empty one.</para>
+    /// </remarks>
+    ReadOnlySequence<byte> GetVarLengthSequence(int ordinal, int fieldIndex);
 }
 
 /// <summary>

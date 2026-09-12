@@ -15,6 +15,8 @@
  *
  */
 
+using System.Buffers;
+
 namespace Hollow.Core.Memory;
 
 /// <summary>
@@ -38,4 +40,29 @@ public sealed class ArrayByteData : IByteData
 
     /// <inheritdoc />
     public long Length => _data.Length;
+
+    /// <inheritdoc />
+    /// <remarks>One flat array, so every range within it has a contiguous view.</remarks>
+    public bool TryGetSpan(long position, int length, out ReadOnlySpan<byte> span)
+    {
+        if (position < 0 || length < 0 || position + length > _data.Length)
+        {
+            span = default;
+
+            return false;
+        }
+
+        span = _data.AsSpan((int)position, length);
+
+        return true;
+    }
+
+    /// <inheritdoc />
+    public void CopyTo(long position, Span<byte> destination) =>
+        _data.AsSpan((int)position, destination.Length).CopyTo(destination);
+
+    /// <inheritdoc />
+    /// <remarks>Always one segment, over the backing array itself.</remarks>
+    public ReadOnlySequence<byte> GetSequence(long position, int length) =>
+        new(_data.AsMemory((int)position, length));
 }

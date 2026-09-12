@@ -15,6 +15,7 @@
  *
  */
 
+using System.Buffers;
 using Hollow.Api.Custom;
 using Hollow.Core;
 using Hollow.Core.Read.DataAccess;
@@ -108,6 +109,35 @@ public interface IHollowObjectDelegate : IHollowRecordDelegate
 
     /// <summary>Reads a bytes field, which may be null.</summary>
     byte[]? GetBytes(int ordinal, string fieldName);
+
+    /// <summary>
+    /// The number of bytes stored for a variable-length field, or -1 when it is null; how big a buffer
+    /// the allocation-free reads below need.
+    /// </summary>
+    int GetVarLengthByteLength(int ordinal, string fieldName);
+
+    /// <summary>
+    /// Decodes a string field into <paramref name="destination"/>, returning the characters written or
+    /// -1 when the field is null.
+    /// </summary>
+    int ReadStringInto(int ordinal, string fieldName, Span<char> destination);
+
+    /// <summary>
+    /// Copies a bytes field into <paramref name="destination"/>, returning the bytes written or -1 when
+    /// the field is null.
+    /// </summary>
+    int ReadBytesInto(int ordinal, string fieldName, Span<byte> destination);
+
+    /// <summary>
+    /// Views a bytes field as a span over the blob itself, copying nothing, where the storage allows.
+    /// </summary>
+    bool TryGetBytesSpan(int ordinal, string fieldName, out ReadOnlySpan<byte> value);
+
+    /// <summary>
+    /// Views the stored bytes of a variable-length field as a sequence, copying nothing, whether or not
+    /// they are contiguous.
+    /// </summary>
+    ReadOnlySequence<byte> GetVarLengthSequence(int ordinal, string fieldName);
 }
 
 /// <summary>
@@ -240,6 +270,92 @@ public abstract class HollowObjectAbstractDelegate : IHollowObjectDelegate
         return fieldIndex == HollowConstants.OrdinalNone
             ? MissingDataHandler.HandleBytes(Schema.Name, ordinal, fieldName)
             : TypeDataAccess.ReadBytes(ordinal, fieldIndex);
+    }
+
+    /// <inheritdoc />
+    public int GetVarLengthByteLength(int ordinal, string fieldName)
+    {
+        int fieldIndex = Schema.GetPosition(fieldName);
+
+        return fieldIndex == HollowConstants.OrdinalNone
+            ? -1
+            : TypeDataAccess.VarLengthFieldByteLength(ordinal, fieldIndex);
+    }
+
+    /// <inheritdoc />
+    public int ReadStringInto(int ordinal, string fieldName, Span<char> destination)
+    {
+        int fieldIndex = Schema.GetPosition(fieldName);
+
+        if (fieldIndex != HollowConstants.OrdinalNone)
+        {
+            return TypeDataAccess.ReadStringInto(ordinal, fieldIndex, destination);
+        }
+
+        // A field the loaded dataset does not have has no stored bytes to decode, so the fallback's
+        // answer is copied in rather than read.
+        string? missing = MissingDataHandler.HandleString(Schema.Name, ordinal, fieldName);
+
+        if (missing is null)
+        {
+            return -1;
+        }
+
+        missing.AsSpan().CopyTo(destination);
+
+        return missing.Length;
+    }
+
+    /// <inheritdoc />
+    public int ReadBytesInto(int ordinal, string fieldName, Span<byte> destination)
+    {
+        int fieldIndex = Schema.GetPosition(fieldName);
+
+        if (fieldIndex != HollowConstants.OrdinalNone)
+        {
+            return TypeDataAccess.ReadBytesInto(ordinal, fieldIndex, destination);
+        }
+
+        byte[]? missing = MissingDataHandler.HandleBytes(Schema.Name, ordinal, fieldName);
+
+        if (missing is null)
+        {
+            return -1;
+        }
+
+        missing.CopyTo(destination);
+
+        return missing.Length;
+    }
+
+    /// <inheritdoc />
+    public bool TryGetBytesSpan(int ordinal, string fieldName, out ReadOnlySpan<byte> value)
+    {
+        int fieldIndex = Schema.GetPosition(fieldName);
+
+        if (fieldIndex != HollowConstants.OrdinalNone)
+        {
+            return TypeDataAccess.TryGetBytesSpan(ordinal, fieldIndex, out value);
+        }
+
+        value = MissingDataHandler.HandleBytes(Schema.Name, ordinal, fieldName);
+
+        return !value.IsEmpty;
+    }
+
+    /// <inheritdoc />
+    public ReadOnlySequence<byte> GetVarLengthSequence(int ordinal, string fieldName)
+    {
+        int fieldIndex = Schema.GetPosition(fieldName);
+
+        if (fieldIndex != HollowConstants.OrdinalNone)
+        {
+            return TypeDataAccess.GetVarLengthSequence(ordinal, fieldIndex);
+        }
+
+        byte[]? missing = MissingDataHandler.HandleBytes(Schema.Name, ordinal, fieldName);
+
+        return missing is null ? ReadOnlySequence<byte>.Empty : new ReadOnlySequence<byte>(missing);
     }
 
     private IMissingDataHandler MissingDataHandler => TypeDataAccess.DataAccess.MissingDataHandler;

@@ -22,6 +22,7 @@ using Hollow.Core.Memory.Encoding;
 using Hollow.Core.Memory.Pool;
 using Hollow.Core.Read.DataAccess;
 using Hollow.Core.Schema;
+using Hollow.Core.Util;
 using Hollow.Core.Write;
 
 namespace Hollow.Core.Read.Engine.Object;
@@ -290,6 +291,134 @@ public sealed partial class HollowObjectTypeReadState : HollowTypeReadState, IHo
     }
 
     /// <inheritdoc />
+    public int VarLengthFieldByteLength(int ordinal, int fieldIndex)
+    {
+        Shard shard = ShardFor(ordinal);
+        (long startByte, long endByte, int numBits) = shard.VarLengthRange(ShardOrdinal(ordinal, shard), fieldIndex);
+
+        if (IsVarLengthNull(endByte, numBits))
+        {
+            return -1;
+        }
+
+        startByte &= (1L << (numBits - 1)) - 1;
+
+        return (int)(endByte - startByte);
+    }
+
+    /// <inheritdoc />
+    public int ReadStringInto(int ordinal, int fieldIndex, Span<char> destination)
+    {
+        Shard shard = ShardFor(ordinal);
+        (long startByte, long endByte, int numBits) = shard.VarLengthRange(ShardOrdinal(ordinal, shard), fieldIndex);
+
+        if (IsVarLengthNull(endByte, numBits))
+        {
+            return -1;
+        }
+
+        startByte &= (1L << (numBits - 1)) - 1;
+        int length = (int)(endByte - startByte);
+
+        if (destination.Length < length)
+        {
+            throw new ArgumentException(
+                $"A string stored in {length.Invariant()} bytes needs a destination of at least that "
+                + $"many characters, not {destination.Length.Invariant()}.",
+                nameof(destination));
+        }
+
+        if (length == 0)
+        {
+            // A field that is empty or null in every record of the type has no storage at all, so there
+            // is nothing to decode and nothing to dereference.
+            return 0;
+        }
+
+        // A character is stored as a variable-length integer, so the decoded count is at most the byte
+        // count and usually less. Clearing first keeps a partially decoded character from picking up
+        // whatever the caller's buffer held.
+        destination[..length].Clear();
+
+        return VarInt.ReadVIntsInto(
+            shard.DataElements.VarLengthData[fieldIndex]!, startByte, length, destination);
+    }
+
+    /// <inheritdoc />
+    public int ReadBytesInto(int ordinal, int fieldIndex, Span<byte> destination)
+    {
+        Shard shard = ShardFor(ordinal);
+        (long startByte, long endByte, int numBits) = shard.VarLengthRange(ShardOrdinal(ordinal, shard), fieldIndex);
+
+        if (IsVarLengthNull(endByte, numBits))
+        {
+            return -1;
+        }
+
+        startByte &= (1L << (numBits - 1)) - 1;
+        int length = (int)(endByte - startByte);
+
+        if (destination.Length < length)
+        {
+            throw new ArgumentException(
+                $"A value of {length.Invariant()} bytes needs a destination of at least that many, not "
+                + $"{destination.Length.Invariant()}.",
+                nameof(destination));
+        }
+
+        if (length > 0)
+        {
+            shard.DataElements.VarLengthData[fieldIndex]!.CopyTo(startByte, destination[..length]);
+        }
+
+        return length;
+    }
+
+    /// <inheritdoc />
+    public bool TryGetBytesSpan(int ordinal, int fieldIndex, out ReadOnlySpan<byte> value)
+    {
+        Shard shard = ShardFor(ordinal);
+        (long startByte, long endByte, int numBits) = shard.VarLengthRange(ShardOrdinal(ordinal, shard), fieldIndex);
+
+        if (IsVarLengthNull(endByte, numBits))
+        {
+            value = default;
+
+            return false;
+        }
+
+        startByte &= (1L << (numBits - 1)) - 1;
+
+        if (shard.DataElements.VarLengthData[fieldIndex] is not { } data)
+        {
+            value = default;
+
+            return false;
+        }
+
+        return data.TryGetSpan(startByte, (int)(endByte - startByte), out value);
+    }
+
+    /// <inheritdoc />
+    public ReadOnlySequence<byte> GetVarLengthSequence(int ordinal, int fieldIndex)
+    {
+        Shard shard = ShardFor(ordinal);
+        (long startByte, long endByte, int numBits) = shard.VarLengthRange(ShardOrdinal(ordinal, shard), fieldIndex);
+
+        if (IsVarLengthNull(endByte, numBits))
+        {
+            return ReadOnlySequence<byte>.Empty;
+        }
+
+        startByte &= (1L << (numBits - 1)) - 1;
+        int length = (int)(endByte - startByte);
+
+        return length == 0 || shard.DataElements.VarLengthData[fieldIndex] is not { } data
+            ? ReadOnlySequence<byte>.Empty
+            : data.GetSequence(startByte, length);
+    }
+
+    /// <inheritdoc />
     public bool IsStringFieldEqual(int ordinal, int fieldIndex, string? testValue)
     {
         Shard shard = ShardFor(ordinal);
@@ -345,8 +474,14 @@ public sealed partial class HollowObjectTypeReadState : HollowTypeReadState, IHo
     private static bool IsVarLengthNull(long endByte, int numBitsForField) =>
         (endByte & (1L << (numBitsForField - 1))) != 0;
 
-    private static string ReadString(IVariableLengthData data, long position, int length)
+    private static string ReadString(IVariableLengthData? data, long position, int length)
     {
+        if (length == 0 || data is null)
+        {
+            // A field that is empty or null in every record of the type has no storage at all.
+            return string.Empty;
+        }
+
         char[] rented = ArrayPool<char>.Shared.Rent(length);
         try
         {
