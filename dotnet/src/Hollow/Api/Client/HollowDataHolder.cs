@@ -16,6 +16,7 @@
  */
 
 using Hollow.Api.Consumer;
+using Hollow.Api.Custom;
 using Hollow.Core;
 using Hollow.Core.Read;
 using Hollow.Core.Read.Engine;
@@ -36,24 +37,36 @@ internal sealed class HollowDataHolder
 {
     private readonly HollowReadStateEngine _stateEngine;
     private readonly HollowBlobReader _reader;
+    private readonly IHollowApiFactory _apiFactory;
     private readonly IDoubleSnapshotConfig _doubleSnapshotConfig;
     private readonly FailedTransitionTracker _failedTransitionTracker;
     private readonly ITypeFilter? _filter;
 
     internal HollowDataHolder(
         HollowReadStateEngine stateEngine,
+        IHollowApiFactory apiFactory,
         IDoubleSnapshotConfig doubleSnapshotConfig,
         FailedTransitionTracker failedTransitionTracker,
         ITypeFilter? filter)
     {
         _stateEngine = stateEngine;
         _reader = new HollowBlobReader(stateEngine);
+        _apiFactory = apiFactory;
         _doubleSnapshotConfig = doubleSnapshotConfig;
         _failedTransitionTracker = failedTransitionTracker;
         _filter = filter;
     }
 
     internal HollowReadStateEngine StateEngine => _stateEngine;
+
+    /// <summary>
+    /// The typed API over this holder's data, or <see langword="null"/> until a snapshot has been read.
+    /// </summary>
+    /// <remarks>
+    /// Built once per snapshot and kept across deltas, since the type APIs read through the state
+    /// engine itself and anything caching underneath is its own delta listener.
+    /// </remarks>
+    internal HollowApi? Api { get; private set; }
 
     internal long CurrentVersion { get; private set; } = HollowConstants.VersionNone;
 
@@ -134,6 +147,10 @@ internal sealed class HollowDataHolder
             {
                 listener.BlobLoaded(snapshotBlob);
             }
+
+            // Before the consumer publishes this holder, so that a listener reaching back for
+            // HollowConsumer.Api never sees the API that belonged to the data this one replaced.
+            Api = _apiFactory.CreateApi(_stateEngine);
 
             onSnapshotLoaded();
 

@@ -15,6 +15,7 @@
  *
  */
 
+using Hollow.Api.Client;
 using Hollow.Api.Consumer.Fs;
 using Hollow.Core.Memory;
 using Hollow.Core.Read.Filter;
@@ -53,6 +54,9 @@ public sealed class HollowConsumerBuilder
 
     /// <summary>Where the consumer's record storage lives.</summary>
     internal MemoryMode MemoryMode { get; private set; } = MemoryMode.OnHeap;
+
+    /// <summary>What builds the typed API, if anything beyond the default does.</summary>
+    internal IHollowApiFactory? ApiFactory { get; private set; }
 
     /// <summary>
     /// Reads blobs through <paramref name="blobRetriever"/>.
@@ -149,6 +153,27 @@ public sealed class HollowConsumerBuilder
     public HollowConsumerBuilder WithMemoryMode(MemoryMode memoryMode)
     {
         MemoryMode = memoryMode;
+
+        return this;
+    }
+
+    /// <summary>
+    /// Builds the typed API the consumer hands out through <see cref="HollowConsumer.Api"/>.
+    /// </summary>
+    /// <remarks>
+    /// Without this the consumer's API is a plain <see cref="Custom.HollowApi"/>, which carries no type
+    /// APIs. A generated API goes in here:
+    /// <code>
+    /// .WithApiFactory(new DelegateHollowApiFactory(access =&gt; new MovieApi(access)))
+    /// </code>
+    /// Java takes the generated class itself and reflects over its constructors; see
+    /// <see cref="GeneratedHollowApiFactory{TApi}"/> for that form.
+    /// </remarks>
+    public HollowConsumerBuilder WithApiFactory(IHollowApiFactory apiFactory)
+    {
+        ArgumentNullException.ThrowIfNull(apiFactory);
+
+        ApiFactory = apiFactory;
 
         return this;
     }

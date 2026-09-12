@@ -16,6 +16,7 @@
  */
 
 using Hollow.Api.Consumer;
+using Hollow.Api.Custom;
 using Hollow.Core;
 using Hollow.Core.Memory;
 using Hollow.Core.Read.Engine;
@@ -41,6 +42,7 @@ public sealed class HollowClientUpdater
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private readonly FailedTransitionTracker _failedTransitionTracker = new();
+    private readonly IHollowApiFactory _apiFactory;
     private readonly IDoubleSnapshotConfig _doubleSnapshotConfig;
     private readonly ITypeFilter? _filter;
     private readonly MemoryMode _memoryMode;
@@ -68,10 +70,12 @@ public sealed class HollowClientUpdater
         IDoubleSnapshotConfig? doubleSnapshotConfig = null,
         IUpdatePlanBlobVerifier? blobVerifier = null,
         ITypeFilter? filter = null,
-        MemoryMode memoryMode = MemoryMode.OnHeap)
+        MemoryMode memoryMode = MemoryMode.OnHeap,
+        IHollowApiFactory? apiFactory = null)
     {
         ArgumentNullException.ThrowIfNull(blobRetriever);
 
+        _apiFactory = apiFactory ?? DefaultHollowApiFactory.Instance;
         _doubleSnapshotConfig = doubleSnapshotConfig ?? DoubleSnapshotConfig.Default;
         _planner = new HollowUpdatePlanner(blobRetriever, _doubleSnapshotConfig, blobVerifier);
         _refreshListeners = [.. (refreshListeners ?? []).Distinct()];
@@ -88,6 +92,11 @@ public sealed class HollowClientUpdater
     /// The state engine holding the current data, or <see langword="null"/> before the first refresh.
     /// </summary>
     public HollowReadStateEngine? StateEngine => _dataHolder?.StateEngine;
+
+    /// <summary>
+    /// The typed API over the current data, or <see langword="null"/> before the first refresh.
+    /// </summary>
+    public HollowApi? Api => _dataHolder?.Api;
 
     /// <summary>
     /// The version currently held, or <see cref="HollowConstants.VersionNone"/> before the first
@@ -344,6 +353,7 @@ public sealed class HollowClientUpdater
             ? new HollowReadStateEngine(_memoryMode, existing.StateEngine.MemoryRecycler)
             : new HollowReadStateEngine(_memoryMode);
 
-        return new HollowDataHolder(stateEngine, _doubleSnapshotConfig, _failedTransitionTracker, _filter);
+        return new HollowDataHolder(
+            stateEngine, _apiFactory, _doubleSnapshotConfig, _failedTransitionTracker, _filter);
     }
 }

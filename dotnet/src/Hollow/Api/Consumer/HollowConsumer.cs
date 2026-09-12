@@ -16,6 +16,7 @@
  */
 
 using Hollow.Api.Client;
+using Hollow.Api.Custom;
 using Hollow.Core;
 using Hollow.Core.Read.Engine;
 
@@ -65,7 +66,8 @@ public sealed class HollowConsumer : IDisposable
             builder.DoubleSnapshotConfig,
             builder.UpdatePlanBlobVerifier,
             builder.TypeFilter,
-            builder.MemoryMode);
+            builder.MemoryMode,
+            builder.ApiFactory);
 
         _announcementWatcher = builder.AnnouncementWatcher;
         _announcementWatcher?.SubscribeToUpdates(this);
@@ -81,6 +83,17 @@ public sealed class HollowConsumer : IDisposable
     /// <see cref="AcquireRefreshLock"/> around a read that must not see the data change underneath it.
     /// </remarks>
     public HollowReadStateEngine? StateEngine => _updater.StateEngine;
+
+    /// <summary>
+    /// The typed API over the current data, or <see langword="null"/> before the first successful
+    /// refresh.
+    /// </summary>
+    /// <remarks>
+    /// A plain <see cref="HollowApi"/> unless the consumer was built with
+    /// <see cref="HollowConsumerBuilder.WithApiFactory"/>. Like <see cref="StateEngine"/>, this
+    /// reference is replaced whenever a refresh loads a snapshot.
+    /// </remarks>
+    public HollowApi? Api => _updater.Api;
 
     /// <summary>
     /// The version of the data currently held, or <see cref="HollowConstants.VersionNone"/> before the
