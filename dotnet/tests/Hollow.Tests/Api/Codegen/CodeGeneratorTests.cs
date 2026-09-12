@@ -419,11 +419,9 @@ public class CodeGeneratorTests
     }
 
     /// <summary>
-    /// A type declaring a primary key gets an index that takes the key's fields by name and type,
-    /// rather than a loose <c>object[]</c>.
+    /// A consumer holding the two films, and the generated client over it.
     /// </summary>
-    [Fact]
-    public void TheGeneratedIndexFindsARecordByItsDeclaredKey()
+    private static (HollowConsumer Consumer, Assembly Assembly) TwoFilms()
     {
         InMemoryBlobStore store = new();
         HollowWriteStateEngine writeEngine = new();
@@ -435,7 +433,6 @@ public class CodeGeneratorTests
 
         Assembly assembly = GeneratedApiCompiler.Compile(Generator().Generate(typeof(Movie)));
         Type apiType = assembly.GetType($"{GeneratedNamespace}.MoviesApi")!;
-        Type indexType = assembly.GetType($"{GeneratedNamespace}.MovieUniqueKeyIndex")!;
 
         HollowConsumer consumer = new HollowConsumerBuilder()
             .WithBlobRetriever(store)
@@ -445,16 +442,88 @@ public class CodeGeneratorTests
 
         consumer.TriggerRefreshTo(1);
 
+        return (consumer, assembly);
+    }
+
+    /// <summary>
+    /// A type declaring a primary key gets a record naming and typing that key, and an index that takes
+    /// it — rather than a loose <c>object[]</c> whose order only the schema knows.
+    /// </summary>
+    [Fact]
+    public void TheGeneratedIndexFindsARecordByItsDeclaredKey()
+    {
+        (HollowConsumer consumer, Assembly assembly) = TwoFilms();
+        Type indexType = assembly.GetType($"{GeneratedNamespace}.MovieUniqueKeyIndex")!;
+        Type keyType = assembly.GetType($"{GeneratedNamespace}.MoviePrimaryKey")!;
+
+        // The key's one component is typed from the schema, not taken as object.
+        Assert.Equal(
+            typeof(int), keyType.GetProperty("Id")!.PropertyType);
+
         object index = Activator.CreateInstance(indexType, consumer)!;
         MethodInfo findMatch = indexType.GetMethod("FindMatch")!;
 
-        // The key parameter is typed from the schema, not taken as object.
-        Assert.Equal(typeof(int), findMatch.GetParameters().Single().ParameterType);
+        Assert.Equal(keyType, findMatch.GetParameters().Single().ParameterType);
 
-        Assert.Equal("John Wick", Read(findMatch.Invoke(index, [2])!, "Title"));
-        Assert.Equal("The Matrix", Read(findMatch.Invoke(index, [1])!, "Title"));
-        Assert.Null(findMatch.Invoke(index, [99]));
+        object Key(int id) => Activator.CreateInstance(keyType, id)!;
+
+        Assert.Equal("John Wick", Read(findMatch.Invoke(index, [Key(2)])!, "Title"));
+        Assert.Equal("The Matrix", Read(findMatch.Invoke(index, [Key(1)])!, "Title"));
+        Assert.Null(findMatch.Invoke(index, [Key(99)]));
     }
+
+    /// <summary>
+    /// The API can do the same lookup itself, so the common case needs no index object at all. It
+    /// builds one on first use and keeps it, so a second lookup does not rebuild it.
+    /// </summary>
+    [Fact]
+    public void TheGeneratedApiLooksUpARecordByItsKey()
+    {
+        (HollowConsumer consumer, Assembly assembly) = TwoFilms();
+        Type keyType = assembly.GetType($"{GeneratedNamespace}.MoviePrimaryKey")!;
+
+        HollowApi api = consumer.Api!;
+        MethodInfo findMovie = api.GetType().GetMethod("FindMovie")!;
+
+        object Key(int id) => Activator.CreateInstance(keyType, id)!;
+
+        Assert.Equal("The Matrix", Read(findMovie.Invoke(api, [Key(1)])!, "Title"));
+        Assert.Equal("John Wick", Read(findMovie.Invoke(api, [Key(2)])!, "Title"));
+        Assert.Null(findMovie.Invoke(api, [Key(99)]));
+
+        // The wrapper it hands back is the same one the ordinal accessor gives, so a lookup is a way
+        // into the client rather than a parallel one.
+        Assert.Equal(
+            Read(findMovie.Invoke(api, [Key(1)])!, "Title"),
+            Read(api.GetType().GetMethod("GetMovie")!.Invoke(api, [0])!, "Title"));
+
+        // And detaching releases the index it built, which is what stops it outliving the data.
+        api.DetachCaches();
+        Assert.Equal("The Matrix", Read(findMovie.Invoke(api, [Key(1)])!, "Title"));
+    }
+
+    /// <summary>
+    /// A key spelled across several fields is one record with one property per field, so two key fields
+    /// of the same type cannot be passed the wrong way round.
+    /// </summary>
+    [Fact]
+    public void ACompoundKeyBecomesARecordOfItsParts()
+    {
+        Assembly assembly = GeneratedApiCompiler.Compile(Generator().Generate(typeof(Screening)));
+        Type keyType = assembly.GetType($"{GeneratedNamespace}.ScreeningPrimaryKey")!;
+
+        // Title crosses a reference into the shared String type, and still resolves to string rather
+        // than to object.
+        Assert.Equal(typeof(string), keyType.GetProperty("Title")!.PropertyType);
+        Assert.Equal(typeof(int), keyType.GetProperty("Year")!.PropertyType);
+
+        Assert.Equal(
+            ["Title", "Year"],
+            keyType.GetConstructors().Single().GetParameters().Select(parameter => parameter.Name));
+    }
+
+    [HollowPrimaryKey("Title", "Year")]
+    private sealed record Screening(string Title, int Year, string Venue);
 
     /// <summary>
     /// The generated API is what a consumer hands out, which is the whole point of generating it.

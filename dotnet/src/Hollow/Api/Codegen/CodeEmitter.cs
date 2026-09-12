@@ -63,7 +63,8 @@ internal sealed class CodeEmitter(EmitterOptions options)
 
             if (_options.GenerateUniqueKeyIndexes && type.PrimaryKeyFieldPaths is { Count: > 0 })
             {
-                files[CodeNames.UniqueKeyIndex(type.TypeName) + ".cs"] = GenerateUniqueKeyIndex(type);
+                files[CodeNames.UniqueKeyIndex(type.TypeName) + ".cs"] =
+                    GenerateUniqueKeyIndex(model, type);
             }
         }
 
@@ -619,6 +620,12 @@ internal sealed class CodeEmitter(EmitterOptions options)
                     + $"_{CodeNames.Camel(type.TypeName)}Provider;");
             }
 
+            foreach (GeneratedType type in KeyedTypes(model))
+            {
+                writer.Line(
+                    $"private HollowPrimaryKeyIndex? _{CodeNames.Camel(type.TypeName)}KeyIndex;");
+            }
+
             writer.Blank();
             writer.Doc("Reads <paramref name=\"dataAccess\"/>, caching nothing.");
             writer.Line($"public {api}(IHollowDataAccess dataAccess)");
@@ -650,6 +657,12 @@ internal sealed class CodeEmitter(EmitterOptions options)
                 EmitApiTypeMembers(writer, type);
             }
 
+            foreach (GeneratedType type in KeyedTypes(model))
+            {
+                writer.Blank();
+                EmitApiKeyLookup(writer, model, type);
+            }
+
             writer.Blank();
             writer.Line("/// <inheritdoc />");
             using (writer.Open("public override void DetachCaches()"))
@@ -659,6 +672,14 @@ internal sealed class CodeEmitter(EmitterOptions options)
                     writer.Line(
                         $"(_{CodeNames.Camel(type.TypeName)}Provider as "
                         + $"HollowObjectCacheProvider<{type.RecordType}>)?.Detach();");
+                }
+
+                foreach (GeneratedType type in KeyedTypes(model))
+                {
+                    string field = "_" + CodeNames.Camel(type.TypeName) + "KeyIndex";
+
+                    writer.Line($"{field}?.Dispose();");
+                    writer.Line($"{field} = null;");
                 }
             }
 
@@ -747,14 +768,19 @@ internal sealed class CodeEmitter(EmitterOptions options)
 
     // ---- The unique-key index ----
 
-    private string GenerateUniqueKeyIndex(GeneratedType type)
+    private string GenerateUniqueKeyIndex(GeneratedModel model, GeneratedType type)
     {
         IReadOnlyList<string> keyFieldPaths = type.PrimaryKeyFieldPaths!;
+        IReadOnlyList<KeyComponent> key = KeyComponents(model, type, keyFieldPaths);
         CodeWriter writer = new();
         string api = _options.ApiClassName;
         string index = CodeNames.UniqueKeyIndex(type.TypeName);
+        string keyRecord = CodeNames.PrimaryKeyRecord(type.TypeName);
 
         Preamble(writer);
+
+        EmitPrimaryKeyRecord(writer, type, key);
+        writer.Blank();
 
         writer.Line("/// <summary>");
         writer.Line(
@@ -786,14 +812,15 @@ internal sealed class CodeEmitter(EmitterOptions options)
             }
 
             writer.Blank();
-            writer.Doc($"The <c>{type.TypeName}</c> holding the given key, or <see langword=\"null\"/>.");
-            writer.Line(
-                $"public {type.RecordType}? FindMatch({string.Join(", ", KeyParameters(type, keyFieldPaths))})");
+            writer.Doc($"The <c>{type.TypeName}</c> holding <paramref name=\"key\"/>, or <see langword=\"null\"/>.");
+            writer.Line($"public {type.RecordType}? FindMatch({keyRecord} key)");
             using (writer.Open())
             {
+                writer.Line("ArgumentNullException.ThrowIfNull(key);");
+                writer.Blank();
                 writer.Line(
                     "int ordinal = _index.GetMatchingOrdinal("
-                    + string.Join(", ", keyFieldPaths.Select(path => CodeNames.Parameter(LastSegment(path))))
+                    + string.Join(", ", key.Select(component => "key." + component.PropertyName))
                     + ");");
                 writer.Blank();
                 writer.Line(
@@ -869,27 +896,193 @@ internal sealed class CodeEmitter(EmitterOptions options)
         return writer.ToString();
     }
 
-    private static IEnumerable<string> KeyParameters(
-        GeneratedType type, IReadOnlyList<string> keyFieldPaths)
+    /// <summary>
+    /// The types the API gets a key lookup for: the generated ones that declare a primary key, when key
+    /// indexes are being generated at all.
+    /// </summary>
+    private IEnumerable<GeneratedType> KeyedTypes(GeneratedModel model) =>
+        _options.GenerateUniqueKeyIndexes
+            ? model.Types.Where(type => type.IsGenerated && type.PrimaryKeyFieldPaths is { Count: > 0 })
+            : [];
+
+    /// <summary>
+    /// Emits the API's own lookup by primary key, which builds its index the first time it is asked.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The index is kept rather than rebuilt per call, and follows deltas, so repeated lookups against
+    /// one version cost one build. It lives exactly as long as the API does: a delta leaves both in
+    /// place, and a snapshot replaces both, which is what <c>DetachCaches</c> is for.
+    /// </para>
+    /// <para>
+    /// An application that wants the index built before the first lookup, or wants it rebuilt on a
+    /// snapshot rather than on demand, registers the generated
+    /// <c>{TypeName}UniqueKeyIndex</c> with the consumer instead. This is the convenient path, not the
+    /// only one. Java offers only the standalone index.
+    /// </para>
+    /// </remarks>
+    private void EmitApiKeyLookup(CodeWriter writer, GeneratedModel model, GeneratedType type)
     {
-        foreach (string path in keyFieldPaths)
+        IReadOnlyList<KeyComponent> key = KeyComponents(model, type, type.PrimaryKeyFieldPaths!);
+        string field = "_" + CodeNames.Camel(type.TypeName) + "KeyIndex";
+        string keyRecord = CodeNames.PrimaryKeyRecord(type.TypeName);
+
+        writer.Doc(
+            $"The <c>{type.TypeName}</c> holding <paramref name=\"key\"/>, or <see langword=\"null\"/>.");
+        writer.Line(
+            $"public {type.RecordType}? {CodeNames.ApiKeyLookup(type.TypeName)}({keyRecord} key)");
+
+        using (writer.Open())
         {
-            string[] segments = path.TrimEnd('!').Split('.');
-            ModelFieldType? fieldType = type.Fields
-                .FirstOrDefault(field => field.Name == segments[0])?.Type;
+            writer.Line("ArgumentNullException.ThrowIfNull(key);");
+            writer.Blank();
 
-            // A key path that stays inside this type names its own field's type; one that crosses a
-            // reference is matched on whatever the underlying index resolves it to, which is loosest as
-            // object.
-            string parameterType = segments.Length > 1 || fieldType is null
-                ? "object"
-                : fieldType == ModelFieldType.Reference
-                    ? "object"
-                    : CodeNames.ValueTypeOf(fieldType.Value).TrimEnd('?');
+            using (writer.Open($"if ({field} is null)"))
+            {
+                writer.Line("HollowReadStateEngine stateEngine = DataAccess as HollowReadStateEngine");
+                writer.Line("    ?? throw new InvalidOperationException(");
+                writer.Line(
+                    "        \"a key lookup needs a read state engine to index, which this API does not "
+                    + "read\");");
+                writer.Blank();
+                writer.Line($"{field} = new HollowPrimaryKeyIndex(");
+                writer.Line("    stateEngine,");
+                writer.Line($"    {Quote(type.TypeName)},");
+                writer.Line(
+                    $"    {string.Join(", ", type.PrimaryKeyFieldPaths!.Select(Quote))});");
+                writer.Blank();
+                writer.Line("// So that a delta keeps the index in step rather than invalidating it.");
+                writer.Line($"{field}.ListenForDeltaUpdates();");
+            }
 
-            yield return $"{parameterType} {CodeNames.Parameter(LastSegment(path))}";
+            writer.Blank();
+            writer.Line(
+                $"return {CodeNames.ApiAccessor(type.TypeName)}({field}.GetMatchingOrdinal("
+                + string.Join(", ", key.Select(component => "key." + component.PropertyName))
+                + "));");
         }
     }
+
+    /// <summary>
+    /// Emits the record a lookup takes in place of a positional argument list.
+    /// </summary>
+    /// <remarks>
+    /// A key is one value even when it is spelled across several fields. As a record it is named, typed
+    /// and ordered by the compiler rather than by the caller, which is what stops two same-typed key
+    /// fields being passed the wrong way round — the mistake Java's <c>Object...</c> cannot catch.
+    /// </remarks>
+    private static void EmitPrimaryKeyRecord(
+        CodeWriter writer, GeneratedType type, IReadOnlyList<KeyComponent> key)
+    {
+        writer.Line("/// <summary>");
+        writer.Line(
+            $"/// The primary key of a <c>{type.TypeName}</c> record: "
+            + $"<c>{string.Join(", ", key.Select(component => component.Path))}</c>.");
+        writer.Line("/// </summary>");
+
+        foreach (KeyComponent component in key)
+        {
+            writer.Line(
+                $"/// <param name=\"{component.PropertyName}\">The <c>{component.Path}</c> to match.</param>");
+        }
+
+        writer.Line(
+            $"public sealed record {CodeNames.PrimaryKeyRecord(type.TypeName)}("
+            + string.Join(
+                ", ", key.Select(component => $"{component.ValueType} {component.PropertyName}"))
+            + ");");
+    }
+
+    /// <summary>One component of a primary key, as the generated key record spells it.</summary>
+    /// <param name="Path">The field path in the schema.</param>
+    /// <param name="ValueType">The CLR type the underlying index matches it against.</param>
+    /// <param name="PropertyName">The property on the generated key record.</param>
+    private sealed record KeyComponent(string Path, string ValueType, string PropertyName);
+
+    /// <summary>
+    /// Resolves each of <paramref name="keyFieldPaths"/> to the type and name the key record uses.
+    /// </summary>
+    /// <remarks>
+    /// The path is walked through the model rather than read one segment deep, so a key that crosses a
+    /// reference still gets a real type. A reference to one of Hollow's scalar wrappers resolves to the
+    /// value behind it, because that is what the index auto-expands the path to and matches on.
+    /// </remarks>
+    private static IReadOnlyList<KeyComponent> KeyComponents(
+        GeneratedModel model, GeneratedType type, IReadOnlyList<string> keyFieldPaths)
+    {
+        List<KeyComponent> components =
+            [.. keyFieldPaths.Select(path => Resolve(model, type, path))];
+
+        // Two paths ending in the same segment would give the record two properties of one name, so
+        // where that happens the whole path names them instead.
+        HashSet<string> ambiguous =
+        [
+            .. components
+                .GroupBy(component => component.PropertyName, StringComparer.Ordinal)
+                .Where(group => group.Count() > 1)
+                .Select(group => group.Key),
+        ];
+
+        return
+        [
+            .. components.Select(component => ambiguous.Contains(component.PropertyName)
+                ? component with { PropertyName = WholePathName(component.Path) }
+                : component),
+        ];
+    }
+
+    private static KeyComponent Resolve(GeneratedModel model, GeneratedType type, string path)
+    {
+        string[] segments = path.TrimEnd('!').Split('.');
+        GeneratedType? current = type;
+        GeneratedField? field = null;
+
+        foreach (string segment in segments)
+        {
+            field = current?.Fields.FirstOrDefault(candidate => candidate.Name == segment);
+
+            if (field is null)
+            {
+                // A path the model cannot follow is still a valid key as far as the index is concerned,
+                // so it is matched as loosely as the index matches it.
+                return new KeyComponent(path, "object", SegmentName(segments));
+            }
+
+            current = field.ReferencedType is { } referenced ? model.Find(referenced) : null;
+        }
+
+        string name = SegmentName(segments);
+
+        if (field!.Type != ModelFieldType.Reference)
+        {
+            return new KeyComponent(path, CodeNames.ValueTypeOf(field.Type).TrimEnd('?'), name);
+        }
+
+        // The index expands a reference to a scalar wrapper into the value inside it — "Title" becomes
+        // "Title.value" — and matches on that value, so the key record holds the value too.
+        return current?.BuiltIn is { } scalar
+            ? new KeyComponent(path, scalar.ValueType.TrimEnd('?'), name)
+            : new KeyComponent(path, "object", name);
+    }
+
+    /// <summary>
+    /// The property name a path gives, with a trailing scalar-wrapper field dropped: a key written out
+    /// as <c>Title.value</c> is a title, not a value.
+    /// </summary>
+    private static string SegmentName(string[] segments)
+    {
+        int last = segments.Length - 1;
+
+        if (last > 0 && segments[last] == "value")
+        {
+            last--;
+        }
+
+        return CodeNames.Pascal(segments[last]);
+    }
+
+    private static string WholePathName(string path) =>
+        string.Concat(path.TrimEnd('!').Split('.').Select(CodeNames.Pascal));
 
     private static string LastSegment(string path)
     {

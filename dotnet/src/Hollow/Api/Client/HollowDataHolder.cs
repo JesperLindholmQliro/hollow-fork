@@ -148,6 +148,11 @@ internal sealed class HollowDataHolder
                 listener.BlobLoaded(snapshotBlob);
             }
 
+            // A snapshot read into this holder's own state engine leaves the outgoing API's caches and
+            // indexes registered against type states that now hold different records. Nothing else will
+            // ever let go of them, so this is where they are released.
+            Api?.DetachCaches();
+
             // Before the consumer publishes this holder, so that a listener reaching back for
             // HollowConsumer.Api never sees the API that belonged to the data this one replaced.
             Api = _apiFactory.CreateApi(_stateEngine);

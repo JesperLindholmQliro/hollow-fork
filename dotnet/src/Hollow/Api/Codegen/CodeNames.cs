@@ -74,6 +74,19 @@ internal static class CodeNames
     internal static string UniqueKeyIndex(string typeName) => Pascal(typeName) + "UniqueKeyIndex";
 
     /// <summary>
+    /// The record name for the primary key of <paramref name="typeName"/>.
+    /// </summary>
+    /// <remarks>
+    /// A key is one value even when it is spelled across several fields, so the generated lookups take
+    /// it as one. Java passes the fields positionally as <c>Object...</c>, which compiles whatever is
+    /// handed to it in whatever order.
+    /// </remarks>
+    internal static string PrimaryKeyRecord(string typeName) => Pascal(typeName) + "PrimaryKey";
+
+    /// <summary>The method name for the key lookup of <paramref name="typeName"/> on the API.</summary>
+    internal static string ApiKeyLookup(string typeName) => "Find" + Pascal(typeName);
+
+    /// <summary>
     /// The property name for <paramref name="fieldName"/> on a wrapper of <paramref name="typeName"/>.
     /// </summary>
     /// <remarks>
