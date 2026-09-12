@@ -41,8 +41,13 @@ public sealed partial class HollowObjectTypeWriteState : HollowTypeWriteState
     /// <param name="numShards">
     /// The number of shards, which must be a power of two, or -1 to derive it from the data size.
     /// </param>
-    public HollowObjectTypeWriteState(HollowObjectSchema schema, int numShards = -1)
-        : base(schema, numShards)
+    /// <param name="usePartitionedOrdinalMap">
+    /// Whether to spread this type's records across four ordinal maps rather than one, so that adding
+    /// records contends on four write locks instead of one.
+    /// </param>
+    public HollowObjectTypeWriteState(
+        HollowObjectSchema schema, int numShards = -1, bool usePartitionedOrdinalMap = false)
+        : base(schema, numShards, usePartitionedOrdinalMap)
     {
     }
 

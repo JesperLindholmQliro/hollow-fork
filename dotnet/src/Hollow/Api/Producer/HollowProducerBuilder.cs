@@ -70,6 +70,8 @@ public sealed class HollowProducerBuilder
     /// <summary>Whether reclaimed ordinal holes are concentrated in as few shards as possible.</summary>
     internal bool FocusHoleFillInFewestShards { get; private set; }
 
+    internal bool PartitionedOrdinalMap { get; private set; }
+
     internal bool AllowTypeResharding { get; private set; }
 
     /// <summary>
@@ -235,6 +237,23 @@ public sealed class HollowProducerBuilder
     public HollowProducerBuilder WithFocusHoleFillInFewestShards(bool focusHoleFillInFewestShards = true)
     {
         FocusHoleFillInFewestShards = focusHoleFillInFewestShards;
+
+        return this;
+    }
+
+    /// <summary>
+    /// Spreads each type's records across four ordinal maps rather than one, so that populating a
+    /// cycle from several threads contends on four write locks instead of one.
+    /// </summary>
+    /// <remarks>
+    /// Worth it for a producer whose populator is genuinely parallel and whose records are cheap to
+    /// serialise, which is when that one lock is the bottleneck. It is not free: the ordinals handed
+    /// out are interleaved rather than consecutive, which spends two bits of the ordinal space and
+    /// some of the locality a delta relies on. Leave it off unless a profile says otherwise.
+    /// </remarks>
+    public HollowProducerBuilder WithPartitionedOrdinalMap(bool partitionedOrdinalMap = true)
+    {
+        PartitionedOrdinalMap = partitionedOrdinalMap;
 
         return this;
     }

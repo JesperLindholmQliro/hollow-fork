@@ -69,6 +69,18 @@ public sealed class HollowWriteStateEngine : IHollowDataset
     public bool FocusHoleFillInFewestShards { get; set; }
 
     /// <summary>
+    /// Whether a type's records are spread across four ordinal maps rather than one, so that adding
+    /// them contends on four write locks instead of one.
+    /// </summary>
+    /// <remarks>
+    /// Set it before the type states are created; a write state reads it once, when it is built. What
+    /// it buys is throughput on a producer populating many records in parallel, and what it costs is
+    /// interleaved rather than consecutive ordinals — a type using it gives up two bits of ordinal
+    /// space and some of the locality a delta relies on.
+    /// </remarks>
+    public bool PartitionedOrdinalMap { get; set; }
+
+    /// <summary>
     /// Whether a type may change its shard count from one cycle to the next as its data grows or
     /// shrinks past <see cref="TargetMaxTypeShardSize"/>.
     /// </summary>

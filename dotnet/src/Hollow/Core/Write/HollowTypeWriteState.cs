@@ -17,6 +17,7 @@
 
 using System.Globalization;
 using Hollow.Core.Memory;
+using Hollow.Core.Memory.Encoding;
 using Hollow.Core.Memory.Pool;
 using Hollow.Core.Read.Engine;
 using Hollow.Core.Schema;
@@ -59,7 +60,16 @@ public abstract class HollowTypeWriteState
     /// form under <see cref="_restoredSchema"/>, or <see langword="null"/> when this is not a restored
     /// cycle. A record re-added this cycle is looked up here so that it keeps its published ordinal.
     /// </summary>
-    private ByteArrayOrdinalMap? _restoredMap;
+    /// <summary>
+    /// How many low bits of a global ordinal name its map when the map is partitioned, giving the four
+    /// partitions Java uses. More would spread the write lock further and cost more ordinal space.
+    /// </summary>
+    private const int PartitionIndexBits = 2;
+
+    private readonly ByteArrayOrdinalMap[] _ordinalMaps;
+    private readonly int _ordinalMapIndexMask;
+
+    private ByteArrayOrdinalMap[]? _restoredMaps;
 
     /// <summary>
     /// The schema the restored records were serialised under, which is the intersection of this type's
@@ -78,7 +88,14 @@ public abstract class HollowTypeWriteState
     /// The number of shards to split the type's records across, which must be a power of two, or -1 to
     /// derive it from the data size at write time.
     /// </param>
-    protected HollowTypeWriteState(HollowSchema schema, int numShards = -1)
+    /// <param name="usePartitionedOrdinalMap">
+    /// Whether to spread this type's records across four ordinal maps rather than one, so that adding
+    /// records contends on four write locks instead of one. The ordinals a partitioned type hands out
+    /// are interleaved rather than consecutive, which costs a little ordinal space and a little
+    /// locality in return.
+    /// </param>
+    protected HollowTypeWriteState(
+        HollowSchema schema, int numShards = -1, bool usePartitionedOrdinalMap = false)
     {
         ArgumentNullException.ThrowIfNull(schema);
 
@@ -93,7 +110,11 @@ public abstract class HollowTypeWriteState
         _numShards = numShards;
         _resetToLastNumShards = numShards;
         _isNumShardsPinned = numShards != -1;
-        OrdinalMap = new ByteArrayOrdinalMap();
+
+        OrdinalMapIndexBits = usePartitionedOrdinalMap ? PartitionIndexBits : 0;
+        _ordinalMapIndexMask = (1 << OrdinalMapIndexBits) - 1;
+        _ordinalMaps = [.. Enumerable.Range(0, 1 << OrdinalMapIndexBits).Select(_ => new ByteArrayOrdinalMap())];
+
         CurrentCyclePopulated = new ThreadSafeBitSet();
         PreviousCyclePopulated = new ThreadSafeBitSet();
     }
@@ -135,7 +156,7 @@ public abstract class HollowTypeWriteState
     /// <summary>
     /// Whether this state was restored from a read state and has not yet been through a full cycle.
     /// </summary>
-    public bool IsRestored => OrdinalMap.UnusedPreviousOrdinals is not null;
+    public bool IsRestored => Array.Exists(_ordinalMaps, map => map.UnusedPreviousOrdinals is not null);
 
     /// <summary>The engine this type belongs to.</summary>
     public HollowWriteStateEngine? StateEngine { get; internal set; }
@@ -152,8 +173,47 @@ public abstract class HollowTypeWriteState
     /// </summary>
     protected int[] RevMaxShardOrdinal { get; private set; } = [];
 
-    /// <summary>The map assigning ordinals to distinct serialised records.</summary>
-    protected ByteArrayOrdinalMap OrdinalMap { get; }
+    /// <summary>
+    /// The number of low bits a global ordinal gives up to name which map assigned it, which is zero
+    /// unless this type's map is partitioned.
+    /// </summary>
+    public int OrdinalMapIndexBits { get; }
+
+    /// <summary>The map that assigned <paramref name="globalOrdinal"/>.</summary>
+    private ByteArrayOrdinalMap MapOf(int globalOrdinal) => _ordinalMaps[globalOrdinal & _ordinalMapIndexMask];
+
+    /// <summary>The ordinal <paramref name="globalOrdinal"/> has within the map that assigned it.</summary>
+    private int LocalOrdinal(int globalOrdinal) => globalOrdinal >>> OrdinalMapIndexBits;
+
+    /// <summary>The global ordinal for <paramref name="localOrdinal"/> in map <paramref name="mapIndex"/>.</summary>
+    private int GlobalOrdinal(int localOrdinal, int mapIndex) =>
+        (localOrdinal << OrdinalMapIndexBits) | mapIndex;
+
+    /// <summary>
+    /// Looks <paramref name="scratch"/> up in every map, returning its global ordinal or -1.
+    /// </summary>
+    /// <remarks>
+    /// A record is assigned to the map its hash routes it to, so the first map tried is almost always
+    /// the one holding it. The others are still searched, because a restored cycle places a record in
+    /// whichever map the published state had it in rather than where its hash would put it.
+    /// </remarks>
+    private int SearchAllMaps(ByteArrayOrdinalMap[] maps, ByteDataArray scratch, int hash)
+    {
+        int start = hash & _ordinalMapIndexMask;
+
+        for (int i = 0; i < maps.Length; i++)
+        {
+            int mapIndex = (start + i) % maps.Length;
+            int found = maps[mapIndex].Get(scratch, hash);
+
+            if (found != -1)
+            {
+                return GlobalOrdinal(found, mapIndex);
+            }
+        }
+
+        return -1;
+    }
 
     /// <summary>
     /// Adds a record, returning the ordinal it was assigned. Adding an equal record returns the
@@ -165,7 +225,7 @@ public abstract class HollowTypeWriteState
 
         ThrowIfNotReadyForAddingObjects();
 
-        int ordinal = _restoredMap is null ? AssignOrdinal(record) : ReuseOrdinalFromRestoredState(record);
+        int ordinal = _restoredMaps is null ? AssignOrdinal(record) : ReuseOrdinalFromRestoredState(record);
 
         CurrentCyclePopulated.Set(ordinal);
 
@@ -178,7 +238,7 @@ public abstract class HollowTypeWriteState
     /// </summary>
     private void ThrowIfNotReadyForAddingObjects()
     {
-        if (!OrdinalMap.IsReadyForAddingObjects)
+        if (!_ordinalMaps[0].IsReadyForAddingObjects)
         {
             throw new InvalidOperationException(
                 "The HollowWriteStateEngine is not ready to add more Objects. "
@@ -262,16 +322,11 @@ public abstract class HollowTypeWriteState
     {
         ArgumentNullException.ThrowIfNull(record);
 
-        if (!OrdinalMap.IsReadyForAddingObjects)
-        {
-            throw new InvalidOperationException(
-                "The HollowWriteStateEngine is not ready to add more Objects. "
-                + $"Did you remember to call {nameof(HollowWriteStateEngine.PrepareForNextCycle)}()?");
-        }
+        ThrowIfNotReadyForAddingObjects();
 
         ByteDataArray scratch = Scratch();
         record.WriteDataTo(scratch);
-        OrdinalMap.Put(scratch, newOrdinal);
+        MapOf(newOrdinal).Put(scratch, LocalOrdinal(newOrdinal));
         scratch.Reset();
 
         if (markPreviousCycle)
@@ -289,7 +344,13 @@ public abstract class HollowTypeWriteState
     /// Rebuilds the free-ordinal pool from the ordinals actually in the map, which
     /// <see cref="MapOrdinal"/> leaves stale.
     /// </summary>
-    public void RecalculateFreeOrdinals() => OrdinalMap.RecalculateFreeOrdinals();
+    public void RecalculateFreeOrdinals()
+    {
+        foreach (ByteArrayOrdinalMap map in _ordinalMaps)
+        {
+            map.RecalculateFreeOrdinals();
+        }
+    }
 
     /// <summary>
     /// Fixes the number of shards this type's records are split across.
@@ -322,7 +383,6 @@ public abstract class HollowTypeWriteState
 
         // The restored state only governs the first cycle after a restore: from here on the ordinal map
         // holds every record itself, so lookups go through it directly.
-        _restoredMap = null;
         _restoredSchema = null;
         _restoredReadState = null;
 
@@ -379,17 +439,34 @@ public abstract class HollowTypeWriteState
         if (IsRestored && !_wroteData && _restoredReadState is not null)
         {
             HollowRecordCopier copier = HollowRecordCopier.Create(_restoredReadState, Schema);
-            BitSet unusedPreviousOrdinals = OrdinalMap.UnusedPreviousOrdinals!;
 
-            for (int ordinal = unusedPreviousOrdinals.NextSetBit(0);
-                ordinal != -1;
-                ordinal = unusedPreviousOrdinals.NextSetBit(ordinal + 1))
+            for (int mapIndex = 0; mapIndex < _ordinalMaps.Length; mapIndex++)
             {
-                RestoreOrdinal(ordinal, copier, OrdinalMap, HashBehavior.UnmixedHashes);
+                if (_ordinalMaps[mapIndex].UnusedPreviousOrdinals is not { } unusedPreviousOrdinals)
+                {
+                    continue;
+                }
+
+                for (int local = unusedPreviousOrdinals.NextSetBit(0);
+                    local != -1;
+                    local = unusedPreviousOrdinals.NextSetBit(local + 1))
+                {
+                    RestoreOrdinal(
+                        GlobalOrdinal(local, mapIndex),
+                        copier,
+                        _ordinalMaps[mapIndex],
+                        HashBehavior.UnmixedHashes);
+                }
             }
         }
 
-        MaxOrdinal = OrdinalMap.PrepareForWrite();
+        MaxOrdinal = -1;
+
+        for (int mapIndex = 0; mapIndex < _ordinalMaps.Length; mapIndex++)
+        {
+            MaxOrdinal = Math.Max(MaxOrdinal, GlobalOrdinal(_ordinalMaps[mapIndex].PrepareForWrite(), mapIndex));
+        }
+
         _wroteData = true;
     }
 
@@ -432,18 +509,26 @@ public abstract class HollowTypeWriteState
         HollowRecordCopier copier = HollowRecordCopier.Create(readState, _restoredSchema);
 
         int size = populatedOrdinals.Cardinality();
-        _restoredMap = new ByteArrayOrdinalMap(size);
+        _restoredMaps =
+            [.. Enumerable.Range(0, _ordinalMaps.Length).Select(_ => new ByteArrayOrdinalMap(size))];
 
         for (int ordinal = populatedOrdinals.NextSetBit(0);
             ordinal != -1;
             ordinal = populatedOrdinals.NextSetBit(ordinal + 1))
         {
             PreviousCyclePopulated.Set(ordinal);
-            RestoreOrdinal(ordinal, copier, _restoredMap, HashBehavior.IgnoredHashes);
+
+            // Into the map the published ordinal belongs to, so that re-adding the record hands back
+            // that same ordinal rather than one its hash would have chosen.
+            RestoreOrdinal(ordinal, copier, _restoredMaps[ordinal & _ordinalMapIndexMask], HashBehavior.IgnoredHashes);
         }
 
-        OrdinalMap.Resize(size);
-        OrdinalMap.ReservePreviouslyPopulatedOrdinals(populatedOrdinals);
+        foreach (ByteArrayOrdinalMap map in _ordinalMaps)
+        {
+            map.Resize(size);
+        }
+
+        ReservePreviouslyPopulatedOrdinals(populatedOrdinals);
     }
 
     /// <summary>
@@ -457,27 +542,80 @@ public abstract class HollowTypeWriteState
 
         ByteDataArray scratch = Scratch();
         WriteRecord(record, scratch, hashBehavior);
-        destinationMap.Put(scratch, ordinal);
+        destinationMap.Put(scratch, LocalOrdinal(ordinal));
         scratch.Reset();
+    }
+
+    /// <summary>
+    /// Marks every ordinal <paramref name="populatedOrdinals"/> holds as taken, in the map that owns it.
+    /// </summary>
+    private void ReservePreviouslyPopulatedOrdinals(BitSet populatedOrdinals)
+    {
+        if (_ordinalMaps.Length == 1)
+        {
+            _ordinalMaps[0].ReservePreviouslyPopulatedOrdinals(populatedOrdinals);
+            return;
+        }
+
+        // Each map is told about its own share, in its own local numbering.
+        BitSet[] perMap = [.. _ordinalMaps.Select(_ => new BitSet(populatedOrdinals.Length))];
+
+        for (int ordinal = populatedOrdinals.NextSetBit(0);
+            ordinal != -1;
+            ordinal = populatedOrdinals.NextSetBit(ordinal + 1))
+        {
+            perMap[ordinal & _ordinalMapIndexMask].Set(LocalOrdinal(ordinal));
+        }
+
+        for (int mapIndex = 0; mapIndex < _ordinalMaps.Length; mapIndex++)
+        {
+            _ordinalMaps[mapIndex].ReservePreviouslyPopulatedOrdinals(perMap[mapIndex]);
+        }
     }
 
     /// <summary>
     /// Drops every record whose ordinal is not in <paramref name="keep"/>, returning those ordinals to
     /// the free pool.
     /// </summary>
-    private void Compact(ThreadSafeBitSet keep) =>
-        OrdinalMap.Compact(
-            keep,
-            Math.Max(_numShards, 1),
-            StateEngine?.FocusHoleFillInFewestShards ?? false,
-            mapIndex: 0,
-            mapIndexBits: 0);
+    private void Compact(ThreadSafeBitSet keep)
+    {
+        for (int mapIndex = 0; mapIndex < _ordinalMaps.Length; mapIndex++)
+        {
+            _ordinalMaps[mapIndex].Compact(
+                keep,
+                Math.Max(_numShards, 1),
+                StateEngine?.FocusHoleFillInFewestShards ?? false,
+                mapIndex,
+                OrdinalMapIndexBits);
+        }
+
+        // A restored cycle's lookup maps belong to that cycle only; from here on a re-added record is
+        // deduplicated against the real maps like any other.
+        _restoredMaps = null;
+    }
 
     private int AssignOrdinal(IHollowWriteRecord record)
     {
         ByteDataArray scratch = Scratch();
         record.WriteDataTo(scratch);
-        int ordinal = OrdinalMap.GetOrAssignOrdinal(scratch);
+
+        int hash = HashCodes.Compute(scratch);
+
+        // Every map, because deduplication has to be across the whole type: two equal records must
+        // share an ordinal wherever they were put.
+        int existing = SearchAllMaps(_ordinalMaps, scratch, hash);
+
+        if (existing != -1)
+        {
+            scratch.Reset();
+            return existing;
+        }
+
+        // Not there, so its hash decides which map takes it. AssignOrdinal rather than
+        // GetOrAssignOrdinal: the search above already established it is new.
+        int mapIndex = hash & _ordinalMapIndexMask;
+        int ordinal = GlobalOrdinal(_ordinalMaps[mapIndex].AssignOrdinal(scratch, hash, -1), mapIndex);
+
         scratch.Reset();
 
         return ordinal;
@@ -502,13 +640,21 @@ public abstract class HollowTypeWriteState
             WriteRecord(record, scratch, HashBehavior.IgnoredHashes);
         }
 
-        int preferredOrdinal = _restoredMap!.Get(scratch);
+        int preferredOrdinal = SearchAllMaps(_restoredMaps!, scratch, HashCodes.Compute(scratch));
 
         // That form is only for matching; what goes into the real map is the record as it stands.
         scratch.Reset();
         record.WriteDataTo(scratch);
 
-        int ordinal = OrdinalMap.GetOrAssignOrdinal(scratch, preferredOrdinal);
+        // The published ordinal decides which map takes the record, so that reusing it is possible at
+        // all; only a record the published state did not hold falls back to its hash.
+        int hash = HashCodes.Compute(scratch);
+        int mapIndex = preferredOrdinal != -1 ? preferredOrdinal & _ordinalMapIndexMask : hash & _ordinalMapIndexMask;
+        int preferredLocal = preferredOrdinal != -1 ? LocalOrdinal(preferredOrdinal) : -1;
+
+        int ordinal = GlobalOrdinal(
+            _ordinalMaps[mapIndex].GetOrAssignOrdinal(scratch, hash, preferredLocal), mapIndex);
+
         scratch.Reset();
 
         return ordinal;
@@ -602,7 +748,13 @@ public abstract class HollowTypeWriteState
     /// <summary>
     /// Grows the ordinal map to hold <paramref name="size"/> records without rehashing.
     /// </summary>
-    public void ResizeOrdinalMap(int size) => OrdinalMap.Resize(size);
+    public void ResizeOrdinalMap(int size)
+    {
+        foreach (ByteArrayOrdinalMap map in _ordinalMaps)
+        {
+            map.Resize(size);
+        }
+    }
 
     /// <summary>
     /// Settles how many shards this cycle's records are laid out in and computes the per-shard ordinal
@@ -710,11 +862,16 @@ public abstract class HollowTypeWriteState
     /// <summary>
     /// The position of <paramref name="ordinal"/>'s serialised bytes within the ordinal map.
     /// </summary>
-    protected internal long GetPointerForData(int ordinal) => OrdinalMap.GetPointerForData(ordinal);
+    protected internal long GetPointerForData(int ordinal) =>
+        MapOf(ordinal).GetPointerForData(LocalOrdinal(ordinal));
 
-    /// <summary>The byte storage holding every record's serialised bytes.</summary>
+    /// <summary>The byte storage holding <paramref name="ordinal"/>'s serialised bytes.</summary>
+    /// <remarks>
+    /// Each map owns its own buffer, so which one holds a record follows from its ordinal — which is
+    /// why this takes the ordinal rather than being a property.
+    /// </remarks>
     protected internal SegmentedByteArray GetByteDataForOrdinal(int ordinal) =>
-        OrdinalMap.ByteData.UnderlyingArray;
+        MapOf(ordinal).ByteData.UnderlyingArray;
 
     /// <summary>
     /// A reusable per-thread buffer for serialising a record before it is hashed.

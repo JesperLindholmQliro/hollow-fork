@@ -224,7 +224,8 @@ public sealed class HollowObjectTypeMapper : HollowTypeMapper
 
     /// <inheritdoc />
     protected override HollowTypeWriteState CreateWriteState() =>
-        new HollowObjectTypeWriteState(_schema, _numShards);
+        new HollowObjectTypeWriteState(
+            _schema, _numShards, _parentMapper.StateEngine.PartitionedOrdinalMap);
 
     /// <inheritdoc />
     protected internal override void RegisterReferencedTypes(HollowObjectMapper parentMapper)
@@ -446,7 +447,9 @@ public sealed class HollowListTypeMapper : HollowTypeMapper
     }
 
     /// <inheritdoc />
-    protected override HollowTypeWriteState CreateWriteState() => new HollowListTypeWriteState(_schema);
+    protected override HollowTypeWriteState CreateWriteState() =>
+        new HollowListTypeWriteState(
+            _schema, usePartitionedOrdinalMap: _parentMapper.StateEngine.PartitionedOrdinalMap);
 
     /// <inheritdoc />
     protected internal override void RegisterReferencedTypes(HollowObjectMapper parentMapper) =>
@@ -507,7 +510,9 @@ public sealed class HollowSetTypeMapper : HollowTypeMapper
     }
 
     /// <inheritdoc />
-    protected override HollowTypeWriteState CreateWriteState() => new HollowSetTypeWriteState(_schema);
+    protected override HollowTypeWriteState CreateWriteState() =>
+        new HollowSetTypeWriteState(
+            _schema, usePartitionedOrdinalMap: _parentMapper.StateEngine.PartitionedOrdinalMap);
 
     /// <inheritdoc />
     protected internal override void RegisterReferencedTypes(HollowObjectMapper parentMapper) =>
@@ -575,7 +580,9 @@ public sealed class HollowMapTypeMapper : HollowTypeMapper
     }
 
     /// <inheritdoc />
-    protected override HollowTypeWriteState CreateWriteState() => new HollowMapTypeWriteState(_schema);
+    protected override HollowTypeWriteState CreateWriteState() =>
+        new HollowMapTypeWriteState(
+            _schema, usePartitionedOrdinalMap: _parentMapper.StateEngine.PartitionedOrdinalMap);
 
     /// <inheritdoc />
     protected internal override void RegisterReferencedTypes(HollowObjectMapper parentMapper)

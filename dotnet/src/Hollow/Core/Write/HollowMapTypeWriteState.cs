@@ -45,8 +45,18 @@ public sealed partial class HollowMapTypeWriteState : HollowTypeWriteState
     /// <summary>
     /// Initialises a write state for <paramref name="schema"/>.
     /// </summary>
-    public HollowMapTypeWriteState(HollowMapSchema schema, int numShards = -1)
-        : base(schema, numShards)
+    /// <param name="schema">The schema of the type.</param>
+    /// <param name="numShards">
+    /// The number of shards to split the type's records across, which must be a power of two, or -1 to
+    /// derive it from the data size at write time.
+    /// </param>
+    /// <param name="usePartitionedOrdinalMap">
+    /// Whether to spread this type's records across four ordinal maps rather than one, so that adding
+    /// records contends on four write locks instead of one.
+    /// </param>
+    public HollowMapTypeWriteState(
+        HollowMapSchema schema, int numShards = -1, bool usePartitionedOrdinalMap = false)
+        : base(schema, numShards, usePartitionedOrdinalMap)
     {
     }
 

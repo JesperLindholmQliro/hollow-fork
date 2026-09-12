@@ -1072,6 +1072,27 @@ way — `AReshardMovesRecordsItDoesNotHaveToRebuild` is the test that says which
 interleaves ordinals across the new shards, so there is never a run of them going to the same place;
 what is bulk-copied there is one record at a time, and one collection's elements at a time.
 
+### A type's ordinal map can be partitioned four ways
+
+`HollowWriteStateEngine.PartitionedOrdinalMap`, or `WithPartitionedOrdinalMap()` on the producer
+builder, gives each type four `ByteArrayOrdinalMap`s instead of one. A record's hash picks the map, and
+the map's index becomes the low two bits of the ordinal it hands back, so a global ordinal is
+`(local << 2) | mapIndex`. What it buys is throughput: populating a cycle from several threads then
+contends on four write locks rather than one.
+
+The costs are real and worth stating, because the default is off:
+
+- **Ordinals are interleaved rather than consecutive.** A type spends two bits of the 29-bit ordinal
+  space, and its records lose some of the locality a delta relies on.
+- **Holes are reclaimed more slowly.** The free-ordinal pool is per map, so a hole waits for a record
+  that hashes to *its* partition rather than for the next record at all.
+
+Two things have to hold whatever the routing does, and both are tested. Deduplication is across the
+whole type, so `Add` searches every map before assigning — the hash-routed one first, since that is
+almost always where a record is. And a restored producer has to hand a re-added record the ordinal the
+published state gave it, so restore places each record in the map its published ordinal belongs to
+rather than the one its hash would choose.
+
 ### `SetElementValue` assumes the bits it is writing are zero
 
 It ORs, because the storage it was designed for is freshly allocated. That is fine everywhere the
@@ -1159,7 +1180,7 @@ pool. Java's ordering is safe only because nothing there reads during the notifi
 | `core` | `HollowConstants`, `IHollowDataset`, `HollowHeaderTags` (the header tags `HollowStateEngine` declares) |
 | `core.util` | `BitSet` and `IntList` (port-specific stand-ins for `java.util.BitSet` and Hollow's `IntList`), `InvariantFormatting`, `HollowWriteStateCreator` |
 | `tools.checksum` | `HollowChecksum` and `ApplyToChecksum` on the four read states, which the producer's integrity check compares |
-| `core.write` | The write records (object, list, set, map), `FieldStatistics`, `HollowTypeWriteState` and its four subclasses, `HollowWriteStateEngine`, `HollowBlobHeaderWriter`, `HollowBlobWriter`, `HollowBlobOutput` |
+| `core.write` | The write records (object, list, set, map), `FieldStatistics`, `HollowTypeWriteState` and its four subclasses including the four-way partitioned ordinal map, `HollowWriteStateEngine`, `HollowBlobHeaderWriter`, `HollowBlobWriter`, `HollowBlobOutput` |
 | `core.write.copy` | `HollowRecordCopier` and the object/list/set/map copiers, plus `IOrdinalRemapper`/`IdentityOrdinalRemapper` (Java puts the remapper in `tools.combine`) |
 | `core.write.objectmapper` | `HollowObjectMapper`, the four type mappers, and the `HollowTypeName`/`HollowInline`/`HollowTransient`/`HollowPrimaryKey`/`HollowHashKey`/`HollowShardLargeType` attributes, including Java's default hash-key derivation |
 | `core.read` | `HollowBlobInput`, `HollowBlobHeaderReader`, `HollowBlobReader`, `HollowReadStateEngine`, `HollowTypeReadState`, `PopulatedOrdinalListener`, `SnapshotPopulatedOrdinalsReader`, the data-access interfaces, `ITypeFilter` |
@@ -1314,10 +1335,6 @@ sets of `TypeFilter` exist; the recursive rule DSL is still absent.
   here. It is also why `HollowConsumer` has no `ObjectLongevityConfig` or stale-reference detector:
   both exist to serve the proxy data access that is not ported.
 - **Historical state creation**, which a consumer uses to serve queries against prior states.
-- **Partitioned ordinal maps.** `HollowTypeWriteState` uses a single `ByteArrayOrdinalMap`, which is
-  Java's default; the four-way partitioned variant is not ported. `RestoreFrom` and
-  `HollowWriteStateCreator` are written against the single map, so adding the partitioned variant
-  means revisiting the global-to-local ordinal split in both.
 - **Shared-memory mode.** `MemoryMode.SharedMemoryLazy` and the `BlobByteBuffer`, `EncodedByteBuffer`
   and `EncodedLongBuffer` types behind it. Constructing a read state engine with it throws.
 - **Optional blob parts**, which split a snapshot across several streams.
@@ -1358,7 +1375,6 @@ The loop is closed end to end: a producer publishes, a consumer follows, a resta
 the chain, and a client generated at compile time reads it with types. What is left is either an
 optimisation or a feature on top.
 
-1. The bulk-copy fast path in the delta applicators, which is a pure optimisation the existing tests
-   already guard. The resharding splitters and joiners copy record by record for the same reason and
-   would benefit from the same treatment.
-2. Partitioned ordinal maps, which is the last write-side difference from Java's defaults.
+Nothing is outstanding from the original list. What remains unported is listed above, and each item
+there is a feature on top rather than a gap in the loop: object longevity and the history it serves,
+shared-memory mode, optional blob parts, producer metrics, and the tools and UI modules.

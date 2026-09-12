@@ -57,7 +57,8 @@ public static class HollowWriteStateCreator
                 continue;
             }
 
-            stateEngine.AddTypeState(CreateTypeWriteState(schema));
+            stateEngine.AddTypeState(
+                CreateTypeWriteState(schema, stateEngine.PartitionedOrdinalMap));
         }
     }
 
@@ -156,12 +157,17 @@ public static class HollowWriteStateCreator
         writeEngine.PrepareForWrite();
     }
 
-    private static HollowTypeWriteState CreateTypeWriteState(HollowSchema schema) => schema switch
-    {
-        HollowObjectSchema objectSchema => new HollowObjectTypeWriteState(objectSchema),
-        HollowListSchema listSchema => new HollowListTypeWriteState(listSchema),
-        HollowSetSchema setSchema => new HollowSetTypeWriteState(setSchema),
-        HollowMapSchema mapSchema => new HollowMapTypeWriteState(mapSchema),
-        _ => throw new UnrecognizedSchemaTypeException(schema.Name, schema.SchemaType),
-    };
+    private static HollowTypeWriteState CreateTypeWriteState(HollowSchema schema, bool partitioned) =>
+        schema switch
+        {
+            HollowObjectSchema objectSchema => new HollowObjectTypeWriteState(
+                objectSchema, usePartitionedOrdinalMap: partitioned),
+            HollowListSchema listSchema => new HollowListTypeWriteState(
+                listSchema, usePartitionedOrdinalMap: partitioned),
+            HollowSetSchema setSchema => new HollowSetTypeWriteState(
+                setSchema, usePartitionedOrdinalMap: partitioned),
+            HollowMapSchema mapSchema => new HollowMapTypeWriteState(
+                mapSchema, usePartitionedOrdinalMap: partitioned),
+            _ => throw new UnrecognizedSchemaTypeException(schema.Name, schema.SchemaType),
+        };
 }

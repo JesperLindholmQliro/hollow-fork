@@ -80,6 +80,7 @@ public sealed class HollowProducer
     private readonly int _numStatesBetweenSnapshots;
     private readonly long _targetMaxTypeShardSize;
     private readonly bool _focusHoleFillInFewestShards;
+    private readonly bool _partitionedOrdinalMap;
     private readonly bool _allowTypeResharding;
 
     private readonly Lock _cycleLock = new();
@@ -105,6 +106,7 @@ public sealed class HollowProducer
         _numStatesBetweenSnapshots = builder.NumStatesBetweenSnapshots;
         _targetMaxTypeShardSize = builder.TargetMaxTypeShardSize;
         _focusHoleFillInFewestShards = builder.FocusHoleFillInFewestShards;
+        _partitionedOrdinalMap = builder.PartitionedOrdinalMap;
         _allowTypeResharding = builder.AllowTypeResharding;
 
         _objectMapper = new HollowObjectMapper(NewWriteEngine());
@@ -385,6 +387,7 @@ public sealed class HollowProducer
     {
         TargetMaxTypeShardSize = _targetMaxTypeShardSize,
         FocusHoleFillInFewestShards = _focusHoleFillInFewestShards,
+        PartitionedOrdinalMap = _partitionedOrdinalMap,
         AllowTypeResharding = _allowTypeResharding,
     };
 
