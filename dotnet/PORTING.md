@@ -43,8 +43,7 @@ A dataset can also be read by a person rather than a program: `Hollow.Explorer` 
 application that already holds the dataset, or run it on a loopback port of its own. See
 [The explorer](#the-explorer).
 
-What is **not** here is object longevity and shared-memory mode. The status section says exactly what
-is and is not ported.
+What is **not** here is shared-memory mode. The status section says exactly what is and is not ported.
 
 ## Building and testing
 
@@ -924,11 +923,11 @@ type states on every lookup, while the unique key index resolves them through th
 given and keeps them.
 
 In Java that is what lets the unique key index survive more than two deltas without being rebuilt when
-object longevity is on. Object longevity is not ported, so here the difference is narrower: the unique
-key index works against any `IHollowDataAccess` rather than requiring a `HollowReadStateEngine`, and
-does not depend on the schema's mutable type-state wiring. Both are ported because the distinction is
-real and a caller may want either; they share their hash table through `UniqueKeyHashTable`, where Java
-duplicates it.
+object longevity is on, and the same holds here now that longevity is ported — see
+[Object longevity](#object-longevity). The unique key index works against any `IHollowDataAccess`, so
+it can be built over a proxy; the primary key index walks the schema's type states and cannot. Both are
+ported because the distinction is real and a caller may want either; they share their hash table
+through `UniqueKeyHashTable`, where Java duplicates it.
 
 ### The prefix index takes a tokenizer rather than being subclassed
 
@@ -989,9 +988,9 @@ Java packs the consumer's contracts into `HollowConsumer` as nested types: `Holl
 types in `Hollow.Api.Consumer` here, where the names read the same once the namespace is accounted for
 and `HollowConsumer` itself stays a manageable size. The interfaces take the usual `I` prefix.
 
-Three things around the edges of Java's consumer are absent, because what they exist to serve is not
-ported: the generated `HollowAPI` layer (so `IRefreshListener` takes the read state engine alone,
-without the `HollowAPI` parameter Java passes alongside it), object longevity, and metrics collection.
+Two things around the edges of Java's consumer are absent, because what they exist to serve is not
+ported: the `HollowAPI` parameter Java passes to a refresh listener alongside the read state engine,
+and metrics collection.
 
 ### The consumer refreshes through a task rather than an executor
 
@@ -1645,6 +1644,95 @@ map applicators in this port already did; only the object one did not. It now re
 `from.EncodedRemovals` the same way, treats a freed ordinal as an empty slot, and splits the bulk-copy
 run at one so both paths agree.
 
+## Object longevity
+
+Hollow reuses its memory. A record read out of a consumer is a *handle* — a type and an ordinal — not
+a copy. Once a delta lands, that ordinal may hold a different record, and the handle silently starts
+reading it. That is the contract, and for most code it is fine: read what you need, let go, read again
+next cycle.
+
+It is not fine when a reference outlives a refresh. A cached object, a request that took longer than
+the cycle, a background task holding a list — each ends up serving data that is not merely stale but
+*wrong*, belonging to whatever record took the ordinal. Nothing fails; the numbers are just someone
+else's. Object longevity is the feature that stops that, and `Hollow.Core.Read.DataAccess.Proxy`,
+`.Disabled`, `IObjectLongevityConfig` and `StaleReferenceDetector` are its parts.
+
+Turn it on through the consumer builder:
+
+```csharp
+using HollowConsumer consumer = new HollowConsumerBuilder()
+    .WithBlobRetriever(blobRetriever)
+    .WithObjectLongevityConfig(ObjectLongevityConfig.Enabled)
+    .Build();
+```
+
+### How a reference is kept readable
+
+The API a consumer hands out holds a data access, and every record read through that API reads through
+it. With longevity off that is the read state engine itself, which the delta moves on underneath.
+
+With longevity on, the consumer builds the API over a `HollowProxyDataAccess` instead — an
+`IHollowDataAccess` that forwards every read to another one and can be pointed somewhere else
+afterwards. Then on each delta:
+
+1. A `HollowHistoricalStateDataAccess` is built holding exactly the records that transition removed.
+   This is the same machinery the history UI uses — see [The history UI](#the-history-ui).
+2. The **outgoing** proxy — the one every existing reference reads through — is pointed at it.
+3. A **new** API is built over a fresh proxy onto the live state, for everything obtained from here on.
+
+So both are true at once: a reference taken before the refresh keeps reading what it always read, and
+one taken after reads the new data. The per-type proxies are reused rather than rebuilt, which is the
+whole trick — a caller's records point at *those objects*, so repointing them moves the data out from
+under a record without moving the record.
+
+A historical state holds only its own transition's removals, so a reference may ask it for a record it
+has not got: one that survived that transition and was removed later, or one that is still live. The
+states are chained through `NextState`, and the read walks forward until it reaches a state that has
+the record — ending, for a record nothing ever removed, at the live read state. The chain is held
+weakly, because it exists only for the references still out there.
+
+### What bounds the retention
+
+Left alone this is unbounded: one leaked reference pins every historical state taken since. That is
+what `StaleReferenceDetector` is for. Each superseded state is watched, and moves through two periods:
+
+- The **grace period**, during which nothing is flagged or dropped. Long enough to cover whatever
+  legitimately outlives a cycle.
+- The **usage detection period**, during which the consumer watches whether the stale data is actually
+  read. Reads still succeed throughout; what the window decides is whether the data may be dropped at
+  the end of it.
+
+Once both have passed with no read seen, and `DropDataAutomatically` is set, the proxy is pointed at
+the *disabled* data accesses and the historical state is released. A read after that throws
+`HollowDataAccessDisabledException`, whose message names the feature — so a stale reference becomes a
+stack trace rather than a wrong answer. `ForceDropData` drops even when reads *were* seen, which is the
+setting for finding the code that holds a reference too long rather than tolerating it.
+
+### Three departures from Java
+
+**Usage detection does not go through `api.sampling`.** Java asks the sampling framework whether a
+stale reference has been read, via `hasSampleResults()`. `api.sampling` is deliberately not ported (see
+[Not ported](#not-ported)) — and it does not need to be, because the proxy is already on every single
+read. `HollowProxyDataAccess.WasRead` is a flag set there and cleared when the detection window opens.
+It is a plain field rather than an interlocked one on purpose: the write is on the read path of every
+record and the only reader is a housekeeping timer, so the cost of the write matters and a lost write
+does not — it delays a drop by one housekeeping interval.
+
+**The housekeeping runs on a `TimeProvider` timer, not a daemon thread.** Which is also what makes the
+hour-long periods testable: the tests inject a clock and make two hours pass without waiting.
+
+**The detector watches the proxy as well as the API — and this fixes a real hole.** Java's
+`StaleHollowReferenceDetector` holds a weak reference to the `HollowAPI` alone. But an application
+holds *records*, and a record holds the **proxy**, not the API. The API is therefore routinely
+collected while the data behind it is still perfectly reachable — at which point Java's `detach()`
+dereferences a dead weak reference, does nothing, and the historical state is pinned for good. Exactly
+the case the detector exists to prevent. The port's handle watches both and drops through the proxy;
+the API is used only for `DetachCaches` and for identity. This was caught by a test that passed on its
+own and failed in the full suite, where a collection had actually run.
+
+Java's expired-usage stack trace recorder is not ported either. It exists to attribute a read of
+dropped data to the code that made it, which in .NET is what the exception's own stack trace is.
+
 ## Status
 
 ### Ported and tested
@@ -1676,7 +1764,7 @@ run at one so both paths agree.
 | resharding (read) | `ShardsHolder`, `HollowTypeDataElements`/`HollowTypeReadStateShard`, the data element splitters and joiners for all four record kinds, `HollowTypeReshardingStrategy`, `GapEncodedVariableLengthIntegerReader.Split`/`Join` |
 | resharding (write) | `HollowWriteStateEngine.AllowTypeResharding`, `GatherShardingStats` with its one-factor-of-two-per-cycle rule, `RevNumShards`/`RevMaxShardOrdinal` and the direction-aware delta writers, the `hollow.type.resharding.invoked` header tag |
 | `tools.traverse` | `TransitiveSetTraverser` — `AddTransitiveMatches`, `RemoveReferencedOutsideClosure`, `AddReferencingOutsideClosure` |
-| `api.consumer` | `HollowConsumer` and `HollowConsumerBuilder`, `Blob`/`HeaderBlob`/`BlobType`, `IBlobRetriever`, `IAnnouncementWatcher`/`VersionInfo`/`AnnouncementStatus`, `IRefreshListener`/`ITransitionAwareRefreshListener`/`IRefreshRegistrationListener`/`HollowRefreshListener`, `IDoubleSnapshotConfig`, `IUpdatePlanBlobVerifier` |
+| `api.consumer` | `HollowConsumer` and `HollowConsumerBuilder`, `Blob`/`HeaderBlob`/`BlobType`, `IBlobRetriever`, `IAnnouncementWatcher`/`VersionInfo`/`AnnouncementStatus`, `IRefreshListener`/`ITransitionAwareRefreshListener`/`IRefreshRegistrationListener`/`HollowRefreshListener`, `IDoubleSnapshotConfig`, `IUpdatePlanBlobVerifier`, `IObjectLongevityConfig` |
 | `api.consumer.fs` | `HollowFilesystemBlobRetriever`, `HollowFilesystemAnnouncementWatcher` |
 | `api.client` | `HollowUpdatePlan`, `HollowUpdatePlanner`, `FailedTransitionTracker`, `HollowDataHolder`, `HollowClientUpdater` |
 | `api.producer` | `HollowProducer` and `HollowProducerBuilder`, the cycle with its rollback, `Restore`, `Blob`/`HeaderBlob`/`IPublishArtifact`, `IBlobStager`, `IPublisher`, `IAnnouncer`, `IVersionMinter`/`VersionMinterWithCounter`, `IBlobCompressor`, `IWriteState`/`IReadState`/`Populator`, `Status`, `ReadStateHelper` |
@@ -1697,6 +1785,9 @@ run at one so both paths agree.
 | `core.read.dataaccess.missing` | `HollowObjectMissingDataAccess` and its list, set and map counterparts, behind the `IHollowMissingTypeDataAccess` marker |
 | `api.consumer.index` | `FieldPathAttribute`, the match and select extractors, `UniqueKeyIndex` and `HashIndex`/`HashIndexSelect` with their builders |
 | `api.client` (API factory) | `IHollowApiFactory`, `DefaultHollowApiFactory`, `DelegateHollowApiFactory`, `GeneratedHollowApiFactory<TApi>`, and `HollowConsumer.Api` |
+| `core.read.dataaccess.proxy` | `HollowProxyDataAccess`, `HollowTypeProxyDataAccess` and the object/list/set/map proxies; see [Object longevity](#object-longevity) |
+| `core.read.dataaccess.disabled` | `HollowDisabledDataAccess` and its four type counterparts, plus `HollowDataAccessDisabledException` |
+| object longevity (`api.client`) | `IObjectLongevityConfig`/`ObjectLongevityConfig`, `IObjectLongevityDetector`, `StaleReferenceDetector`, and `HollowConsumerBuilder.WithObjectLongevityConfig`; see [Object longevity](#object-longevity) |
 | `api.codegen` (client API) | `HollowCodeGenerator` and its options, the model resolver, the naming rules and the emitters for all four record kinds, the API class, the API factory and the unique-key index |
 | `api.codegen` (source generator) | `Hollow.SourceGenerator`: `HollowApiSourceGenerator`, `SymbolModel` and the `HollowGeneratedApi` attribute — no Java counterpart, since Java has nothing that runs inside the compiler |
 | `tools.diff` | `HollowDiff`, `HollowTypeDiff`, `HollowDiffMatcher`, `HollowFieldDiff`, `HollowDiffNodeIdentifier`, the `diff.exact` equality mapping and its four mappers, and the `diff.count` counting tree |
@@ -1820,18 +1911,13 @@ sets of `TypeFilter` exist; the recursive rule DSL is still absent.
 
 ### Not ported
 
-- **Object longevity**, which serves reads of an older version from a live state. This is why Java has
-  both `HollowPrimaryKeyIndex` and `HollowUniqueKeyIndex`; see the note below on what separates them
-  here. It is also why `HollowConsumer` has no `ObjectLongevityConfig` or stale-reference detector:
-  both exist to serve the proxy data access that is not ported.
-- **Historical state creation**, which a consumer uses to serve queries against prior states.
 - **Shared-memory mode.** `MemoryMode.SharedMemoryLazy` and the `BlobByteBuffer`, `EncodedByteBuffer`
   and `EncodedLongBuffer` types behind it. Constructing a read state engine with it throws.
 - **Optional blob parts**, which split a snapshot across several streams.
 - **Producer metrics** (`api.producer.metrics`), asynchronous snapshot publishing, and the blob
   storage cleaner.
-- **The consumer's optional layers.** Object longevity, metrics collection
-  (`api.consumer.metrics`) and `api.consumer.data`.
+- **The consumer's optional layers.** Metrics collection (`api.consumer.metrics`) and
+  `api.consumer.data`.
 - **The deprecated `api.client.HollowClient`**, superseded by `HollowConsumer`; only the parts of
   `api.client` that `HollowConsumer` uses are ported.
 - **`api.codegen`'s three extras** (the POJO, "performance API" and test-data builder generators; the
@@ -1869,15 +1955,16 @@ the chain, and a client generated at compile time reads it with types. What is l
 optimisation or a feature on top.
 
 Nothing is outstanding from the original list. What remains unported is listed above, and each item
-there is a feature on top rather than a gap in the loop: object longevity, shared-memory mode,
-optional blob parts, and producer metrics.
+there is a feature on top rather than a gap in the loop: shared-memory mode, optional blob parts, and
+producer metrics.
 
 All three UIs are ported — the explorer, the diff and the history — and with the history went
 `tools.history` underneath it. `tools` is now ported in full: `combine`, `split` and `patch` went in
 last, and the delta patcher's tests turned up a real bug in the object delta applicator along the way
 — see [A delta bug the patcher found](#a-delta-bug-the-patcher-found).
 
-What remains is object longevity and shared-memory mode, in that order.
+Object longevity went in after that — see [Object longevity](#object-longevity), where the tests turned
+up a hole in Java's own stale-reference detector. What remains is shared-memory mode.
 
 **Whatever comes next, read [The explorer](#the-explorer), [The diff UI](#the-diff-ui) and
 [The history UI](#the-history-ui) first if it has a page in it.** The decisions there about Razor,
