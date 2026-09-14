@@ -147,6 +147,23 @@ public sealed partial class HollowListTypeReadState : HollowTypeReadState, IHoll
     {
     }
 
+    /// <summary>
+    /// Initialises a read state over records that are already in memory, held as a single shard.
+    /// </summary>
+    /// <remarks>
+    /// This is how a historical state is built: its records were copied out of a live state rather
+    /// than read from a blob, so there is nothing to read and no reason to shard them.
+    /// </remarks>
+    internal HollowListTypeReadState(
+        HollowReadStateEngine stateEngine, HollowListSchema schema, HollowListTypeDataElements dataElements)
+        : base(stateEngine, MemoryMode.OnHeap, schema)
+    {
+        ArgumentNullException.ThrowIfNull(dataElements);
+
+        _shardsVolatile = new ShardsHolder<Shard>([new Shard(dataElements, 0)]);
+        _maxOrdinal = dataElements.MaxOrdinal;
+    }
+
     /// <summary>The schema of this type.</summary>
     public new HollowListSchema Schema => (HollowListSchema)base.Schema;
 

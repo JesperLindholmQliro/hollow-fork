@@ -61,6 +61,24 @@ public sealed partial class HollowObjectTypeReadState : HollowTypeReadState, IHo
         _unfilteredSchema = unfilteredSchema ?? schema;
     }
 
+    /// <summary>
+    /// Initialises a read state over records that are already in memory, held as a single shard.
+    /// </summary>
+    /// <remarks>
+    /// This is how a historical state is built: its records were copied out of a live state rather
+    /// than read from a blob, so there is nothing to read and no reason to shard them.
+    /// </remarks>
+    internal HollowObjectTypeReadState(
+        HollowReadStateEngine stateEngine, HollowObjectSchema schema, HollowObjectTypeDataElements dataElements)
+        : base(stateEngine, MemoryMode.OnHeap, schema)
+    {
+        ArgumentNullException.ThrowIfNull(dataElements);
+
+        _unfilteredSchema = schema;
+        _shardsVolatile = new ShardsHolder<Shard>([new Shard(dataElements, 0)]);
+        _maxOrdinal = dataElements.MaxOrdinal;
+    }
+
     /// <summary>The schema reads are served against.</summary>
     public new HollowObjectSchema Schema => (HollowObjectSchema)base.Schema;
 
