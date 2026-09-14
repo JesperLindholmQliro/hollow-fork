@@ -1335,6 +1335,92 @@ binds the loopback address rather than `localhost`, because a dev tool showing a
 business being reachable from the network, and because Kestrel will not take an ephemeral port under
 the name.
 
+## The diff UI
+
+`Hollow.Explorer.Diff` is the port of `hollow-diff-ui`: the machinery for laying two records out side
+by side, and four pages over a calculated `HollowDiff` — every type and how far apart the two states
+are in it, one type's fields and record pairs, one field's pairs, and two records drawn against each
+other.
+
+It shares an assembly with the explorer rather than having one of its own. The two are the same kind
+of thing — a few controller actions and some Razor views over a dataset — and they share their MVC
+plumbing, their session-store base and `ByteSize`. Java splits them because each needs its own Jetty
+server and Velocity engine, neither of which survives the port.
+
+### Three layers, ported in order
+
+The engine (`Hollow.Core.Tools.Diff`) answers *what moved*; the effigy and pairer layer answers *how
+to draw one pair*; the pages are what is left.
+
+- **The equality mapping** is what makes a diff over a large dataset finish. Built leaf-first, it
+  gives every group of byte-identical records one identity, so a subtree the two states share is
+  never walked at all. The port adds a guard Java lacks: a type's map is recorded as empty *before*
+  it is built, so a self-referencing type asks for the empty map rather than recursing until the
+  stack runs out.
+- **The matcher** pairs records by primary key, because an ordinal means nothing across two states.
+- **The counting tree** mirrors the data model, pairs off equal ordinals at each branch and passes
+  only the remainder down; leaves score by hashing values with multiplicity.
+
+Java runs the first and third of those on a `SimultaneousExecutor`. The port runs them on one thread,
+as it does everywhere else, which also makes the scores deterministic.
+
+### The row tree, and why it is lazy
+
+A record is turned into a `HollowEffigy` — an ordinary object tree that compares by value rather than
+by ordinal, and reads its fields when asked. Two effigies are aligned into rows by a pairer: objects
+pair by field name, collections by a match hint (a `PrimaryKey` per element type) or, failing that,
+by minimum difference over an every-against-every matrix of packed longs.
+
+Only the root's immediate children are built when the page loads. Everything below is built when a
+row is opened, which is what makes the page load at all on a record reaching thousands of others —
+and a subtree the equality mapping calls identical is never built.
+
+The view then decides what to show: what differs, and the branches leading down to it, capped at 300
+rows before it stops opening branches on the reader's behalf.
+
+### The rows are values, not a string that is parsed back
+
+Java's `DiffViewOutputGenerator` writes each row as eight pipe-delimited fields, and
+`HollowDiffHtmlKickstarter` tokenises that string back apart to build the initial HTML. The port
+works a row out once as a `DiffViewRowDisplay` and produces the delimited form only for the browser,
+which is the one place it is needed — the page's script splices new rows in itself, so sending it
+markup would mean sending the same thing twice.
+
+`HollowDiffHtmlKickstarter` therefore has no counterpart: the initial rows are a `@foreach` in
+`ObjectDiff.cshtml`, which is what Razor is for.
+
+### It closes an XSS hole
+
+Java's `getFieldValue` replaces the pipe delimiter — there is no escape in that wire format — but
+never HTML-escapes. A record holding markup puts that markup straight into the page, in both the
+diff UI and the history UI that shares the code. The port escapes first and then replaces, over text
+that can no longer be markup.
+
+The cells still reach the page as markup, because they are drawn with box-drawing entities; what
+changed is that the *data* in them is escaped before it gets there.
+
+### The stylesheet and the margin images ride along in the assembly
+
+`diffview.css` and the three expand/collapse images are `EmbeddedResource`s served by a controller
+action, rather than sitting in a `wwwroot`. An application embedding the diff gets a working page
+without having to serve static files or copy anything into its own content root. The action indexes a
+fixed set of four names, so nothing a caller writes reaches the manifest as text.
+
+### Two places where the port does not reproduce a bug
+
+- `HollowEffigyCollectionPairer`'s match-hint probe does not stop once it has paired an element, so
+  one element of the earlier collection can appear on several rows against several of the later one.
+  The port stops. There is a test for it.
+- The same pairer is missing an early return for an empty collection, which reports its elements
+  twice. There is a test for that too.
+
+### What is not ported
+
+The history UI (`com.netflix.hollow.history.ui` and `com.netflix.hollow.tools.history`, about 5,000
+lines in the same Maven module) is not here. It reuses the effigy, pairer and row-tree layer that this
+increment ports, so it is the natural thing to do next, but it is a separate feature: a keyed history
+over many states rather than a comparison of two.
+
 ## Status
 
 ### Ported and tested
@@ -1389,6 +1475,10 @@ the name.
 | `api.client` (API factory) | `IHollowApiFactory`, `DefaultHollowApiFactory`, `DelegateHollowApiFactory`, `GeneratedHollowApiFactory<TApi>`, and `HollowConsumer.Api` |
 | `api.codegen` (client API) | `HollowCodeGenerator` and its options, the model resolver, the naming rules and the emitters for all four record kinds, the API class, the API factory and the unique-key index |
 | `api.codegen` (source generator) | `Hollow.SourceGenerator`: `HollowApiSourceGenerator`, `SymbolModel` and the `HollowGeneratedApi` attribute — no Java counterpart, since Java has nothing that runs inside the compiler |
+| `tools.diff` | `HollowDiff`, `HollowTypeDiff`, `HollowDiffMatcher`, `HollowFieldDiff`, `HollowDiffNodeIdentifier`, the `diff.exact` equality mapping and its four mappers, and the `diff.count` counting tree |
+| `hollow-explorer-ui` | `Hollow.Explorer`: four pages over a dataset; see [The explorer](#the-explorer) |
+| `hollow-diff-ui` (`diffview`, `diff.ui`) | `Hollow.Explorer.Diff`: the effigy, pairers, row tree and renderer, and four pages over a calculated diff; see [The diff UI](#the-diff-ui). The history UI in the same module is not ported |
+| `hollow-ui-tools` | Only `HollowDiffUtil.formatBytes`, as `ByteSize.Format`; the rest is servlet plumbing ASP.NET Core replaces |
 
 Test coverage is carried over from the Java tests where they exist — `VarIntTest`, `HashCodesTest`,
 `FixedLengthElementArrayTest`, `FreeOrdinalTrackerTest`, `ThreadSafeBitSetTest`,
@@ -1515,17 +1605,19 @@ sets of `TypeFilter` exist; the recursive rule DSL is still absent.
   (`api.consumer.metrics`) and `api.consumer.data`.
 - **The deprecated `api.client.HollowClient`**, superseded by `HollowConsumer`; only the parts of
   `api.client` that `HollowConsumer` uses are ported.
-- **Tools** (`tools`: diff, history, combine, split, patch. `tools.checksum` is ported because the
-  producer's integrity check needs it, `tools.traverse` because the incremental producer does, and
-  `tools.query`, `tools.stringifier` and `tools.util` because the explorer does),
+- **Tools** (`tools`: history, combine, split, patch. `tools.diff` is ported — see
+  [The diff UI](#the-diff-ui) — as is `tools.checksum`, because the producer's integrity check needs
+  it, `tools.traverse`, because the incremental producer does, and `tools.query`,
+  `tools.stringifier` and `tools.util`, because the explorer does),
   **`api.codegen`'s three extras** (the POJO, "performance API" and test-data builder generators; the
   client API generator itself is ported — see [The code generator](#the-code-generator)),
   **sampling** (`api.sampling`, deliberately — see below), and every module outside
-  `hollow` except the explorer — `hollow-diff-ui`, `hollow-jsonadapter`, `hollow-protoadapter`,
-  `hollow-zenoadapter`, `hollow-test`, `hollow-fakedata`. `hollow-explorer-ui` is ported as
-  `Hollow.Explorer`; see [The explorer](#the-explorer). Of `hollow-ui-tools`, only `HollowDiffUtil`'s
-  `formatBytes` and `HtmlEscapingWriter` had anything to port — the rest is Jetty and servlet plumbing
-  that ASP.NET Core replaces outright.
+  `hollow` except the two UIs — `hollow-jsonadapter`, `hollow-protoadapter`, `hollow-zenoadapter`,
+  `hollow-test`, `hollow-fakedata`. `hollow-explorer-ui` is ported as `Hollow.Explorer`
+  ([The explorer](#the-explorer)), and `hollow-diff-ui`'s `diffview` and `diff.ui` packages as
+  `Hollow.Explorer.Diff` ([The diff UI](#the-diff-ui)); the history UI in that same module is not.
+  Of `hollow-ui-tools`, only `HollowDiffUtil`'s `formatBytes` and `HtmlEscapingWriter` had anything
+  to port — the rest is Jetty and servlet plumbing that ASP.NET Core replaces outright.
 - **`GarbageCollectorAwareRecycler`**, which picks a pooling strategy by inspecting the JVM's
   collector through `ManagementFactory`. The decision it encodes does not transfer to .NET; pick
   `RecyclingRecycler` or `WastefulRecycler` explicitly.
@@ -1552,11 +1644,17 @@ optimisation or a feature on top.
 
 Nothing is outstanding from the original list. What remains unported is listed above, and each item
 there is a feature on top rather than a gap in the loop: object longevity and the history it serves,
-shared-memory mode, optional blob parts, producer metrics, and the diff tools and the UI over them.
+shared-memory mode, optional blob parts, and producer metrics.
 
-The explorer is the first thing in this port that is read rather than called, and the next module
-along — `hollow-diff-ui` — shares its shape: the same navigation bar, the same Velocity templates,
-the same session-scoped place-in-the-data. Whoever takes it on should read
-[The explorer](#the-explorer) first; the decisions there about Razor, escaping and session state were
-made once and should not be made differently twice. The diff engine itself (`tools.diff`) is the
-larger half of that job and is not started.
+**The history UI is the natural next piece.** `com.netflix.hollow.history.ui` and
+`com.netflix.hollow.tools.history` are about 5,000 lines in the same Maven module as the diff UI, and
+they reuse the layer this port has already done: the effigy, the pairers, the row tree and the
+renderer are all shared, and `HistoryExactRecordMatcher` is the one piece of the exact-match layer
+that is missing. What is genuinely new is `tools.history` — a keyed history that follows a consumer
+across many states and remembers what each record looked like at each of them — and the pages over
+it.
+
+Whoever takes it on should read [The explorer](#the-explorer) and [The diff UI](#the-diff-ui) first.
+The decisions there about Razor, escaping, session state and where the rows are turned into values
+were made once and should not be made differently twice; a `HollowHistoryView` is the same row tree
+these already build, so it should reach the same renderer.
