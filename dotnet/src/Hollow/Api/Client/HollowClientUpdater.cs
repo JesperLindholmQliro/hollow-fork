@@ -46,6 +46,8 @@ public sealed class HollowClientUpdater
     private readonly IDoubleSnapshotConfig _doubleSnapshotConfig;
     private readonly ITypeFilter? _filter;
     private readonly MemoryMode _memoryMode;
+    private readonly IObjectLongevityConfig _objectLongevityConfig;
+    private readonly StaleReferenceDetector? _staleReferenceDetector;
 
     /// <summary>
     /// The listeners, held in an immutable array so that a refresh can take a snapshot of them without
@@ -71,7 +73,10 @@ public sealed class HollowClientUpdater
         IUpdatePlanBlobVerifier? blobVerifier = null,
         ITypeFilter? filter = null,
         MemoryMode memoryMode = MemoryMode.OnHeap,
-        IHollowApiFactory? apiFactory = null)
+        IHollowApiFactory? apiFactory = null,
+        IObjectLongevityConfig? objectLongevityConfig = null,
+        IObjectLongevityDetector? objectLongevityDetector = null,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(blobRetriever);
 
@@ -81,7 +86,23 @@ public sealed class HollowClientUpdater
         _refreshListeners = [.. (refreshListeners ?? []).Distinct()];
         _filter = filter;
         _memoryMode = memoryMode;
+        _objectLongevityConfig = objectLongevityConfig ?? ObjectLongevityConfig.Default;
+
+        // Only when longevity is on. Without it every API reads straight through the one state engine,
+        // so nothing is ever superseded in the sense the detector cares about.
+        if (_objectLongevityConfig.EnableLongLivedObjectSupport)
+        {
+            _staleReferenceDetector = new StaleReferenceDetector(
+                _objectLongevityConfig, objectLongevityDetector, timeProvider);
+
+            _staleReferenceDetector.StartMonitoring();
+        }
     }
+
+    /// <summary>
+    /// Watches the states this updater has superseded, or <see langword="null"/> when longevity is off.
+    /// </summary>
+    public StaleReferenceDetector? StaleReferenceDetector => _staleReferenceDetector;
 
     /// <summary>
     /// Completes with the version of the first data this updater successfully loaded.
@@ -354,6 +375,12 @@ public sealed class HollowClientUpdater
             : new HollowReadStateEngine(_memoryMode);
 
         return new HollowDataHolder(
-            stateEngine, _apiFactory, _doubleSnapshotConfig, _failedTransitionTracker, _filter);
+            stateEngine,
+            _apiFactory,
+            _doubleSnapshotConfig,
+            _failedTransitionTracker,
+            _filter,
+            _objectLongevityConfig,
+            _staleReferenceDetector);
     }
 }

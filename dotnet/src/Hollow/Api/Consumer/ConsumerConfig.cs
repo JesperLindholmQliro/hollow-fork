@@ -123,3 +123,102 @@ public sealed class UpdatePlanBlobVerifier : IUpdatePlanBlobVerifier
     /// <inheritdoc />
     public IAnnouncementWatcher? AnnouncementWatcher { get; init; }
 }
+
+/// <summary>
+/// Whether records stay readable after the state they came from has moved on, and for how long.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Hollow reuses its memory. A record read out of a consumer is a handle — a type and an ordinal —
+/// not a copy, so once a delta lands, that ordinal may hold a different record and the handle
+/// silently starts reading it. Ordinarily that is fine, because a caller reads what it needs and lets
+/// go. It is not fine when a reference outlives a refresh: a cached object, a request that took longer
+/// than the cycle, a background task holding a list.
+/// </para>
+/// <para>
+/// With <see cref="EnableLongLivedObjectSupport"/> on, the consumer builds its API over a
+/// <see cref="Core.Read.DataAccess.Proxy.HollowProxyDataAccess"/>, and on each delta points the
+/// outgoing proxy at a historical state holding exactly the records that transition removed. Every
+/// reference a caller already holds keeps reading what it always read. The cost is that those
+/// historical states are retained, which is what the periods below bound.
+/// </para>
+/// <para>
+/// Named <c>HollowConsumer.ObjectLongevityConfig</c> in Java; the <c>I</c> prefix follows the .NET
+/// interface naming convention.
+/// </para>
+/// </remarks>
+public interface IObjectLongevityConfig
+{
+    /// <summary>Whether a reference keeps reading its own data after a refresh.</summary>
+    bool EnableLongLivedObjectSupport { get; }
+
+    /// <summary>
+    /// How long after a refresh a reference is left entirely alone.
+    /// </summary>
+    /// <remarks>
+    /// Long enough to cover whatever legitimately outlives one cycle. Nothing is flagged or dropped
+    /// during it.
+    /// </remarks>
+    TimeSpan GracePeriod { get; }
+
+    /// <summary>
+    /// How long after the grace period the consumer watches whether the stale data is actually read.
+    /// </summary>
+    /// <remarks>
+    /// Reads still succeed throughout. What the window decides is whether the data may be dropped at
+    /// the end of it: a reference that was read is presumed still in use and kept.
+    /// </remarks>
+    TimeSpan UsageDetectionPeriod { get; }
+
+    /// <summary>
+    /// Whether to drop the data behind a stale reference once both periods have passed and no read was
+    /// seen.
+    /// </summary>
+    /// <remarks>
+    /// Without this the historical states are held until the references to them are collected, which is
+    /// safe but unbounded — a single leaked reference pins every state since it was taken.
+    /// </remarks>
+    bool DropDataAutomatically { get; }
+
+    /// <summary>
+    /// Whether to drop the data even though a read was seen during the usage detection window.
+    /// </summary>
+    /// <remarks>
+    /// For finding the leaks rather than tolerating them: a read after this point throws, which turns a
+    /// silent over-long reference into a stack trace naming the code that holds it.
+    /// </remarks>
+    bool ForceDropData { get; }
+}
+
+/// <summary>
+/// The object longevity policy a consumer uses unless it is given another.
+/// </summary>
+public sealed class ObjectLongevityConfig : IObjectLongevityConfig
+{
+    /// <summary>Longevity off, which is what a consumer gets unless it asks otherwise.</summary>
+    public static IObjectLongevityConfig Default { get; } = new ObjectLongevityConfig();
+
+    /// <summary>
+    /// Longevity on, with Java's hour-long grace and usage detection periods and automatic dropping.
+    /// </summary>
+    public static IObjectLongevityConfig Enabled { get; } = new ObjectLongevityConfig
+    {
+        EnableLongLivedObjectSupport = true,
+        DropDataAutomatically = true,
+    };
+
+    /// <inheritdoc />
+    public bool EnableLongLivedObjectSupport { get; init; }
+
+    /// <inheritdoc />
+    public TimeSpan GracePeriod { get; init; } = TimeSpan.FromHours(1);
+
+    /// <inheritdoc />
+    public TimeSpan UsageDetectionPeriod { get; init; } = TimeSpan.FromHours(1);
+
+    /// <inheritdoc />
+    public bool DropDataAutomatically { get; init; }
+
+    /// <inheritdoc />
+    public bool ForceDropData { get; init; }
+}

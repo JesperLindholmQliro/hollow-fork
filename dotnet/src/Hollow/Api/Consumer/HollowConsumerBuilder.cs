@@ -58,6 +58,15 @@ public sealed class HollowConsumerBuilder
     /// <summary>What builds the typed API, if anything beyond the default does.</summary>
     internal IHollowApiFactory? ApiFactory { get; private set; }
 
+    /// <summary>Whether records stay readable after the state they came from has moved on.</summary>
+    internal IObjectLongevityConfig? ObjectLongevityConfig { get; private set; }
+
+    /// <summary>Told how many stale references the consumer can see, if anything is listening.</summary>
+    internal IObjectLongevityDetector? ObjectLongevityDetector { get; private set; }
+
+    /// <summary>Where the longevity clock comes from, if not the system one.</summary>
+    internal TimeProvider? TimeProvider { get; private set; }
+
     /// <summary>
     /// Reads blobs through <paramref name="blobRetriever"/>.
     /// </summary>
@@ -118,6 +127,34 @@ public sealed class HollowConsumerBuilder
         ArgumentNullException.ThrowIfNull(doubleSnapshotConfig);
 
         DoubleSnapshotConfig = doubleSnapshotConfig;
+
+        return this;
+    }
+
+    /// <summary>
+    /// Keeps records readable after the state they came from has moved on.
+    /// </summary>
+    /// <remarks>
+    /// Turn this on when something holds a Hollow record across a refresh — a cache, a long request, a
+    /// background task. Without it such a reference silently starts reading whatever now sits at its
+    /// ordinal. See <see cref="IObjectLongevityConfig"/> for what it costs.
+    /// </remarks>
+    /// <param name="objectLongevityConfig">The policy, including the grace and detection periods.</param>
+    /// <param name="objectLongevityDetector">Told how many stale references the consumer can see.</param>
+    /// <param name="timeProvider">
+    /// Where the longevity clock and its housekeeping timer come from. For tests that need to make an
+    /// hour pass without waiting one.
+    /// </param>
+    public HollowConsumerBuilder WithObjectLongevityConfig(
+        IObjectLongevityConfig objectLongevityConfig,
+        IObjectLongevityDetector? objectLongevityDetector = null,
+        TimeProvider? timeProvider = null)
+    {
+        ArgumentNullException.ThrowIfNull(objectLongevityConfig);
+
+        ObjectLongevityConfig = objectLongevityConfig;
+        ObjectLongevityDetector = objectLongevityDetector;
+        TimeProvider = timeProvider;
 
         return this;
     }

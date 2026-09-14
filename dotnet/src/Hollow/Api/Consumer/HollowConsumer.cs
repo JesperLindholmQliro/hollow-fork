@@ -67,7 +67,10 @@ public sealed class HollowConsumer : IDisposable
             builder.UpdatePlanBlobVerifier,
             builder.TypeFilter,
             builder.MemoryMode,
-            builder.ApiFactory);
+            builder.ApiFactory,
+            builder.ObjectLongevityConfig,
+            builder.ObjectLongevityDetector,
+            builder.TimeProvider);
 
         _announcementWatcher = builder.AnnouncementWatcher;
         _announcementWatcher?.SubscribeToUpdates(this);
@@ -83,6 +86,16 @@ public sealed class HollowConsumer : IDisposable
     /// <see cref="AcquireRefreshLock"/> around a read that must not see the data change underneath it.
     /// </remarks>
     public HollowReadStateEngine? StateEngine => _updater.StateEngine;
+
+    /// <summary>
+    /// Watches the states this consumer has superseded, or <see langword="null"/> when object
+    /// longevity is off.
+    /// </summary>
+    /// <remarks>
+    /// Exposed so that an application can drive the housekeeping itself, or ask what the last pass
+    /// found. See <see cref="IObjectLongevityConfig"/>.
+    /// </remarks>
+    public StaleReferenceDetector? StaleReferenceDetector => _updater.StaleReferenceDetector;
 
     /// <summary>
     /// The typed API over the current data, or <see langword="null"/> before the first successful

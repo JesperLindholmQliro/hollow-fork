@@ -19,8 +19,11 @@ using Hollow.Api.Consumer;
 using Hollow.Api.Custom;
 using Hollow.Core;
 using Hollow.Core.Read;
+using Hollow.Core.Read.DataAccess;
+using Hollow.Core.Read.DataAccess.Proxy;
 using Hollow.Core.Read.Engine;
 using Hollow.Core.Read.Filter;
+using Hollow.Core.Tools.History;
 
 namespace Hollow.Api.Client;
 
@@ -41,13 +44,27 @@ internal sealed class HollowDataHolder
     private readonly IDoubleSnapshotConfig _doubleSnapshotConfig;
     private readonly FailedTransitionTracker _failedTransitionTracker;
     private readonly ITypeFilter? _filter;
+    private readonly IObjectLongevityConfig _objectLongevityConfig;
+    private readonly StaleReferenceDetector? _staleReferenceDetector;
+
+    /// <summary>
+    /// The historical state the previous transition produced, held weakly.
+    /// </summary>
+    /// <remarks>
+    /// Weakly, because the chain exists only for the references that are still out there. Once the
+    /// last record from a given state has been collected, nothing can ask that state anything, and
+    /// holding it would pin every state after it too.
+    /// </remarks>
+    private WeakReference<HollowHistoricalStateDataAccess>? _priorHistoricalDataAccess;
 
     internal HollowDataHolder(
         HollowReadStateEngine stateEngine,
         IHollowApiFactory apiFactory,
         IDoubleSnapshotConfig doubleSnapshotConfig,
         FailedTransitionTracker failedTransitionTracker,
-        ITypeFilter? filter)
+        ITypeFilter? filter,
+        IObjectLongevityConfig? objectLongevityConfig = null,
+        StaleReferenceDetector? staleReferenceDetector = null)
     {
         _stateEngine = stateEngine;
         _reader = new HollowBlobReader(stateEngine);
@@ -55,6 +72,8 @@ internal sealed class HollowDataHolder
         _doubleSnapshotConfig = doubleSnapshotConfig;
         _failedTransitionTracker = failedTransitionTracker;
         _filter = filter;
+        _objectLongevityConfig = objectLongevityConfig ?? ObjectLongevityConfig.Default;
+        _staleReferenceDetector = staleReferenceDetector;
     }
 
     internal HollowReadStateEngine StateEngine => _stateEngine;
@@ -155,7 +174,8 @@ internal sealed class HollowDataHolder
 
             // Before the consumer publishes this holder, so that a listener reaching back for
             // HollowConsumer.Api never sees the API that belonged to the data this one replaced.
-            Api = _apiFactory.CreateApi(_stateEngine);
+            Api = _apiFactory.CreateApi(DataAccessForNewApi());
+            _staleReferenceDetector?.NewApiHandle(Api);
 
             onSnapshotLoaded();
 
@@ -185,7 +205,11 @@ internal sealed class HollowDataHolder
                 _reader.ApplyDelta(input);
             }
 
+            long previousVersion = CurrentVersion;
+
             CurrentVersion = blob.ToVersion;
+
+            MoveApiOnToTheNewState(previousVersion);
 
             foreach (IRefreshListener listener in refreshListeners)
             {
@@ -207,5 +231,98 @@ internal sealed class HollowDataHolder
             _failedTransitionTracker.MarkFailedTransition(blob);
             throw;
         }
+    }
+
+    /// <summary>
+    /// What a newly built API should read through: the live state, or a proxy onto it when longevity
+    /// is on.
+    /// </summary>
+    private IHollowDataAccess DataAccessForNewApi()
+    {
+        if (!_objectLongevityConfig.EnableLongLivedObjectSupport)
+        {
+            return _stateEngine;
+        }
+
+        HollowProxyDataAccess dataAccess = new();
+        dataAccess.SetDataAccess(_stateEngine);
+
+        return dataAccess;
+    }
+
+    /// <summary>
+    /// Points the API at the state the delta just produced, preserving whatever the old API's records
+    /// could read.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// With longevity off this is almost nothing: the API already reads through the state engine, which
+    /// the delta has moved on, so a caller's references now read the new data. That is the ordinary
+    /// Hollow contract.
+    /// </para>
+    /// <para>
+    /// With it on, three things happen. A historical state is built holding the records this transition
+    /// removed; the <em>outgoing</em> proxy — the one every existing reference reads through — is
+    /// pointed at it, so those references keep their values; and a new API is built over a fresh proxy
+    /// onto the live state, for everything obtained from here on.
+    /// </para>
+    /// </remarks>
+    private void MoveApiOnToTheNewState(long previousVersion)
+    {
+        if (Api is null)
+        {
+            return;
+        }
+
+        if (!_objectLongevityConfig.EnableLongLivedObjectSupport)
+        {
+            if (!ReferenceEquals(Api.DataAccess, _stateEngine))
+            {
+                Api = _apiFactory.CreateApi(_stateEngine);
+            }
+
+            _priorHistoricalDataAccess = null;
+
+            return;
+        }
+
+        IHollowDataAccess previousDataAccess = Api.DataAccess;
+
+        HollowHistoricalStateDataAccess priorState =
+            new HollowHistoricalStateCreator().CreateBasedOnNewDelta(previousVersion, _stateEngine);
+
+        HollowProxyDataAccess newDataAccess = new();
+        newDataAccess.SetDataAccess(_stateEngine);
+
+        Api = _apiFactory.CreateApi(newDataAccess, Api);
+
+        if (previousDataAccess is HollowProxyDataAccess previousProxy)
+        {
+            previousProxy.SetDataAccess(priorState);
+        }
+
+        WireHistoricalStateChain(priorState);
+
+        _staleReferenceDetector?.NewApiHandle(Api);
+    }
+
+    /// <summary>
+    /// Links the previous historical state to this one.
+    /// </summary>
+    /// <remarks>
+    /// A historical state holds only the records its own transition removed, so a reference reading
+    /// through it may ask for a record it does not have — one that survived that transition and was
+    /// removed by a later one, or one that is still live. Answering means walking forward along the
+    /// chain to whichever state does have it, ending at the live read state.
+    /// </remarks>
+    private void WireHistoricalStateChain(HollowHistoricalStateDataAccess nextPriorState)
+    {
+        if (_priorHistoricalDataAccess is not null
+            && _priorHistoricalDataAccess.TryGetTarget(out HollowHistoricalStateDataAccess? dataAccess))
+        {
+            dataAccess.NextState = nextPriorState;
+        }
+
+        _priorHistoricalDataAccess = new WeakReference<HollowHistoricalStateDataAccess>(nextPriorState);
     }
 }
