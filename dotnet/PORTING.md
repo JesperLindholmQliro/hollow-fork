@@ -43,8 +43,8 @@ A dataset can also be read by a person rather than a program: `Hollow.Explorer` 
 application that already holds the dataset, or run it on a loopback port of its own. See
 [The explorer](#the-explorer).
 
-What is **not** here is object longevity and the combine/split/patch tools. The status section says
-exactly what is and is not ported.
+What is **not** here is object longevity and shared-memory mode. The status section says exactly what
+is and is not ported.
 
 ## Building and testing
 
@@ -1507,6 +1507,144 @@ by `("Id", "Studio.Country")`, so correcting a studio's country changes the *key
 references it, and the overview counts two removals and two additions rather than two modifications.
 That is what a primary key means, and it is worth seeing once.
 
+## Combining, splitting and patching
+
+`Hollow.Core.Tools.Combine`, `.Split` and `.Patch` are the ports of `tools.combine`, `tools.split` and
+`tools.patch` — the dataset-reshaping tools. They share one problem, and it is worth stating once
+because all of them are shaped by it.
+
+A record's ordinal is its identity *within one state and no other*. Two states produced independently
+number their records differently, so the moment records from one state are written into another, every
+reference in every copied record is wrong. Each of these tools therefore carries a table per type — an
+`int[]` from the input's ordinals to the output's, `-1` for "not copied yet" — behind an
+`IOrdinalRemapper`. The record copiers consult it for each reference they write, and asking about an
+ordinal nothing has copied yet *copies it*. That one line is what pulls a record's whole reference
+closure across without anything having to walk it: copying a film asks for its studio's ordinal, which
+copies the studio, which asks for its country's, and so on down.
+
+Java runs all three on a `SimultaneousExecutor`. This port copies on one thread throughout, as it does
+elsewhere — which removes a `ThreadLocal` of per-type copiers from the combiner and a lock from the
+copy path, and costs nothing correctness-wise because none of the shared state was ever partitioned by
+thread in the first place.
+
+`HollowObjectHashCodeFinder` is not ported (see [Not ported](#not-ported)), so
+`typesWithDefinedHashCodes` is always empty. Everything hanging off it is therefore dead here:
+`preserveHashPositions` is `false` at every call site in all three tools, and the combiner's
+hash-order-independent ordinal map — which existed so that two sets differing only in bucket order
+would be written once — is left out entirely. Where Java asks the question, the port has a `static`
+returning `false` with a comment saying why, rather than silently dropping the branch.
+
+### The combiner
+
+`HollowCombiner` copies one or more read states into a single write state. Without keys it is a plain
+copy-everything-and-rewrite-the-references pass, and the write state's own byte-level deduplication
+takes care of identical records arriving from two inputs.
+
+Primary keys are what make it interesting. Given a key, the same record arriving from two inputs is
+written **once** — from whichever input was passed first — and the second input's references are
+pointed at the copy that was kept. That last part is `HollowCombinerPrimaryKeyOrdinalRemapper`: having
+placed a record, it looks the same key up in every *other* input and pre-maps that input's ordinal to
+the same output ordinal, so a later reference resolves to the copy already written instead of copying
+a duplicate.
+
+Keys are applied in dependency order, a round of copying per group of keys that do not depend on each
+other, because deduplicating a type changes what the types referencing it look like. `C.Key` in a
+compound key on `B` means *the surviving* `C` only if `C` was deduplicated in an earlier round — which
+is exactly the difference between `ACompoundKeyReachingThroughAReferenceDeduplicatesOnTheWholeKey` and
+`ACompoundKeyAndACascadingOneAreAppliedInDependencyOrder` in the tests.
+
+`IHollowCombinerCopyDirector` decides which records are copied at all, with five implementations
+carried over: include/exclude by ordinal, include/exclude by primary key, and the default that copies
+everything. Note what "exclude" means: it stops a record being copied *directly*, but a record that
+something else copied still references is pulled across anyway. Excluding a record therefore
+**replaces** it with a later input's record of the same key rather than deleting it —
+`AnExcludedRecordIsReplacedByTheNextInputsRecordWithTheSameKey` and
+`AnExcludedRecordStillArrivesWhenAnotherInputHoldsIt` are the two halves of that.
+`ExcludeReferencedObjects` grows the exclusion to the whole closure when deletion is what was actually
+wanted.
+
+One bug fixed in that method: Java iterates the excluded-ordinals map while `addTransitiveMatches`
+adds to it. Here the state engines are materialised into a set first, with a comment saying why.
+
+### The splitter
+
+`HollowSplitter` is the combiner in reverse: one read state into several write states. A record copied
+into a shard pulls everything it references in behind it, renumbered into that shard's ordinal space,
+and a record several shards' roots reach is copied into **each** of them — a shard has to stand on its
+own. Each shard gets its own copier and its own remapper for that reason; the tables cannot be shared,
+because the same record has a different ordinal in each shard.
+
+`IHollowSplitterCopyDirector` names the top-level types and says which shard each of their records
+goes in. Everything else follows. `HollowSplitterOrdinalCopyDirector` divides by ordinal, which is even
+but not reproducible — an ordinal means nothing across two states, so the same record can land
+elsewhere next cycle. `HollowSplitterPrimaryKeyCopyDirector` divides by key, which is, and can also
+name types to replicate into every shard.
+
+Two departures from Java, both in the splitter:
+
+- **The key hash is taken unsigned.** Java computes `hashKey(...) % numShards` on a signed `int`, so
+  about half of all keys yield a negative number — which collides with the `-1` that means "put this
+  in every shard". Half the dataset was replicated instead of placed. The test keys on a string
+  rather than an int to show it: `HollowReadFieldUtils.IntHashCode(i) == i`, so a small id can never
+  go negative, whereas a string hashes through MurmurHash3 and plenty do.
+- **A top-level type the input does not have is refused.** Java logs a warning and carries on, which
+  produces shards quietly missing a type the caller asked to split by.
+
+### The patchers
+
+Two different things share the `patch` name.
+
+`HollowStateEngineRecordPatcher` (`Patch.Record`) replaces named records of one state with the same
+records from another. There is no in-place edit of a Hollow state, so this is a combine with a
+director that says which side each record comes from: everything *except* the matched closure from the
+base, and *only* the matches from the patch source. The two traversals on the base side are what make
+it a replacement rather than an addition — `AddTransitiveMatches` grows the matched set to everything
+those records reference, and `RemoveReferencedOutsideClosure` takes back out whatever something
+outside the set still references, because that is shared data rather than part of what is being
+replaced.
+
+Records are named by `TypeMatchSpec`, which takes *traversal* paths rather than a primary key, so a
+spec can say "every film whose cast includes this actor" as readily as "the film with this id". The
+step across a collection is the literal `element`, and a `string` property needs a trailing `value`
+because the mapper maps it as a reference to the `String` type — `"Cast.element.Name.value"` is the
+shape. A spec naming a type the state does not have matches nothing; Java reads its maximum ordinal
+before checking whether it is there at all, and throws a null reference.
+
+`HollowStateDeltaPatcher` (`Patch.Delta`) is unrelated, and the subtler of the two. A delta can only be
+written between two states whose ordinals line up, and two states produced independently do not: the
+same record may sit at different ordinals, and the same ordinal may hold different records. The patcher
+builds an **intermediate** state that lines up with both, so a consumer can be walked from one to the
+other in two transitions instead of a double snapshot.
+
+The trick is the ordinals nothing can share. A record that differs between the two states at the same
+ordinal is written at an ordinal past `max(from.MaxOrdinal, to.MaxOrdinal)` — somewhere neither state
+uses — so the first transition removes it from its old ordinal and adds it at the new one, which frees
+the old ordinal to take the later state's record on the second transition. Everything the two states
+agree on never moves.
+
+As with the record patcher, a type only one of the two states has is dropped rather than dereferenced;
+Java reads the later state's schema before checking whether it has the type.
+
+### A delta bug the patcher found
+
+Building a delta patcher test against two states with *different* schemas for the same type turned up
+a genuine bug in `HollowObjectTypeDataElements.ApplyDelta`, unrelated to the tools and present since
+the read path was ported.
+
+When a transition frees an ordinal — a record that became a ghost on the *previous* transition and is
+now going away entirely — the port was still copying that record's data forward into the new elements.
+That looks harmless, since the ordinal is free and nothing should read it. It is not. The producer
+stops accounting for such a record when it sizes the new state's fields, so its value can need more
+bits than the field now has, and `FixedLengthElementArray.SetElementValue` ORs into memory rather than
+masking. The excess bits ran straight into the *next* record's field — which read back as null,
+because the bits it spilled happened to fill that field to all-ones.
+
+The symptom was a live record losing a field, several ordinals away from anything the patch touched.
+Java skips these records (its `removalsReader`, threaded through `mergeOrdinal`), and the list, set and
+map applicators in this port already did; only the object one did not. It now reads
+`from.EncodedRemovals` the same way, treats a freed ordinal as an empty slot, and splits the bulk-copy
+run at one so both paths agree.
+
 ## Status
 
 ### Ported and tested
@@ -1566,6 +1704,9 @@ That is what a primary key means, and it is worth seeing once.
 | `hollow-diff-ui` (`diffview`, `diff.ui`) | `Hollow.Explorer.Diff`: the effigy, pairers, row tree and renderer, and four pages over a calculated diff; see [The diff UI](#the-diff-ui) |
 | `hollow-diff-ui` (`history.ui`) | `Hollow.Explorer.History`: the models, the record namer, the version-to-timestamp reading and six pages over a `HollowHistory`; see [The history UI](#the-history-ui) |
 | `tools.history` | `HollowHistory` and `HollowHistoricalState`, `HollowHistoricalStateCreator` and the four delta historical state creators, the historical data accesses, the key index and its ordinal mapper, `IntMap`, `RemovedOrdinalIterator`, `ObjectInternPool` and the two ordinal remappers |
+| `tools.combine` | `HollowCombiner` and its five copy directors, `HollowCombinerOrdinalRemapper` and `HollowCombinerPrimaryKeyOrdinalRemapper`; see [Combining, splitting and patching](#combining-splitting-and-patching) |
+| `tools.split` | `HollowSplitter`, `HollowSplitterShardCopier`, `HollowSplitterOrdinalRemapper` and the ordinal and primary-key copy directors; see [The splitter](#the-splitter) |
+| `tools.patch` | `HollowStateEngineRecordPatcher` with `TypeMatchSpec` and `HollowPatcherCombinerCopyDirector`, and `HollowStateDeltaPatcher` with `PartialOrdinalRemapper`; see [The patchers](#the-patchers) |
 | `hollow-ui-tools` | Only `HollowDiffUtil.formatBytes`, as `ByteSize.Format`; the rest is servlet plumbing ASP.NET Core replaces |
 
 Test coverage is carried over from the Java tests where they exist — `VarIntTest`, `HashCodesTest`,
@@ -1693,12 +1834,7 @@ sets of `TypeFilter` exist; the recursive rule DSL is still absent.
   (`api.consumer.metrics`) and `api.consumer.data`.
 - **The deprecated `api.client.HollowClient`**, superseded by `HollowConsumer`; only the parts of
   `api.client` that `HollowConsumer` uses are ported.
-- **Tools** (`tools`: combine, split, patch. `tools.diff` is ported — see
-  [The diff UI](#the-diff-ui) — as are `tools.history`, because the history UI needs it — see
-  [The history UI](#the-history-ui) — `tools.checksum`, because the producer's integrity check needs
-  it, `tools.traverse`, because the incremental producer does, and `tools.query`,
-  `tools.stringifier` and `tools.util`, because the explorer does),
-  **`api.codegen`'s three extras** (the POJO, "performance API" and test-data builder generators; the
+- **`api.codegen`'s three extras** (the POJO, "performance API" and test-data builder generators; the
   client API generator itself is ported — see [The code generator](#the-code-generator)),
   **sampling** (`api.sampling`, deliberately — see below), and every module outside
   `hollow` except the two UIs — `hollow-jsonadapter`, `hollow-protoadapter`, `hollow-zenoadapter`,
@@ -1737,8 +1873,11 @@ there is a feature on top rather than a gap in the loop: object longevity, share
 optional blob parts, and producer metrics.
 
 All three UIs are ported — the explorer, the diff and the history — and with the history went
-`tools.history` underneath it. Of the tools, what is left is `combine`, `split` and `patch`: a
-dataset-merging layer with no UI over it and nothing else depending on it.
+`tools.history` underneath it. `tools` is now ported in full: `combine`, `split` and `patch` went in
+last, and the delta patcher's tests turned up a real bug in the object delta applicator along the way
+— see [A delta bug the patcher found](#a-delta-bug-the-patcher-found).
+
+What remains is object longevity and shared-memory mode, in that order.
 
 **Whatever comes next, read [The explorer](#the-explorer), [The diff UI](#the-diff-ui) and
 [The history UI](#the-history-ui) first if it has a page in it.** The decisions there about Razor,
