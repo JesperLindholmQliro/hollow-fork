@@ -312,20 +312,35 @@ public sealed class HollowHistoryTypeKeyIndex
         }
     }
 
+    /// <summary>
+    /// Indexes every record the state holds now and every record it held before.
+    /// </summary>
+    /// <remarks>
+    /// <strong>A Java bug is not reproduced here.</strong> The mapper refuses to call two records equal
+    /// when the second was interned in the same cycle as the first, because a value written this cycle
+    /// is not readable yet and so cannot be compared. Java runs both the before and the now ordinals
+    /// through in one cycle, which means a record that changed in this very transition — present at one
+    /// ordinal before and another after — is seen twice and given two key ordinals for the one key. The
+    /// index then answers a search for that key twice, and the pages show the record twice. Closing the
+    /// cycle between the two passes makes the first pass readable, so the second pass recognises the key
+    /// and reuses its ordinal.
+    /// </remarks>
     private void IndexAllRecords(HollowObjectTypeReadState typeState)
     {
         PopulatedOrdinalListener listener = typeState.GetListener<PopulatedOrdinalListener>()!;
-        BitSet previousOrdinals = listener.PreviousOrdinals;
-        BitSet populatedOrdinals = listener.PopulatedOrdinals;
 
-        int maxLength = Math.Max(previousOrdinals.Length, populatedOrdinals.Length);
+        IndexKeys(typeState, listener.PreviousOrdinals);
 
-        for (int i = 0; i < maxLength; i++)
+        _ordinalMapping.PrepareForRead();
+
+        IndexKeys(typeState, listener.PopulatedOrdinals);
+    }
+
+    private void IndexKeys(HollowObjectTypeReadState typeState, BitSet ordinals)
+    {
+        foreach (int ordinal in ordinals.EnumerateSetBits())
         {
-            if (populatedOrdinals.Get(i) || previousOrdinals.Get(i))
-            {
-                IndexKey(typeState, i);
-            }
+            IndexKey(typeState, ordinal);
         }
     }
 
