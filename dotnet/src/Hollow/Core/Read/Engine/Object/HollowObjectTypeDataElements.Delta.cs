@@ -89,8 +89,16 @@ public sealed partial class HollowObjectTypeDataElements
     /// <paramref name="delta"/> where the delta adds it, and from <paramref name="from"/> otherwise.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Removed ordinals are left as null records rather than dropped: a record's ordinal is its
     /// identity, so the ordinal space keeps its shape and later cycles can reuse the hole.
+    /// </para>
+    /// <para>
+    /// A record whose ordinal this transition frees is not carried across at all. It became a ghost on
+    /// the previous transition, which is what <paramref name="from"/>'s own removals record, and the
+    /// producer stopped accounting for it when it sized the new state's fields — so its values may not
+    /// even fit there, and writing one would run over the neighbouring record's bits.
+    /// </para>
     /// </remarks>
     internal static HollowObjectTypeDataElements ApplyDelta(
         HollowObjectTypeDataElements from, HollowObjectTypeDataElements delta)
@@ -133,6 +141,11 @@ public sealed partial class HollowObjectTypeDataElements
             delta.EncodedAdditions ?? GapEncodedVariableLengthIntegerReader.EmptyReader;
         additions.Reset();
 
+        // The ghosts the previous transition left behind, which this one frees.
+        GapEncodedVariableLengthIntegerReader drops =
+            from.EncodedRemovals ?? GapEncodedVariableLengthIntegerReader.EmptyReader;
+        drops.Reset();
+
         int deltaOrdinal = 0;
 
         // A record the delta leaves alone keeps its ordinal, so when the layout is unchanged its bits
@@ -143,14 +156,16 @@ public sealed partial class HollowObjectTypeDataElements
         for (int ordinal = 0; ordinal <= target.MaxOrdinal; ordinal++)
         {
             bool addedByDelta = additions.NextElement() == ordinal;
+            bool droppedByDelta = drops.NextElement() == ordinal;
 
-            if (!addedByDelta && layoutUnchanged && ordinal <= from.MaxOrdinal)
+            if (!addedByDelta && !droppedByDelta && layoutUnchanged && ordinal <= from.MaxOrdinal)
             {
-                // The run ends where the delta's next addition begins, or where either state's ordinals
-                // run out, whichever comes first. An exhausted reader reports int.MaxValue, which the
-                // other two bounds then decide.
+                // The run ends where the delta's next addition or drop begins, or where either state's
+                // ordinals run out, whichever comes first. An exhausted reader reports int.MaxValue,
+                // which the other bounds then decide.
                 int runEnd = Math.Min(
-                    Math.Min(from.MaxOrdinal, target.MaxOrdinal), additions.NextElement() - 1);
+                    Math.Min(from.MaxOrdinal, target.MaxOrdinal),
+                    Math.Min(additions.NextElement(), drops.NextElement()) - 1);
 
                 CopyUnchangedRun(target, from, ordinal, runEnd, varLengthWritePointers);
 
@@ -167,16 +182,21 @@ public sealed partial class HollowObjectTypeDataElements
                 sourceOrdinal = deltaOrdinal++;
                 additions.Advance();
             }
-            else if (ordinal <= from.MaxOrdinal)
+            else if (ordinal <= from.MaxOrdinal && !droppedByDelta)
             {
                 source = from;
                 sourceOrdinal = ordinal;
             }
             else
             {
-                // Beyond the previous state's ordinals and not added: an empty slot.
+                // Beyond the previous state's ordinals, or freed by this transition: an empty slot.
                 source = null;
                 sourceOrdinal = -1;
+            }
+
+            if (droppedByDelta)
+            {
+                drops.Advance();
             }
 
             for (int fieldIndex = 0; fieldIndex < schema.FieldCount; fieldIndex++)

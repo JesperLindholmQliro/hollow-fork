@@ -377,6 +377,30 @@ public sealed class HollowWriteStateEngine : IHollowDataset
     }
 
     /// <summary>
+    /// Names the state a delta written from this one will say it applies to.
+    /// </summary>
+    /// <remarks>
+    /// Only for building a state that has to line up with one this engine did not produce, which is
+    /// what <see cref="Tools.Patch.Delta.HollowStateDeltaPatcher"/> does. A consumer checks the tag
+    /// before applying a delta, so it has to name the state actually being walked forward.
+    /// </remarks>
+    public void OverridePreviousStateRandomizedTag(long previousRandomizedTag) =>
+        PreviousRandomizedTag = previousRandomizedTag;
+
+    /// <summary>
+    /// Adds <paramref name="headerTags"/> to the tags this cycle writes, leaving the rest in place.
+    /// </summary>
+    public void AddHeaderTags(IReadOnlyDictionary<string, string> headerTags)
+    {
+        ArgumentNullException.ThrowIfNull(headerTags);
+
+        foreach ((string name, string value) in headerTags)
+        {
+            HeaderTags[name] = value;
+        }
+    }
+
+    /// <summary>
     /// Mints a tag distinguishable from <paramref name="previousRandomizedTag"/> in its high 32 bits,
     /// which is the part the object mapper stamps into a cached ordinal to tell cycles apart.
     /// </summary>
