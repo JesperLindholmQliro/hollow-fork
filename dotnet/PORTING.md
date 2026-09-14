@@ -43,8 +43,8 @@ A dataset can also be read by a person rather than a program: `Hollow.Explorer` 
 application that already holds the dataset, or run it on a loopback port of its own. See
 [The explorer](#the-explorer).
 
-What is **not** here is object longevity and the diff/history tools. The status section says exactly
-what is and is not ported.
+What is **not** here is object longevity and the combine/split/patch tools. The status section says
+exactly what is and is not ported.
 
 ## Building and testing
 
@@ -1414,12 +1414,98 @@ fixed set of four names, so nothing a caller writes reaches the manifest as text
 - The same pairer is missing an early return for an empty collection, which reports its elements
   twice. There is a test for that too.
 
-### What is not ported
+### The diff sample
 
-The history UI (`com.netflix.hollow.history.ui` and `com.netflix.hollow.tools.history`, about 5,000
-lines in the same Maven module) is not here. It reuses the effigy, pairer and row-tree layer that this
-increment ports, so it is the natural thing to do next, but it is a separate feature: a keyed history
-over many states rather than a comparison of two.
+`samples/Hollow.DiffUI.Sample` publishes two versions of a film catalogue, compares them, and mounts
+the diff at `/diff`. Its `README.md` covers the two things worth getting right — a key per type so
+records can be paired at all, and a match hint per element type so collections can be — and the one
+thing that is easy to get wrong, which is calculating the diff at startup rather than behind the first
+page load.
+
+## The history UI
+
+`Hollow.Explorer.History` is the port of `com.netflix.hollow.history.ui`, over
+`Hollow.Core.Tools.History` — the port of `com.netflix.hollow.tools.history`. Six pages over a
+`HollowHistory`: every version it holds, one version, one type in that version, one group of that
+type's changed records, one record laid out across the transition that changed it, and a search that
+finds every version a key ever moved in.
+
+It shares an assembly with the explorer and the diff for the same reason they share one with each
+other, and its record page *is* the diff's — the same effigy, pairer, row tree and renderer, over two
+states of one delta chain rather than two unrelated ones.
+
+### What a history actually holds
+
+A historical state holds only the records the *next* transition removed. Everything else is answered
+by walking forward along a chain of states to whichever later state still has it, ending at the live
+read state. A record is stored once, in the state that last had it, however many versions it survived
+— which is why a long run of versions fits in memory at all.
+
+`HollowHistory` is built on a read state as that state moves, and is told after each transition which
+version it moved to. `DeltaOccurred` is where the copying happens, because a moment later the space
+the removed records occupied is the read state's to reuse.
+
+### Key ordinals are what make it a history
+
+An ordinal means nothing across two states. The key index assigns every *distinct key ever seen* a
+permanent ordinal of its own, and each state's changes are recorded against those. That is what lets a
+page ask "what happened to this record" rather than only "what changed at this ordinal", and what lets
+a search for a key return the versions it moved in.
+
+### Four differences from Java worth naming
+
+- **The key index gave one key two ordinals.** The ordinal mapper refuses to call two records equal
+  when the second was interned in the same cycle as the first, because a value written this cycle is
+  not readable yet. Java's first update runs both the before and the now ordinals through in one
+  cycle, so a record that changed in that very transition is seen twice and given two key ordinals for
+  the one key — and the pages then show it twice. This port closes the cycle between the two passes,
+  so the second pass recognises the key. `HollowHistoryTests` covers it.
+- **The intern pool truncated non-ASCII keys.** `ObjectInternPool` writes a string's *character* count
+  and then its UTF-8 *bytes*, then reads those bytes from one past the length — which assumes the
+  length varint is a single byte. So any non-ASCII key read back short, and any key of 128 bytes or
+  more read back corrupt. The port writes the byte count and reads from wherever the varint actually
+  ended.
+- **Grouping by a field the key does not have.** Java resolves it to index -1 and then reads field -1.
+  The port drops it: it is a caller's mistake, not a crash.
+- **The expand links on the state-type page.** Java writes each group's link as
+  `javascript:expandGroup('…')`, interpolating a key field's *value* into executable text. The port
+  carries the name as a data attribute and reads it in a listener, so a value can be whatever it
+  likes.
+
+### The timestamp converter loses its statics
+
+Java's `VersionTimestampConverter` hardcodes a Pacific time zone constant and carries a process-wide
+mutable millisecond offset that anything can set. Neither survives: the zone is a constructor argument
+on `HollowHistoryUI`, defaulting to UTC, and there is no offset. A version that does not read as a
+timestamp is shown unchanged, as in Java.
+
+.NET has no table of time zone abbreviations, so where Java prints `PST` the port prints the offset —
+`UTC-07:00` — which says the same thing without a table.
+
+### The templates lose their repetition
+
+`history-state-type.vm` repeats the same forty lines three times over, once each for modified, added
+and removed; `history-query.vm` does the same per type. Both become a loop over the three, and the
+record grid and the subgroup list become partials shared by the type page, the expanded group and the
+search results — nine copies in Java, one here.
+
+Java's `history-state-enhanced-ui.vm` is a second, unfinished take on the state page, reachable only
+by editing `HistoryStatePage` and swapping which template it names. It is not ported.
+
+`HistoryStatePage.sendJson` and `HistoryStateTypePage.sendJson` are not ported either. They exist for a
+Netflix-internal front end, hand-build `Map<String, List<List<String>>>` shapes with positional
+meaning, and have no counterpart here.
+
+### The history sample
+
+`samples/Hollow.HistoryUI.Sample` publishes a film catalogue four times, follows it through the three
+deltas between them, and mounts the history at `/history`. Its `README.md` covers what a history holds
+and why `DeltaOccurred` has to be called after the delta rather than before.
+
+It is also arranged to make one modelling consequence visible rather than described: `Film` is keyed
+by `("Id", "Studio.Country")`, so correcting a studio's country changes the *key* of every film that
+references it, and the overview counts two removals and two additions rather than two modifications.
+That is what a primary key means, and it is worth seeing once.
 
 ## Status
 
@@ -1477,7 +1563,9 @@ over many states rather than a comparison of two.
 | `api.codegen` (source generator) | `Hollow.SourceGenerator`: `HollowApiSourceGenerator`, `SymbolModel` and the `HollowGeneratedApi` attribute — no Java counterpart, since Java has nothing that runs inside the compiler |
 | `tools.diff` | `HollowDiff`, `HollowTypeDiff`, `HollowDiffMatcher`, `HollowFieldDiff`, `HollowDiffNodeIdentifier`, the `diff.exact` equality mapping and its four mappers, and the `diff.count` counting tree |
 | `hollow-explorer-ui` | `Hollow.Explorer`: four pages over a dataset; see [The explorer](#the-explorer) |
-| `hollow-diff-ui` (`diffview`, `diff.ui`) | `Hollow.Explorer.Diff`: the effigy, pairers, row tree and renderer, and four pages over a calculated diff; see [The diff UI](#the-diff-ui). The history UI in the same module is not ported |
+| `hollow-diff-ui` (`diffview`, `diff.ui`) | `Hollow.Explorer.Diff`: the effigy, pairers, row tree and renderer, and four pages over a calculated diff; see [The diff UI](#the-diff-ui) |
+| `hollow-diff-ui` (`history.ui`) | `Hollow.Explorer.History`: the models, the record namer, the version-to-timestamp reading and six pages over a `HollowHistory`; see [The history UI](#the-history-ui) |
+| `tools.history` | `HollowHistory` and `HollowHistoricalState`, `HollowHistoricalStateCreator` and the four delta historical state creators, the historical data accesses, the key index and its ordinal mapper, `IntMap`, `RemovedOrdinalIterator`, `ObjectInternPool` and the two ordinal remappers |
 | `hollow-ui-tools` | Only `HollowDiffUtil.formatBytes`, as `ByteSize.Format`; the rest is servlet plumbing ASP.NET Core replaces |
 
 Test coverage is carried over from the Java tests where they exist — `VarIntTest`, `HashCodesTest`,
@@ -1605,8 +1693,9 @@ sets of `TypeFilter` exist; the recursive rule DSL is still absent.
   (`api.consumer.metrics`) and `api.consumer.data`.
 - **The deprecated `api.client.HollowClient`**, superseded by `HollowConsumer`; only the parts of
   `api.client` that `HollowConsumer` uses are ported.
-- **Tools** (`tools`: history, combine, split, patch. `tools.diff` is ported — see
-  [The diff UI](#the-diff-ui) — as is `tools.checksum`, because the producer's integrity check needs
+- **Tools** (`tools`: combine, split, patch. `tools.diff` is ported — see
+  [The diff UI](#the-diff-ui) — as are `tools.history`, because the history UI needs it — see
+  [The history UI](#the-history-ui) — `tools.checksum`, because the producer's integrity check needs
   it, `tools.traverse`, because the incremental producer does, and `tools.query`,
   `tools.stringifier` and `tools.util`, because the explorer does),
   **`api.codegen`'s three extras** (the POJO, "performance API" and test-data builder generators; the
@@ -1614,8 +1703,9 @@ sets of `TypeFilter` exist; the recursive rule DSL is still absent.
   **sampling** (`api.sampling`, deliberately — see below), and every module outside
   `hollow` except the two UIs — `hollow-jsonadapter`, `hollow-protoadapter`, `hollow-zenoadapter`,
   `hollow-test`, `hollow-fakedata`. `hollow-explorer-ui` is ported as `Hollow.Explorer`
-  ([The explorer](#the-explorer)), and `hollow-diff-ui`'s `diffview` and `diff.ui` packages as
-  `Hollow.Explorer.Diff` ([The diff UI](#the-diff-ui)); the history UI in that same module is not.
+  ([The explorer](#the-explorer)), `hollow-diff-ui`'s `diffview` and `diff.ui` packages as
+  `Hollow.Explorer.Diff` ([The diff UI](#the-diff-ui)), and its `history.ui` package as
+  `Hollow.Explorer.History` ([The history UI](#the-history-ui)).
   Of `hollow-ui-tools`, only `HollowDiffUtil`'s `formatBytes` and `HtmlEscapingWriter` had anything
   to port — the rest is Jetty and servlet plumbing that ASP.NET Core replaces outright.
 - **`GarbageCollectorAwareRecycler`**, which picks a pooling strategy by inspecting the JVM's
@@ -1643,18 +1733,14 @@ the chain, and a client generated at compile time reads it with types. What is l
 optimisation or a feature on top.
 
 Nothing is outstanding from the original list. What remains unported is listed above, and each item
-there is a feature on top rather than a gap in the loop: object longevity and the history it serves,
-shared-memory mode, optional blob parts, and producer metrics.
+there is a feature on top rather than a gap in the loop: object longevity, shared-memory mode,
+optional blob parts, and producer metrics.
 
-**The history UI is the natural next piece.** `com.netflix.hollow.history.ui` and
-`com.netflix.hollow.tools.history` are about 5,000 lines in the same Maven module as the diff UI, and
-they reuse the layer this port has already done: the effigy, the pairers, the row tree and the
-renderer are all shared, and `HistoryExactRecordMatcher` is the one piece of the exact-match layer
-that is missing. What is genuinely new is `tools.history` — a keyed history that follows a consumer
-across many states and remembers what each record looked like at each of them — and the pages over
-it.
+All three UIs are ported — the explorer, the diff and the history — and with the history went
+`tools.history` underneath it. Of the tools, what is left is `combine`, `split` and `patch`: a
+dataset-merging layer with no UI over it and nothing else depending on it.
 
-Whoever takes it on should read [The explorer](#the-explorer) and [The diff UI](#the-diff-ui) first.
-The decisions there about Razor, escaping, session state and where the rows are turned into values
-were made once and should not be made differently twice; a `HollowHistoryView` is the same row tree
-these already build, so it should reach the same renderer.
+**Whatever comes next, read [The explorer](#the-explorer), [The diff UI](#the-diff-ui) and
+[The history UI](#the-history-ui) first if it has a page in it.** The decisions there about Razor,
+escaping, session state and where rows are turned into values were made once and should not be made
+differently a fourth time.
