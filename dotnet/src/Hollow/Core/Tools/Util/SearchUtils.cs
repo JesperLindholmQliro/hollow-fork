@@ -263,7 +263,15 @@ public static class SearchUtils
     /// Java writes this as a lookbehind regex. Walking the string says the same thing without one, and
     /// keeps a trailing empty field the way Java's limited split does.
     /// </remarks>
-    private static string[] SplitOnUnescapedDelimiters(string value, int limit)
+    /// <summary>
+    /// Splits <paramref name="value"/> on delimiters that are not escaped, into at most
+    /// <paramref name="limit"/> parts.
+    /// </summary>
+    /// <remarks>
+    /// Public because the history's key index parses the same composite-key text the explorer's search
+    /// box does, and the two must agree on what an escaped delimiter is.
+    /// </remarks>
+    public static string[] SplitOnUnescapedDelimiters(string value, int limit)
     {
         List<string> parts = [];
         StringBuilder current = new();
