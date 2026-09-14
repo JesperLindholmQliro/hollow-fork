@@ -58,6 +58,30 @@ public sealed class DiffExactRecordMatcher(DiffEqualityMapping equalityMapping) 
 }
 
 /// <summary>
+/// Answers that two records are identical when they are the same ordinal of the same type.
+/// </summary>
+/// <remarks>
+/// This is what the history uses. Its two sides are two states of one delta chain, where an ordinal is
+/// stable across a transition: a record whose ordinal did not move did not change, because a change
+/// would have given it a new one. So identity of the type and equality of the ordinal is the whole
+/// answer, and no mapping has to be built to get it.
+/// </remarks>
+public sealed class HistoryExactRecordMatcher : IExactRecordMatcher
+{
+    /// <summary>The shared instance, since it holds nothing.</summary>
+    public static readonly HistoryExactRecordMatcher Instance = new();
+
+    private HistoryExactRecordMatcher()
+    {
+    }
+
+    /// <inheritdoc />
+    public bool IsExactMatch(
+        IHollowTypeDataAccess? fromType, int fromOrdinal, IHollowTypeDataAccess? toType, int toOrdinal) =>
+        fromType is not null && ReferenceEquals(fromType, toType) && fromOrdinal == toOrdinal;
+}
+
+/// <summary>
 /// Answers that nothing is an exact match, for a caller with no equality mapping to hand.
 /// </summary>
 /// <remarks>

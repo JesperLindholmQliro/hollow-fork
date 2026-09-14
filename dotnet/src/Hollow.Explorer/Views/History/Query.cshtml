@@ -1,0 +1,85 @@
+@*
+ *  Copyright 2016 Netflix, Inc.
+ *
+ *     Licensed under the Apache License, Version 2.0 (the "License");
+ *     you may not use this file except in compliance with the License.
+ *     You may obtain a copy of the License at
+ *
+ *         http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *     Unless required by applicable law or agreed to in writing, software
+ *     distributed under the License is distributed on an "AS IS" BASIS,
+ *     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *     See the License for the specific language governing permissions and
+ *     limitations under the License.
+*@
+@*
+    Java's history-query.vm, which likewise repeats itself three times per type. This is the page that
+    makes a history worth keeping: a key goes in, and every version that touched it comes back.
+*@
+@using System.Globalization
+@model HistoryQueryModel
+@{
+	Layout = "_HistoryLayout";
+}
+
+<b>Historical results for search query: "@Model.Query"</b>
+
+<table border="1">
+	<tr>
+		<th>Data Version</th>
+		<th>Changed Elements</th>
+	</tr>
+	@foreach (HistoryStateQueryMatches stateQueryMatches in Model.StateQueryMatchesList)
+	{
+		string version = stateQueryMatches.StateVersion.ToString(CultureInfo.InvariantCulture);
+
+		<tr>
+			<td>
+				<a href="@Model.BasePath/state?version=@version">
+					@stateQueryMatches.DateDisplayString @stateQueryMatches.StateVersion
+				</a>
+			</td>
+			<td>
+				<table width="100%">
+					@foreach (HistoryStateQueryMatches.TypeMatch typeMatch in stateQueryMatches.TypeMatches)
+					{
+						<tr><td colspan="2"><b><i>@typeMatch.Type</i></b></td></tr>
+
+						(string Label, IReadOnlyList<RecordDiff> Records)[] sections =
+						[
+							("Modified", typeMatch.ModifiedRecords),
+							("Added", typeMatch.AddedRecords),
+							("Removed", typeMatch.RemovedRecords),
+						];
+
+						foreach ((string label, IReadOnlyList<RecordDiff> records) in sections)
+						{
+							if (records.Count == 0)
+							{
+								continue;
+							}
+
+							<tr>
+								<td valign="top"><b>@label:</b></td>
+								<td>
+									<partial name="_RecordDiffs"
+									         model="new RecordDiffListModel(Model.BasePath, stateQueryMatches.StateVersion, typeMatch.Type, records)" />
+								</td>
+							</tr>
+						}
+					}
+				</table>
+			</td>
+		</tr>
+	}
+</table>
+
+@if (Model.StateQueryMatchesList.Count == 0)
+{
+	@*
+		Java draws an empty table here and leaves the reader to work out whether the key is unknown or
+		simply never changed. Saying so costs one line.
+	*@
+	<p>No version in the history changed a record matching that key.</p>
+}

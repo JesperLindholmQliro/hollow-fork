@@ -1,0 +1,63 @@
+@*
+ *  Copyright 2016 Netflix, Inc.
+ *
+ *     Licensed under the Apache License, Version 2.0 (the "License");
+ *     you may not use this file except in compliance with the License.
+ *     You may obtain a copy of the License at
+ *
+ *         http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *     Unless required by applicable law or agreed to in writing, software
+ *     distributed under the License is distributed on an "AS IS" BASIS,
+ *     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *     See the License for the specific language governing permissions and
+ *     limitations under the License.
+*@
+@*
+    Java's history-state.vm. Its history-state-enhanced-ui.vm — a second, unfinished take on this page,
+    reachable only by editing the page class and swapping which template it names — is not ported.
+*@
+@using System.Globalization
+@model HistoryStateModel
+@{
+	Layout = "_HistoryLayout";
+	string Version(long version) => version.ToString(CultureInfo.InvariantCulture);
+}
+
+<b>State: @Model.CurrentStateVersion</b>
+<p></p>
+
+@if (Model.PreviousStateVersion != HollowConstants.VersionNone)
+{
+	<a href="@Model.BasePath/state?version=@Version(Model.PreviousStateVersion)">&lt; prev version</a>
+}
+&nbsp;&nbsp;&nbsp;&nbsp;
+@if (Model.NextStateVersion != HollowConstants.VersionNone)
+{
+	<a href="@Model.BasePath/state?version=@Version(Model.NextStateVersion)">&gt; next version</a>
+}
+
+<table border="1">
+	@foreach (HistoryStateTypeChangeSummary summary in Model.TypeChanges)
+	{
+		<tr>
+			<td>
+				<a href="@Model.BasePath/statetype?version=@Version(summary.Version)&amp;type=@Uri.EscapeDataString(summary.TypeName)">
+					@summary.TypeName
+				</a>
+			</td>
+			<td>
+				<table width="100%">
+					<tr>
+						<td align="left">@summary.TotalChanges</td>
+						<td align="right">
+							(&#916;: @summary.Modifications, +: @summary.Additions, -: @summary.Removals)
+						</td>
+					</tr>
+				</table>
+			</td>
+		</tr>
+	}
+</table>
+
+<p></p>

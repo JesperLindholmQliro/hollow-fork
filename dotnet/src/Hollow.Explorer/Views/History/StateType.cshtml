@@ -1,0 +1,112 @@
+@*
+ *  Copyright 2016 Netflix, Inc.
+ *
+ *     Licensed under the Apache License, Version 2.0 (the "License");
+ *     you may not use this file except in compliance with the License.
+ *     You may obtain a copy of the License at
+ *
+ *         http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *     Unless required by applicable law or agreed to in writing, software
+ *     distributed under the License is distributed on an "AS IS" BASIS,
+ *     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *     See the License for the specific language governing permissions and
+ *     limitations under the License.
+*@
+@*
+    Java's history-state-type.vm, which repeats the same forty lines three times over — once for
+    modified, once for added, once for removed. Here that is a loop over the three.
+
+    Java writes each group's expand link as javascript:expandGroup('...'), interpolating the group's
+    name — which is a key field's value — straight into executable text. The links below carry the name
+    as data and a listener reads it, so a value can be whatever it likes.
+*@
+@using System.Globalization
+@model HistoryStateTypeModel
+@{
+	Layout = "_HistoryLayout";
+
+	HistoryStateTypeChanges typeChange = Model.TypeChange;
+	string version = typeChange.StateVersion.ToString(CultureInfo.InvariantCulture);
+
+	(string Label, RecordDiffTreeNode Node)[] sections =
+	[
+		("Modified", typeChange.ModifiedRecords),
+		("Added", typeChange.AddedRecords),
+		("Removed", typeChange.RemovedRecords),
+	];
+
+	string GroupByLink(string option) =>
+		Model.BasePath
+		+ "/statetype?version=" + version
+		+ "&amp;type=" + Uri.EscapeDataString(typeChange.TypeName)
+		+ "&amp;groupBy=" + Uri.EscapeDataString(
+			Model.GroupBy.Length == 0 ? option : Model.GroupBy + "," + option);
+}
+
+<script>
+var expandUrl = @Json.Serialize(
+	Model.BasePath
+	+ "/statetypeexpand?version=" + version
+	+ "&type=" + Uri.EscapeDataString(typeChange.TypeName)
+	+ "&groupBy=" + Uri.EscapeDataString(Model.GroupBy)
+	+ "&expandGroupId=");
+
+document.addEventListener("click", function(event) {
+	var link = event.target.closest("[data-expand-group]");
+	if (!link) return;
+
+	event.preventDefault();
+
+	var groupId = link.getAttribute("data-expand-group");
+	var target = document.getElementById(groupId);
+	if (!target) return;
+
+	// Already open: close it again, so a reader can put a group away.
+	if (target.innerHTML !== "") {
+		target.innerHTML = "";
+		return;
+	}
+
+	fetch(expandUrl + encodeURIComponent(groupId))
+		.then(function(response) { return response.text(); })
+		.then(function(html) { target.innerHTML = html; });
+});
+</script>
+
+Group By: &nbsp;
+@foreach (string option in Model.GroupByOptions)
+{
+	<a href="@Html.Raw(GroupByLink(option))">@option</a>
+	<text>&nbsp;</text>
+}
+
+<table border="1">
+	<tr><th colspan="2" align="left"><font size="+1"><b><i>@typeChange.TypeName</i></b></font></th></tr>
+
+	@foreach ((string label, RecordDiffTreeNode node) in sections)
+	{
+		if (node.IsEmpty)
+		{
+			continue;
+		}
+
+		<tr>
+			<td valign="top">
+				<b>@label:</b><br />
+				(@node.DiffCount)
+			</td>
+			<td>
+				@if (node.HasSubGroups)
+				{
+					<partial name="_RecordDiffGroups" model="new RecordDiffGroupsModel(node.SubGroups)" />
+				}
+				else
+				{
+					<partial name="_RecordDiffs"
+					         model="new RecordDiffListModel(Model.BasePath, typeChange.StateVersion, typeChange.TypeName, node.RecordDiffs)" />
+				}
+			</td>
+		</tr>
+	}
+</table>

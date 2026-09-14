@@ -1,0 +1,76 @@
+@*
+ *  Copyright 2016 Netflix, Inc.
+ *
+ *     Licensed under the Apache License, Version 2.0 (the "License");
+ *     you may not use this file except in compliance with the License.
+ *     You may obtain a copy of the License at
+ *
+ *         http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *     Unless required by applicable law or agreed to in writing, software
+ *     distributed under the License is distributed on an "AS IS" BASIS,
+ *     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *     See the License for the specific language governing permissions and
+ *     limitations under the License.
+*@
+@* Java's history-overview.vm. *@
+@using System.Globalization
+@model HistoryOverviewModel
+@{
+	Layout = "_HistoryLayout";
+}
+
+<style>
+	.grey-text-border { color: grey; border: 1px solid grey; }
+	.scrollable-column { width: 300px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; background-color: lightgrey; }
+	.scrollable-content { width: 300px; overflow-x: auto; background-color: lightgrey; }
+</style>
+
+<table border="1">
+	<tr>
+		<th>Data State</th>
+		<th>Top Level Changes</th>
+		@foreach (string overviewDisplayHeader in Model.OverviewDisplayHeaders)
+		{
+			<th>@overviewDisplayHeader</th>
+		}
+		<th class="scrollable-column grey-text-border">Resharding (dev only)</th>
+	</tr>
+
+	@foreach (HistoryOverviewRow overviewRow in Model.OverviewRows)
+	{
+		<tr>
+			<td>
+				<a href="@Model.BasePath/state?version=@overviewRow.Version.ToString(CultureInfo.InvariantCulture)">
+					@overviewRow.DateDisplayString @overviewRow.Version
+				</a>
+			</td>
+			<td>
+				<table width="100%">
+					<tr>
+						<td align="left">@overviewRow.TopLevelChanges.Total</td>
+						<td align="right">
+							(&#916;: @overviewRow.TopLevelChanges.ModifiedRecords,
+							+: @overviewRow.TopLevelChanges.AddedRecords,
+							-: @overviewRow.TopLevelChanges.RemovedRecords)
+						</td>
+					</tr>
+				</table>
+			</td>
+			@foreach (string? headerValue in overviewRow.OverviewDisplayHeaderValues)
+			{
+				<td>@headerValue</td>
+			}
+			@if (overviewRow.ReshardingInvocationHeader is { } resharding)
+			{
+				<td class="scrollable-column grey-text-border">
+					<div class="scrollable-content">@resharding</div>
+				</td>
+			}
+			else
+			{
+				<td></td>
+			}
+		</tr>
+	}
+</table>
