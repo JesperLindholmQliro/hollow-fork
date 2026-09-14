@@ -1,0 +1,60 @@
+@*
+ *  Copyright 2016 Netflix, Inc.
+ *
+ *     Licensed under the Apache License, Version 2.0 (the "License");
+ *     you may not use this file except in compliance with the License.
+ *     You may obtain a copy of the License at
+ *
+ *         http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *     Unless required by applicable law or agreed to in writing, software
+ *     distributed under the License is distributed on an "AS IS" BASIS,
+ *     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *     See the License for the specific language governing permissions and
+ *     limitations under the License.
+*@
+@* Java's diff-overview.vm. *@
+@model DiffOverviewModel
+@{
+	Layout = "_DiffLayout";
+	string path = Model.BasePath;
+}
+
+<table border="1" cellpadding="5">
+	<tr style="background-color:#6885B9">
+		<th colspan="6">Summary</th>
+		<th>Heap From: @Model.FromHeap</th>
+		<th>Heap To: @Model.ToHeap</th>
+		<th colspan="2">Heap Diff: <span class="@(Model.DiffHeapIncreased ? "heap_inc" : "heap_dec")"> @Model.DiffHeap </span></th>
+	</tr>
+	<tr style="background-color:#9EBFF9">
+		<th>Type</th>
+		<th><a href="@path/overview?sortBy=diffs">Diff Score</a></th>
+		<th><a href="@path/overview?sortBy=unmatchedFrom"># FROM - Unmatched</a></th>
+		<th><a href="@path/overview?sortBy=unmatchedTo"># TO - Unmatched</a></th>
+		<th><a href="@path/overview?sortBy=fromCount">FROM - Item Count</a></th>
+		<th><a href="@path/overview?sortBy=toCount">TO - Item Count</a></th>
+		<th><a href="@path/overview?sortBy=fromHeap">FROM - Heap Footprint</a></th>
+		<th><a href="@path/overview?sortBy=toHeap">TO - Heap Footprint</a></th>
+		<th><a href="@path/overview?sortBy=fromHole">FROM - Hole Footprint</a></th>
+		<th><a href="@path/overview?sortBy=toHole">TO - Hole Footprint</a></th>
+	</tr>
+
+	@foreach (DiffOverviewTypeEntry typeOverview in Model.TypeOverviewEntries)
+	{
+		<tr bgcolor="@typeOverview.BackgroundColor" align="right">
+			<td>
+				<a href="@path/typediff?type=@Uri.EscapeDataString(typeOverview.TypeName)">@typeOverview.TypeName</a>
+			</td>
+			<td>@typeOverview.TotalDiffScore</td>
+			<td>@typeOverview.UnmatchedInFrom</td>
+			<td>@typeOverview.UnmatchedInTo</td>
+			<td>@typeOverview.TotalInFrom</td>
+			<td>@typeOverview.TotalInTo</td>
+			<td>@typeOverview.HeapInFromFormatted</td>
+			<td>@typeOverview.HeapInToFormatted</td>
+			<td>@typeOverview.HoleInFromFormatted</td>
+			<td>@typeOverview.HoleInToFormatted</td>
+		</tr>
+	}
+</table>

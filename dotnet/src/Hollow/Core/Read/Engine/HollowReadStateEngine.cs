@@ -81,6 +81,15 @@ public sealed class HollowReadStateEngine : IHollowDataAccess
     public IReadOnlyList<HollowSchema> Schemas => [.. _typeStates.Values.Select(state => state.Schema)];
 
     /// <summary>
+    /// An approximation of the memory this dataset occupies, in bytes.
+    /// </summary>
+    /// <remarks>
+    /// Named <c>calcApproxDataSize</c> in Java; a property says the same thing, and the sum is cheap
+    /// because each type already knows its own footprint.
+    /// </remarks>
+    public long ApproxDataSize => _typeStates.Values.Sum(state => state.ApproxHeapFootprintInBytes);
+
+    /// <summary>
     /// Gets the read state of the named type, or <see langword="null"/> when this dataset has no such
     /// type.
     /// </summary>

@@ -16,9 +16,7 @@
  */
 
 using System.Collections.Concurrent;
-using System.Security.Cryptography;
 using Hollow.Explorer.Models;
-using Microsoft.AspNetCore.Http;
 
 namespace Hollow.Explorer;
 
@@ -45,88 +43,13 @@ public sealed class ExplorerSession
 
     /// <summary>Remembers which branches of <paramref name="type"/>'s schema are open.</summary>
     public void SetSchemaDisplay(string type, SchemaDisplay display) => _schemaDisplays[type] = display;
-
-    internal DateTimeOffset LastAccessed { get; set; }
 }
 
 /// <summary>
-/// The sessions currently in flight, found from the cookie naming one.
+/// The explorer's sessions, found from the cookie naming one.
 /// </summary>
-/// <remarks>
-/// <para>
-/// ASP.NET Core's own session state stores bytes, so using it would mean serialising a search result
-/// and a schema tree on every request and deserialising them on the next. Java keeps the objects
-/// themselves in the servlet session, and so does this — behind a cookie of its own so that a host
-/// embedding the explorer does not have to wire up session middleware to get a working page.
-/// </para>
-/// <para>
-/// This keeps a reader's state in the process serving them, which is what the explorer is for: one
-/// person looking at one dataset. Behind a load balancer without sticky sessions they would lose their
-/// place on whichever request landed elsewhere.
-/// </para>
-/// </remarks>
-public sealed class ExplorerSessionStore
+public sealed class ExplorerSessionStore : UISessionStore<ExplorerSession>
 {
-    private const string CookieName = "hollow-explorer-session";
-
-    /// <summary>How long a session survives without a request before it is dropped.</summary>
-    private static readonly TimeSpan IdleTimeout = TimeSpan.FromHours(1);
-
-    private readonly ConcurrentDictionary<string, ExplorerSession> _sessions = new(StringComparer.Ordinal);
-
-    private DateTimeOffset _lastSweep;
-
-    /// <summary>
-    /// The session <paramref name="context"/> belongs to, starting one if it does not have it yet.
-    /// </summary>
-    public ExplorerSession Get(HttpContext context)
-    {
-        ArgumentNullException.ThrowIfNull(context);
-
-        DateTimeOffset now = DateTimeOffset.UtcNow;
-        Sweep(now);
-
-        if (context.Request.Cookies.TryGetValue(CookieName, out string? id)
-            && id is not null
-            && _sessions.TryGetValue(id, out ExplorerSession? existing))
-        {
-            existing.LastAccessed = now;
-
-            return existing;
-        }
-
-        // A session id only has to be unguessable by whoever shares the browser's origin, which is what
-        // makes it worth generating the same way a token would be.
-        string newId = Convert.ToHexString(RandomNumberGenerator.GetBytes(16));
-        ExplorerSession session = new() { LastAccessed = now };
-
-        _sessions[newId] = session;
-
-        context.Response.Cookies.Append(
-            CookieName,
-            newId,
-            new CookieOptions { HttpOnly = true, SameSite = SameSiteMode.Lax, IsEssential = true });
-
-        return session;
-    }
-
-    private void Sweep(DateTimeOffset now)
-    {
-        // Sweeping on the way past costs nothing when there is nothing to drop, and saves the explorer
-        // from needing a timer of its own.
-        if (now - _lastSweep < IdleTimeout)
-        {
-            return;
-        }
-
-        _lastSweep = now;
-
-        foreach ((string id, ExplorerSession session) in _sessions)
-        {
-            if (now - session.LastAccessed > IdleTimeout)
-            {
-                _sessions.TryRemove(id, out _);
-            }
-        }
-    }
+    /// <inheritdoc />
+    protected override string CookieName => "hollow-explorer-session";
 }

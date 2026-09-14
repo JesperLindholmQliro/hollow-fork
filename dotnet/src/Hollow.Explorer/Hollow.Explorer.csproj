@@ -17,4 +17,12 @@
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 
+  <!--
+    The diff's stylesheet and margin images ride along in the assembly, so that an application
+    embedding the UI gets a working page without serving static files of its own.
+  -->
+  <ItemGroup>
+    <EmbeddedResource Include="Diff/Resources/*" />
+  </ItemGroup>
+
 </Project>

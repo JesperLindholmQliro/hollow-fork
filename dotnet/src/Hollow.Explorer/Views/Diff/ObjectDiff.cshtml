@@ -1,0 +1,177 @@
+@*
+ *  Copyright 2016 Netflix, Inc.
+ *
+ *     Licensed under the Apache License, Version 2.0 (the "License");
+ *     you may not use this file except in compliance with the License.
+ *     You may obtain a copy of the License at
+ *
+ *         http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *     Unless required by applicable law or agreed to in writing, software
+ *     distributed under the License is distributed on an "AS IS" BASIS,
+ *     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *     See the License for the specific language governing permissions and
+ *     limitations under the License.
+*@
+@*
+    Java's diff-object.vm, together with HollowDiffHtmlKickstarter — which built the rows below by
+    writing them pipe-delimited and then tokenising that string back apart to make the HTML. The rows
+    arrive here as values instead, so the delimited form is only ever produced for the script.
+
+    The script itself is kept as it was. It is what makes a record reaching thousands of others
+    readable: a row is opened one request at a time, and only the rows that became visible come back.
+*@
+@using System.Globalization
+@model DiffObjectModel
+@{
+	Layout = "_DiffLayout";
+	string path = Model.BasePath;
+	string recordQuery =
+		"type=" + Uri.EscapeDataString(Model.TypeName)
+		+ "&fromOrdinal=" + Model.FromOrdinal.ToString(CultureInfo.InvariantCulture)
+		+ "&toOrdinal=" + Model.ToOrdinal.ToString(CultureInfo.InvariantCulture);
+
+	string ImageFor(DiffViewRowAction action) => action switch
+	{
+		DiffViewRowAction.PartialUncollapse => "partial_expand.png",
+		DiffViewRowAction.Uncollapse => "expand.png",
+		DiffViewRowAction.Collapse => "collapse.png",
+		_ => "",
+	};
+}
+
+<link rel="stylesheet" type="text/css" href="@path/resource/diffview.css" />
+
+<script>
+var uncollapseUrl = @Json.Serialize(path + "/diffrowdata?" + recordQuery + "&row=");
+var collapseUrl = @Json.Serialize(path + "/collapsediffrow?" + recordQuery + "&row=");
+var resourcePath = @Json.Serialize(path + "/resource");
+
+function uncollapseRow(uncollapseRowId) {
+    var i = uncollapseRowId;
+    var table = document.getElementById("difftable");
+    var parentRow = document.getElementById("r" + i);
+    var rowIndex = parentRow.rowIndex + 1;
+
+    var rowData = httpGet(uncollapseUrl + encodeURIComponent(i));
+
+    var dataFields = rowData.split("|");
+
+    for(i=0;i<dataFields.length;i+=8) {
+        var newRow = table.insertRow(rowIndex++);
+        newRow.id = "r" + dataFields[i+0];
+
+        if(table.rows[rowIndex] && table.rows[rowIndex].id == newRow.id)
+            table.deleteRow(rowIndex);
+
+        if(dataFields[i+1] == "UNCOLLAPSE" || dataFields[i+1] == "PARTIAL_UNCOLLAPSE")
+            newRow.onclick=(function(rowId) { return function() { uncollapseRow(rowId, false) }; })(dataFields[i+0]);
+        else if(dataFields[i+1] == "COLLAPSE")
+            newRow.onclick=(function(rowId) { return function() { collapseRow(rowId) }; })(dataFields[i+0]);
+
+        var cell1 = newRow.insertCell(0);
+        cell1.className="margin";
+        cell1.innerHTML = marginImage(dataFields[i+1]);
+
+        var cell2 = newRow.insertCell(1);
+        cell2.className = "margin";
+        cell2.innerHTML = dataFields[i+2];
+
+        var cell3 = newRow.insertCell(2);
+        cell3.className = dataFields[i+3];
+        cell3.innerHTML = dataFields[i+4];
+
+        var cell4 = newRow.insertCell(3);
+        cell4.className="margin";
+        cell4.innerHTML = marginImage(dataFields[i+1]);
+
+        var cell5 = newRow.insertCell(4);
+        cell5.className = "margin";
+        cell5.innerHTML = dataFields[i+5];
+
+        var cell6 = newRow.insertCell(5);
+        cell6.className = dataFields[i+6];
+        cell6.innerHTML = dataFields[i+7];
+    }
+
+    parentRow.onclick=function() { collapseRow(uncollapseRowId) };
+    parentRow.cells[0].innerHTML=marginImage("COLLAPSE");
+    parentRow.cells[3].innerHTML=marginImage("COLLAPSE");
+
+    event = event || window.event;
+    event.stopPropagation ? event.stopPropagation() : (event.cancelBubble=true)
+}
+
+function collapseRow(i) {
+    var table = document.getElementById("difftable");
+    var collapseBranch = "r" + i;
+    var parentRow = document.getElementById("r" + i);
+    httpGet(collapseUrl + encodeURIComponent(i));
+
+    var deleteRowIndex = parentRow.rowIndex + 1;
+    var currentRow = table.rows[deleteRowIndex];
+
+    while(currentRow && currentRow.id.lastIndexOf(collapseBranch, 0) === 0) {
+        table.deleteRow(deleteRowIndex);
+        currentRow = table.rows[deleteRowIndex];
+    }
+
+    parentRow.onclick=function() { uncollapseRow(i, false) };
+    parentRow.cells[0].innerHTML=marginImage("UNCOLLAPSE");
+    parentRow.cells[3].innerHTML=marginImage("UNCOLLAPSE");
+}
+
+function marginImage(action) {
+    if(action == "PARTIAL_UNCOLLAPSE")
+        return "<img src=\"" + resourcePath + "/partial_expand.png\"/>";
+    if(action == "UNCOLLAPSE")
+        return "<img src=\"" + resourcePath + "/expand.png\"/>";
+    if(action == "COLLAPSE")
+        return "<img src=\"" + resourcePath + "/collapse.png\"/>";
+    return "";
+}
+
+function httpGet(theUrl) {
+    var xmlHttp = new XMLHttpRequest();
+    xmlHttp.open( "GET", theUrl, false );
+    xmlHttp.send( null );
+    return xmlHttp.responseText;
+}
+
+</script>
+
+<table class="diff" id="difftable">
+	<thead><tr><th></th><th></th><th class="texttitle">From</th><th></th><th></th><th class="texttitle">To</th></tr></thead>
+	<tbody>
+		<tr id="root">
+			<td class="margin"></td>
+			<td class="margin"></td>
+			<td class="equal">.&#x2515;&#x2501;&#x252F;&#x2501;&gt;(@Model.TypeName)</td>
+			<td class="margin"></td>
+			<td class="margin"></td>
+			<td class="equal">.&#x2515;&#x2501;&#x252F;&#x2501;&gt;(@Model.TypeName)</td>
+		</tr>
+		@foreach (DiffViewRowDisplay row in Model.Rows)
+		{
+			string image = ImageFor(row.Action);
+			@*
+				The cells' contents are already escaped — they are drawn with box-drawing entities, so
+				they have to reach the page as markup.
+			*@
+			<tr id="r@(row.RowPath)"
+				onclick="@(row.Action switch
+				{
+					DiffViewRowAction.Uncollapse or DiffViewRowAction.PartialUncollapse => $"uncollapseRow('{row.RowPath}')",
+					DiffViewRowAction.Collapse => $"collapseRow('{row.RowPath}')",
+					_ => null,
+				})">
+				<td class="margin">@if (image.Length > 0) { <img src="@path/resource/@image" /> }</td>
+				<td class="margin">@row.FromMarginIndex</td>
+				<td class="@row.FromCellClass">@Html.Raw(row.FromContent)</td>
+				<td class="margin">@if (image.Length > 0) { <img src="@path/resource/@image" /> }</td>
+				<td class="margin">@row.ToMarginIndex</td>
+				<td class="@row.ToCellClass">@Html.Raw(row.ToContent)</td>
+			</tr>
+		}
+	</tbody>
+</table>

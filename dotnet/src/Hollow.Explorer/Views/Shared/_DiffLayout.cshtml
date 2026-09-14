@@ -1,0 +1,94 @@
+@*
+ *  Copyright 2016 Netflix, Inc.
+ *
+ *     Licensed under the Apache License, Version 2.0 (the "License");
+ *     you may not use this file except in compliance with the License.
+ *     You may obtain a copy of the License at
+ *
+ *         http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *     Unless required by applicable law or agreed to in writing, software
+ *     distributed under the License is distributed on an "AS IS" BASIS,
+ *     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *     See the License for the specific language governing permissions and
+ *     limitations under the License.
+*@
+@*
+    Java's diff-header.vm and diff-footer.vm, which every page was merged between. A layout is the
+    same arrangement without the page having to name the two halves.
+*@
+@model DiffPageModel
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<title>Diff of @Model.FromBlobName and @Model.ToBlobName</title>
+	<style>
+		.header_prod { border-top: 1px solid #c00; border-bottom: 1px solid #c00; }
+		.header_test { border-top: 1px solid #009999; border-bottom: 1px solid #009999; }
+		.envTxt_prod { color: #c00; }
+		.envTxt_test { color: #009999; }
+		.heap_inc { padding-left: 5px; padding-right: 5px; background-color: #FFFFFF; color: #FF0000; }
+		.heap_dec { padding-left: 5px; padding-right: 5px; background-color: #FFFFFF; color: #008000; }
+	</style>
+</head>
+<body>
+@*
+	The banner is off unless the reader turned it on, because which environment a diff came from is
+	something only whoever deployed the UI knows.
+*@
+@if (Model.IsHeaderEnabled)
+{
+	<div id="header" class="header_@Model.Environment">
+		<table cellpadding="2" cellspacing="2" border="0">
+			<tr>
+				<th><a href="@(Model.BasePath.Length == 0 ? "/" : Model.BasePath)" style="font-size:x-large; text-decoration: none; color: black; padding-left:5px;">Diff Tool</a></th>
+				<td colspan="2" width="200px">&nbsp;</td>
+				<th>ENV:</th>
+				<td class="envTxt_@Model.Environment">@Model.Environment</td>
+			</tr>
+		</table>
+	</div>
+
+	<h3>Diff of @Model.FromBlobName and @Model.ToBlobName</h3>
+	<br />
+}
+
+@if (Model.Breadcrumbs.Count > 0)
+{
+	@foreach (DiffBreadcrumb breadcrumb in Model.Breadcrumbs)
+	{
+		<text>&gt;</text>
+		if (breadcrumb.Link is { } link)
+		{
+			<a href="@link">@breadcrumb.DisplayText</a>
+		}
+		else
+		{
+			@breadcrumb.DisplayText
+		}
+	}
+	<hr />
+}
+
+@RenderBody()
+
+<p></p>
+<hr />
+
+<h3>Blob Information:</h3>
+
+<table border="1" cellpadding="5">
+	<tr><th>#</th><th>Header Name</th><th>FROM_Blob</th><th>TO_Blob</th></tr>
+	@foreach (DiffHeaderEntry headerEntry in Model.HeaderEntries)
+	{
+		<tr bgcolor="@headerEntry.BackgroundColor">
+			<td align="right">@headerEntry.Index</td>
+			<td>@headerEntry.Key</td>
+			<td>@headerEntry.FromValueDisplay</td>
+			<td>@headerEntry.ToValueDisplay</td>
+		</tr>
+	}
+</table>
+
+</body>
+</html>
