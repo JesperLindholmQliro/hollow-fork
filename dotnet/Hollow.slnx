@@ -11,6 +11,9 @@
     <Project Path="samples/Hollow.HistoryUI.Sample/Hollow.HistoryUI.Sample.csproj" />
     <Project Path="samples/Hollow.FakeData/Hollow.FakeData.csproj" />
   </Folder>
+  <Folder Name="/benchmarks/">
+    <Project Path="benchmarks/Hollow.Benchmarks/Hollow.Benchmarks.csproj" />
+  </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Hollow.Tests/Hollow.Tests.csproj" />
   </Folder>

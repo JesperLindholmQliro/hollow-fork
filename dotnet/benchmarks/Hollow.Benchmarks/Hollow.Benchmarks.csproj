@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Hollow.Benchmarks</RootNamespace>
+
+    <!-- A benchmark explains itself in prose rather than in XML doc comments. -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+
+    <!-- Measuring a debug build measures the debug build. -->
+    <Optimize>true</Optimize>
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Hollow/Hollow.csproj" />
+  </ItemGroup>
+
+</Project>
