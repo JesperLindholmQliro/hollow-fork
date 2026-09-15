@@ -65,9 +65,7 @@ public sealed class HollowListDeltaHistoricalStateCreator : HollowDeltaHistorica
             _historicalDataElements.MemoryRecycler,
             _historicalDataElements.TotalNumberOfElements * _historicalDataElements.BitsPerElement);
 
-        RemovedOrdinals.Reset();
-
-        foreach (int ordinal in RemovedOrdinals.Enumerate())
+        foreach (int ordinal in RemovedOrdinals)
         {
             OrdinalMapping.Put(ordinal, NextOrdinal);
             CopyRecord(ordinal);
@@ -88,12 +86,10 @@ public sealed class HollowListDeltaHistoricalStateCreator : HollowDeltaHistorica
 
     private void PopulateStats()
     {
-        RemovedOrdinals.Reset();
-
         int removedEntryCount = 0;
         long totalElementCount = 0;
 
-        foreach (int ordinal in RemovedOrdinals.Enumerate())
+        foreach (int ordinal in RemovedOrdinals)
         {
             removedEntryCount++;
 

@@ -71,9 +71,7 @@ public sealed class HollowObjectDeltaHistoricalStateCreator : HollowDeltaHistori
             }
         }
 
-        RemovedOrdinals.Reset();
-
-        foreach (int ordinal in RemovedOrdinals.Enumerate())
+        foreach (int ordinal in RemovedOrdinals)
         {
             OrdinalMapping.Put(ordinal, NextOrdinal);
 
@@ -103,12 +101,10 @@ public sealed class HollowObjectDeltaHistoricalStateCreator : HollowDeltaHistori
 
     private void PopulateStats()
     {
-        RemovedOrdinals.Reset();
-
         int removedEntryCount = 0;
         long[] totalVarLengthSizes = new long[_schema.FieldCount];
 
-        foreach (int ordinal in RemovedOrdinals.Enumerate())
+        foreach (int ordinal in RemovedOrdinals)
         {
             removedEntryCount++;
 

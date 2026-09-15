@@ -66,9 +66,7 @@ public sealed class HollowMapDeltaHistoricalStateCreator : HollowDeltaHistorical
             _historicalDataElements.MemoryRecycler,
             _historicalDataElements.TotalNumberOfBuckets * _historicalDataElements.BitsPerMapEntry);
 
-        RemovedOrdinals.Reset();
-
-        foreach (int ordinal in RemovedOrdinals.Enumerate())
+        foreach (int ordinal in RemovedOrdinals)
         {
             OrdinalMapping.Put(ordinal, NextOrdinal);
             CopyRecord(ordinal);
@@ -89,13 +87,11 @@ public sealed class HollowMapDeltaHistoricalStateCreator : HollowDeltaHistorical
 
     private void PopulateStats()
     {
-        RemovedOrdinals.Reset();
-
         int removedEntryCount = 0;
         int maxSize = 0;
         long totalBucketCount = 0;
 
-        foreach (int ordinal in RemovedOrdinals.Enumerate())
+        foreach (int ordinal in RemovedOrdinals)
         {
             removedEntryCount++;
 

@@ -15,6 +15,8 @@
  *
  */
 
+using System.Collections;
+
 using Hollow.Core.Read.Engine;
 
 namespace Hollow.Core.Util;
@@ -29,25 +31,25 @@ namespace Hollow.Core.Util;
 /// materialising it.
 /// </para>
 /// <para>
-/// Named <c>RemovedOrdinalIterator</c> in Java, with a <c>next()</c> returning
-/// <see cref="HollowConstants.OrdinalNone"/> at the end. This keeps that shape — the history's
-/// callers are written around it — and adds <see cref="Enumerate"/> for everything else.
+/// Named <c>RemovedOrdinalIterator</c> in Java, where it is a cursor: a <c>next()</c> returning
+/// <see cref="HollowConstants.OrdinalNone"/> at the end, a <c>reset()</c> to walk it again, and a
+/// <c>countTotal()</c> that walks it and puts the cursor back. A sequence needs none of those —
+/// enumerating it a second time starts a second walk, and <see cref="Enumerable.Count{T}(IEnumerable{T})"/>
+/// counts it.
 /// </para>
 /// </remarks>
-public sealed class RemovedOrdinalIterator
+public sealed class RemovedOrdinals : IEnumerable<int>
 {
     private readonly BitSet _previousOrdinals;
     private readonly BitSet _populatedOrdinals;
     private readonly int _previousOrdinalsLength;
-
-    private int _ordinal = HollowConstants.OrdinalNone;
 
     /// <summary>Walks what <paramref name="listener"/> saw removed in the last transition.</summary>
     /// <param name="listener">Where the two bit sets come from.</param>
     /// <param name="flip">
     /// Swaps the two, so the walk yields what was <em>added</em> rather than removed.
     /// </param>
-    public RemovedOrdinalIterator(PopulatedOrdinalListener listener, bool flip = false)
+    public RemovedOrdinals(PopulatedOrdinalListener listener, bool flip = false)
         : this(
             (listener ?? throw new ArgumentNullException(nameof(listener))).PreviousOrdinals,
             listener.PopulatedOrdinals,
@@ -59,7 +61,7 @@ public sealed class RemovedOrdinalIterator
     /// Walks the ordinals set in <paramref name="previousOrdinals"/> and clear in
     /// <paramref name="populatedOrdinals"/>.
     /// </summary>
-    public RemovedOrdinalIterator(BitSet previousOrdinals, BitSet populatedOrdinals, bool flip = false)
+    public RemovedOrdinals(BitSet previousOrdinals, BitSet populatedOrdinals, bool flip = false)
     {
         ArgumentNullException.ThrowIfNull(previousOrdinals);
         ArgumentNullException.ThrowIfNull(populatedOrdinals);
@@ -67,62 +69,27 @@ public sealed class RemovedOrdinalIterator
         (_previousOrdinals, _populatedOrdinals) =
             flip ? (populatedOrdinals, previousOrdinals) : (previousOrdinals, populatedOrdinals);
 
+        // Java fixes the end of the walk when the cursor is made, not when it runs. Keep that: the
+        // two bit sets belong to a listener that the next transition will write to.
         _previousOrdinalsLength = _previousOrdinals.Length;
     }
 
-    /// <summary>
-    /// The next removed ordinal, or <see cref="HollowConstants.OrdinalNone"/> once there are none
-    /// left.
-    /// </summary>
-    public int Next()
+    /// <inheritdoc />
+    public IEnumerator<int> GetEnumerator()
     {
-        while (_ordinal < _previousOrdinalsLength)
-        {
-            _ordinal = _populatedOrdinals.NextClearBit(_ordinal + 1);
+        int ordinal = HollowConstants.OrdinalNone;
 
-            if (_previousOrdinals.Get(_ordinal))
+        while (ordinal < _previousOrdinalsLength)
+        {
+            ordinal = _populatedOrdinals.NextClearBit(ordinal + 1);
+
+            if (_previousOrdinals.Get(ordinal))
             {
-                return _ordinal;
+                yield return ordinal;
             }
         }
-
-        return HollowConstants.OrdinalNone;
     }
 
-    /// <summary>Starts the walk again from the beginning.</summary>
-    public void Reset() => _ordinal = HollowConstants.OrdinalNone;
-
-    /// <summary>
-    /// How many ordinals the walk would yield, leaving the position where it found it.
-    /// </summary>
-    public int CountTotal()
-    {
-        int bookmark = _ordinal;
-
-        Reset();
-
-        int count = 0;
-
-        while (Next() != HollowConstants.OrdinalNone)
-        {
-            count++;
-        }
-
-        _ordinal = bookmark;
-
-        return count;
-    }
-
-    /// <summary>
-    /// The removed ordinals as a sequence, for the callers that would rather write a
-    /// <c>foreach</c> than a sentinel loop.
-    /// </summary>
-    /// <remarks>Starts from wherever the walk currently is, and leaves it at the end.</remarks>
-    public IEnumerable<int> Enumerate()
-    {
-        for (int ordinal = Next(); ordinal != HollowConstants.OrdinalNone; ordinal = Next())
-        {
-            yield return ordinal;
-        }
-    }
+    /// <inheritdoc />
+    IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 }

@@ -39,6 +39,8 @@ namespace Hollow.Core.Read.Engine;
 /// </remarks>
 public abstract class HollowDeltaHistoricalStateCreator
 {
+    private IEnumerable<int>? _removedOrdinals;
+
     /// <summary>
     /// Prepares to lift what the last transition removed from <paramref name="typeState"/>.
     /// </summary>
@@ -61,7 +63,7 @@ public abstract class HollowDeltaHistoricalStateCreator
                 + "removed cannot be recovered.",
                 nameof(typeState));
 
-        Iterator = new RemovedOrdinalIterator(listener, reverse);
+        _removedOrdinals = new RemovedOrdinals(listener, reverse);
     }
 
     /// <summary>
@@ -70,18 +72,19 @@ public abstract class HollowDeltaHistoricalStateCreator
     /// <remarks>Empty until <see cref="PopulateHistory"/> has run.</remarks>
     public IntMap OrdinalMapping { get; protected set; } = new(0);
 
-    /// <summary>The removed ordinals, in the order they are copied.</summary>
-    /// <remarks>Null once <see cref="DereferenceTypeState"/> has run.</remarks>
-    protected RemovedOrdinalIterator? Iterator { get; private set; }
-
     /// <summary>The ordinal the next copied record will be given.</summary>
     protected int NextOrdinal { get; set; }
 
     /// <summary>
-    /// The iterator, or a failure saying that the type state has already been let go.
+    /// The removed ordinals, in the order they are copied, or a failure saying that the type state
+    /// has already been let go.
     /// </summary>
-    protected RemovedOrdinalIterator RemovedOrdinals =>
-        Iterator ?? throw new InvalidOperationException(
+    /// <remarks>
+    /// Each <c>foreach</c> over this walks the removals from the start, so the passes a creator makes
+    /// over them are independent of one another.
+    /// </remarks>
+    protected IEnumerable<int> RemovedOrdinals =>
+        _removedOrdinals ?? throw new InvalidOperationException(
             $"{nameof(DereferenceTypeState)} has already run, so there is nothing left to read.");
 
     /// <summary>
@@ -93,7 +96,7 @@ public abstract class HollowDeltaHistoricalStateCreator
     /// Drops the references into the live type state, so that it can be collected once every
     /// historical state has been built.
     /// </summary>
-    public virtual void DereferenceTypeState() => Iterator = null;
+    public virtual void DereferenceTypeState() => _removedOrdinals = null;
 
     /// <summary>
     /// Wraps the copied records in a read state of their own, belonging to <paramref name="into"/>.

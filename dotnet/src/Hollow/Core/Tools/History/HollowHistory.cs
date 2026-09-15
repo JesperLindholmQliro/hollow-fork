@@ -435,17 +435,17 @@ public sealed class HollowHistory
 
             PopulatedOrdinalListener listener = typeState.GetListener<PopulatedOrdinalListener>()!;
 
-            RemovedOrdinalIterator removals = new(listener, flip: reverse);
-            RemovedOrdinalIterator additions = new(listener, flip: !reverse);
+            RemovedOrdinals removals = new(listener, flip: reverse);
+            RemovedOrdinals additions = new(listener, flip: !reverse);
 
-            typeMapping.Prepare(additions.CountTotal(), removals.CountTotal());
+            typeMapping.Prepare(additions.Count(), removals.Count());
 
-            foreach (int ordinal in removals.Enumerate())
+            foreach (int ordinal in removals)
             {
                 typeMapping.Removed(typeState, ordinal);
             }
 
-            foreach (int ordinal in additions.Enumerate())
+            foreach (int ordinal in additions)
             {
                 typeMapping.Added(typeState, ordinal);
             }

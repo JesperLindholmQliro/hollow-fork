@@ -304,9 +304,9 @@ public sealed class HollowHistoryTypeKeyIndex
         PopulatedOrdinalListener listener = typeState.GetListener<PopulatedOrdinalListener>()!;
 
         // Flipped: what is populated now and was not before is what arrived.
-        RemovedOrdinalIterator iterator = new(listener.PopulatedOrdinals, listener.PreviousOrdinals);
+        RemovedOrdinals arrivals = new(listener.PopulatedOrdinals, listener.PreviousOrdinals);
 
-        foreach (int ordinal in iterator.Enumerate())
+        foreach (int ordinal in arrivals)
         {
             IndexKey(typeState, ordinal);
         }
