@@ -411,6 +411,52 @@ new HollowConsumerBuilder()
 The API is rebuilt on each snapshot and kept across deltas, since the type APIs read through the state
 engine itself and anything caching underneath is its own delta listener.
 
+## What a transition changed
+
+A consumer that follows a delta chain usually wants more than the new data: it wants to know what
+moved. `HollowDataAccessor<T>` answers that as records —
+
+```csharp
+MovieDataAccessor movies = new(consumer);
+
+foreach (Movie arrived in movies.AddedRecords) { ... }
+foreach (Movie gone in movies.RemovedRecords) { ... }
+
+foreach (UpdatedRecord<Movie> change in movies.UpdatedRecords)
+{
+    Console.WriteLine($"{change.Before.Title} is now {change.After.Title}");
+}
+```
+
+— and the code generator emits one of these per type that declares a primary key, so the usual case is
+to construct it rather than to write it. Turn it off with `GenerateDataAccessors = false`.
+
+Java calls the base class `AbstractHollowDataAccessor`; .NET does not spell the abstractness into a
+name. Four things differ beyond that.
+
+**The matching is not in the base class.** Telling a replacement from an addition and a removal is
+`RecordChangeSet`'s work, which this port already had and which stands on its own. Java does it inside
+`AbstractHollowDataAccessor`, so a caller who only wants the counts — a validator, say — has to
+materialise a record per change to get them. Here the accessor is a thin typed view over the change
+set, and the change set is usable without it.
+
+**A record is read when it is asked for.** Nothing is materialised until something enumerates, so a
+transition of a million records costs a bit set. Java's `HollowRecordCollection`, which exists only to
+do this, has no counterpart here: the collection is private to the accessor.
+
+**An accessor is emitted only for a keyed type.** Java emits one for every object type, including the
+ones with no primary key — where it would throw the moment it was asked anything, because there is no
+way to pair a removal with an addition.
+
+**There are seven scalar accessors, not six.** `StringDataAccessor`, `IntegerDataAccessor` and the
+rest read the shared types every dataset has; `DecimalDataAccessor` reads this port's own. They
+collapse the way the scalar type APIs already did — one generic base, and the named classes are a type
+name and one read.
+
+One thing to know about `RemovedRecords`: the ordinals in it are no longer populated, and reading one
+works because the storage behind it has not been reused yet. Read them before the next transition, or
+hold the records through it with [object longevity](#object-longevity).
+
 ## The code generator
 
 `Hollow.Api.Codegen` turns a data model into the typed client the layer above was built for. Point it
@@ -2030,6 +2076,9 @@ which is released when nothing refers to it any more.
 | `core.index.key` | `PrimaryKey`, including its dataset-resolution helpers, and `HollowPrimaryKeyValueDeriver` |
 | `core` | `HollowConstants`, `IHollowDataset`, `HollowHeaderTags` (the header tags `HollowStateEngine` declares) |
 | `core.schema` (text) | `HollowSchemaParser`, which reads schemas back from the form `ToString` writes — see [Schemas as text](#schemas-as-text) |
+| `api.consumer.data` (part) | `HollowDataAccessor<T>`, over `RecordChangeSet` — see [What a transition changed](#what-a-transition-changed). Java's `AbstractHollowOrdinalIterable` and `GenericHollowRecordDataAccessor` are not ported |
+| `core.type.accessor` | The seven scalar data accessors, over one generic base |
+| `api.codegen.api` (part) | The data accessor generator; Java's type-API and factory generators are covered by this port's own emitters |
 | `core.util` | `BitSet` and `IntList` (port-specific stand-ins for `java.util.BitSet` and Hollow's `IntList`), `InvariantFormatting`, `HollowWriteStateCreator` |
 | `tools.checksum` | `HollowChecksum` and `ApplyToChecksum` on the four read states, which the producer's integrity check compares |
 | `core.write` | The write records (object, list, set, map), `FieldStatistics`, `HollowTypeWriteState` and its four subclasses including the four-way partitioned ordinal map, `HollowWriteStateEngine`, `HollowBlobHeaderWriter`, `HollowBlobWriter`, `HollowBlobOutput` |
