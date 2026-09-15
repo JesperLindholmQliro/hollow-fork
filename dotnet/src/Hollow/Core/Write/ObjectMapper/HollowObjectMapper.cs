@@ -42,6 +42,7 @@ public sealed class HollowObjectMapper
 {
     private readonly HollowWriteStateEngine _stateEngine;
     private readonly ConcurrentDictionary<MapperKey, HollowTypeMapper> _typeMappers = new();
+    private readonly ConcurrentDictionary<string, HollowSchema> _schemasByTypeName = new(StringComparer.Ordinal);
 
     /// <summary>
     /// Initialises a mapper writing into <paramref name="stateEngine"/>.
@@ -124,9 +125,18 @@ public sealed class HollowObjectMapper
     /// means none was declared, in which case <see cref="UseDefaultHashKeys"/> decides whether one is
     /// derived; an empty array declares that the element or key ordinal is hashed.
     /// </param>
-    internal HollowTypeMapper GetTypeMapper(Type type, string? typeName, string[]? hashKeyFieldPaths)
+    /// <param name="collectionTypeNames">
+    /// The type names the member this collection was reached through declares for its elements, or its
+    /// keys and values. Empty means each is derived from the CLR type as usual.
+    /// </param>
+    internal HollowTypeMapper GetTypeMapper(
+        Type type,
+        string? typeName,
+        string[]? hashKeyFieldPaths,
+        CollectionTypeNames collectionTypeNames = default)
     {
-        MapperKey key = new(type, typeName, MapperKey.HashKeyToken(hashKeyFieldPaths));
+        MapperKey key = new(
+            type, typeName, MapperKey.HashKeyToken(hashKeyFieldPaths), collectionTypeNames);
 
         if (_typeMappers.TryGetValue(key, out HollowTypeMapper? existing))
         {
@@ -142,10 +152,38 @@ public sealed class HollowObjectMapper
         // at. A delta is applied type by type in that order, so a listener on the referencing type can
         // follow a reference and find the new record rather than the one it is replacing. Java gets the
         // same order by building its sub-mappers inside the mapper's constructor.
+        RefuseADisagreementAboutWhatATypeNameMeans(mapper);
+
         mapper.RegisterReferencedTypes(this);
         mapper.EnsureRegistered(_stateEngine);
 
         return mapper;
+    }
+
+    /// <summary>
+    /// Refuses a second mapper that claims a type name a different schema already answers to.
+    /// </summary>
+    /// <remarks>
+    /// Two members can reach the same Hollow type name by different routes, and
+    /// <see cref="HollowCollectionTypeNameAttribute"/> is the easy way to do it: naming a list's
+    /// element type without also renaming the list leaves two <c>ListOfInteger</c> schemas over
+    /// different element types. Java keys its mappers by type name alone, so the second member
+    /// silently gets the first member's mapper and its annotation does nothing. Saying so is more
+    /// use than a dataset that quietly is not what its model says.
+    /// </remarks>
+    private void RefuseADisagreementAboutWhatATypeNameMeans(HollowTypeMapper mapper)
+    {
+        HollowSchema first = _schemasByTypeName.GetOrAdd(mapper.TypeName, mapper.Schema);
+
+        if (!ReferenceEquals(first, mapper.Schema) && !first.Equals(mapper.Schema))
+        {
+            throw new HollowMappingException(
+                $"Hollow type {mapper.TypeName} is already declared as `{first}`, and something is now "
+                + $"declaring it as `{mapper.Schema}`. Two declarations of one type name have to agree; "
+                + $"{nameof(HollowTypeNameAttribute)} renames a type, and "
+                + $"{nameof(HollowCollectionTypeNameAttribute)} or {nameof(HollowMapTypeNameAttribute)} "
+                + "renames what a collection holds.");
+        }
     }
 
     /// <summary>
@@ -201,6 +239,18 @@ public sealed class HollowObjectMapper
             : null;
     }
 
+    /// <summary>Whether a CLR type maps to a Hollow map type.</summary>
+    internal static bool MapsToMapType(Type type) => TryGetDictionaryTypes(type, out _, out _);
+
+    /// <summary>Whether a CLR type maps to a Hollow list or set type.</summary>
+    /// <remarks>
+    /// A dictionary is excluded first, in the order the mapper asks in: a dictionary that also
+    /// implements <c>IList&lt;T&gt;</c> is a map, not a list.
+    /// </remarks>
+    internal static bool MapsToListOrSetType(Type type) =>
+        !MapsToMapType(type)
+        && (TryGetSetElementType(type, out _) || TryGetListElementType(type, out _));
+
     /// <summary>
     /// Whether a CLR type maps to a Hollow object type rather than to a list, set or map.
     /// </summary>
@@ -215,17 +265,20 @@ public sealed class HollowObjectMapper
 
         if (TryGetDictionaryTypes(type, out Type? keyType, out Type? valueType))
         {
-            return new HollowMapTypeMapper(this, type, keyType!, valueType!, key.TypeName, hashKeyFieldPaths);
+            return new HollowMapTypeMapper(
+                this, type, keyType!, valueType!, key.TypeName, hashKeyFieldPaths, key.CollectionTypeNames);
         }
 
         if (TryGetSetElementType(type, out Type? setElementType))
         {
-            return new HollowSetTypeMapper(this, type, setElementType!, key.TypeName, hashKeyFieldPaths);
+            return new HollowSetTypeMapper(
+                this, type, setElementType!, key.TypeName, hashKeyFieldPaths, key.CollectionTypeNames);
         }
 
         if (TryGetListElementType(type, out Type? listElementType))
         {
-            return new HollowListTypeMapper(this, type, listElementType!, key.TypeName);
+            return new HollowListTypeMapper(
+                this, type, listElementType!, key.TypeName, key.CollectionTypeNames);
         }
 
         return new HollowObjectTypeMapper(this, type, key.TypeName);
@@ -404,7 +457,8 @@ public sealed class HollowObjectMapper
     /// through members declaring different keys is two different Hollow types' worth of layout — which
     /// <see cref="HollowTypeMapper.EnsureRegistered"/> then rejects, since both want the same name.
     /// </summary>
-    private readonly record struct MapperKey(Type Type, string? TypeName, string? HashKey)
+    private readonly record struct MapperKey(
+        Type Type, string? TypeName, string? HashKey, CollectionTypeNames CollectionTypeNames)
     {
         /// <summary>
         /// Collapses a hash key into a comparable token. Null (none declared) and empty (declared as
@@ -519,6 +573,7 @@ internal sealed class MappedMember
         IsInlined = member.GetCustomAttribute<HollowInlineAttribute>() is not null;
         TypeNameOverride = member.GetCustomAttribute<HollowTypeNameAttribute>()?.Name;
         HashKeyFieldPaths = member.GetCustomAttribute<HollowHashKeyAttribute>()?.Fields;
+        CollectionTypeNames = CollectionTypeNames.ForMember(member, memberType);
     }
 
     internal string Name { get; }
@@ -534,6 +589,12 @@ internal sealed class MappedMember
     /// a declaration that the element or key ordinal should be hashed.
     /// </summary>
     internal string[]? HashKeyFieldPaths { get; }
+
+    /// <summary>
+    /// The type names this member declares for what its collection holds, if it is a collection and
+    /// declares any.
+    /// </summary>
+    internal CollectionTypeNames CollectionTypeNames { get; }
 
     internal object? GetValue(object instance) => _getValue(instance);
 
@@ -576,4 +637,73 @@ internal sealed class MappedMember
 
         return members;
     }
+}
+
+/// <summary>
+/// The Hollow type names a member declares for what its collection holds.
+/// </summary>
+/// <remarks>
+/// Java passes these through <c>getTypeMapper</c> as two loose strings, <c>elementOrKeyTypeName</c>
+/// and <c>valueTypeName</c>. One value carries them here, so that they can also be part of the key a
+/// mapper is cached under: two members declaring different element types for the same CLR collection
+/// need two mappers, not one.
+/// </remarks>
+internal readonly record struct CollectionTypeNames(string? ElementOrKey, string? Value)
+{
+    /// <summary>Nothing declared, which is the usual case.</summary>
+    internal static CollectionTypeNames None => default;
+
+    /// <summary>
+    /// What <paramref name="member"/> declares, after checking that it makes sense on a member of
+    /// <paramref name="memberType"/>.
+    /// </summary>
+    /// <exception cref="HollowMappingException">
+    /// Both attributes are applied, or one is applied to a member that holds no such collection.
+    /// </exception>
+    internal static CollectionTypeNames ForMember(MemberInfo member, Type memberType)
+    {
+        HollowCollectionTypeNameAttribute? collection =
+            member.GetCustomAttribute<HollowCollectionTypeNameAttribute>();
+        HollowMapTypeNameAttribute? map = member.GetCustomAttribute<HollowMapTypeNameAttribute>();
+
+        if (collection is null && map is null)
+        {
+            return None;
+        }
+
+        if (collection is not null && map is not null)
+        {
+            throw new HollowMappingException(
+                $"Member {member.DeclaringType?.Name}.{member.Name} has both "
+                + $"{nameof(HollowCollectionTypeNameAttribute)} and {nameof(HollowMapTypeNameAttribute)}; "
+                + "only one of them applies to any one member.");
+        }
+
+        if (collection is not null)
+        {
+            if (!HollowObjectMapper.MapsToListOrSetType(memberType))
+            {
+                throw new HollowMappingException(
+                    $"{nameof(HollowCollectionTypeNameAttribute)} is on member "
+                    + $"{member.DeclaringType?.Name}.{member.Name}, which is a {memberType.Name} rather "
+                    + "than a list or a set. It names what a list or a set holds.");
+            }
+
+            return new CollectionTypeNames(NullIfEmpty(collection.ElementTypeName), null);
+        }
+
+        if (!HollowObjectMapper.MapsToMapType(memberType))
+        {
+            throw new HollowMappingException(
+                $"{nameof(HollowMapTypeNameAttribute)} is on member "
+                + $"{member.DeclaringType?.Name}.{member.Name}, which is a {memberType.Name} rather than "
+                + "a map. It names what a map holds.");
+        }
+
+        return new CollectionTypeNames(NullIfEmpty(map!.KeyTypeName), NullIfEmpty(map.ValueTypeName));
+    }
+
+    // Java spells "no name given" as the empty string, because an annotation element cannot default to
+    // null. Nothing stops a caller writing one here either, and it means the same thing.
+    private static string? NullIfEmpty(string? name) => string.IsNullOrEmpty(name) ? null : name;
 }

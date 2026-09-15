@@ -58,6 +58,55 @@ public sealed class HollowPrimaryKeyAttribute(params string[] fields) : Attribut
 }
 
 /// <summary>
+/// Names the Hollow type the elements of a list or set member are stored as.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Java's <c>@HollowCollectionTypeName</c>, whose single element is <c>elementTypeName</c>; here it is
+/// the attribute's one constructor argument, since there is nothing else to say.
+/// </para>
+/// <para>
+/// A <c>List&lt;int&gt;</c> stores its elements in the shared <c>Integer</c> type by default, alongside
+/// every other loose integer in the dataset. Naming the element type gives it a type of its own, which
+/// means a smaller ordinal pool and fewer bits per reference. Compose it with
+/// <see cref="HollowTypeNameAttribute"/> to rename the collection type as well.
+/// </para>
+/// <para>
+/// <strong>Adding this to a member changes the schema</strong>, so a producer and its consumers have
+/// to move together.
+/// </para>
+/// </remarks>
+[AttributeUsage(AttributeTargets.Property | AttributeTargets.Field)]
+public sealed class HollowCollectionTypeNameAttribute(string elementTypeName) : Attribute
+{
+    /// <summary>The Hollow type name to store the list's or set's elements as.</summary>
+    public string ElementTypeName { get; } = elementTypeName;
+}
+
+/// <summary>
+/// Names the Hollow types the keys and values of a map member are stored as.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Java's <c>@HollowMapTypeName</c>. Its two elements are optional there and are init-only properties
+/// here — <c>[HollowMapTypeName(KeyTypeName = "SubTypeKey")]</c> — so that either may be given alone.
+/// </para>
+/// <para>
+/// The reasoning is <see cref="HollowCollectionTypeNameAttribute"/>'s, and so is the warning: adding
+/// this to a member changes the schema.
+/// </para>
+/// </remarks>
+[AttributeUsage(AttributeTargets.Property | AttributeTargets.Field)]
+public sealed class HollowMapTypeNameAttribute : Attribute
+{
+    /// <summary>The Hollow type name to store the map's keys as, or null to derive one.</summary>
+    public string? KeyTypeName { get; init; }
+
+    /// <summary>The Hollow type name to store the map's values as, or null to derive one.</summary>
+    public string? ValueTypeName { get; init; }
+}
+
+/// <summary>
 /// Declares how the elements of a set, or the keys of a map, are hashed within each record's hash
 /// table, so a consumer can find one by key rather than by ordinal.
 /// </summary>

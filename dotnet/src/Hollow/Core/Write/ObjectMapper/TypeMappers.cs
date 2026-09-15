@@ -131,7 +131,11 @@ public sealed class HollowObjectTypeMapper : HollowTypeMapper
                     record.SetReference(
                         field.Name,
                         _parentMapper
-                            .GetTypeMapper(field.DeclaredType!, field.TypeNameOverride, field.HashKeyFieldPaths)
+                            .GetTypeMapper(
+                                field.DeclaredType!,
+                                field.TypeNameOverride,
+                                field.HashKeyFieldPaths,
+                                field.CollectionTypeNames)
                             .Write(memberValue));
                     break;
                 default:
@@ -202,7 +206,8 @@ public sealed class HollowObjectTypeMapper : HollowTypeMapper
             }
 
             HollowObjectTypeMapper referenced = (HollowObjectTypeMapper)_parentMapper.GetTypeMapper(
-                field.DeclaredType!, field.TypeNameOverride, field.HashKeyFieldPaths);
+                field.DeclaredType!, field.TypeNameOverride, field.HashKeyFieldPaths,
+                field.CollectionTypeNames);
 
             return referenced.RetrieveFieldValue(fieldValue, fieldPathIndex, depth + 1);
         }
@@ -234,7 +239,11 @@ public sealed class HollowObjectTypeMapper : HollowTypeMapper
         {
             if (field.FieldType == FieldType.Reference)
             {
-                parentMapper.GetTypeMapper(field.DeclaredType!, field.TypeNameOverride, field.HashKeyFieldPaths);
+                parentMapper.GetTypeMapper(
+                    field.DeclaredType!,
+                    field.TypeNameOverride,
+                    field.HashKeyFieldPaths,
+                    field.CollectionTypeNames);
             }
         }
     }
@@ -348,7 +357,12 @@ public sealed class HollowObjectTypeMapper : HollowTypeMapper
 
         _schema.AddField(member.Name, FieldType.Reference, referencedTypeName);
         return MappedFieldInfo.Reference(
-            member.Name, underlying, member.TypeNameOverride, member.HashKeyFieldPaths, member.GetValue);
+            member.Name,
+            underlying,
+            member.TypeNameOverride,
+            member.HashKeyFieldPaths,
+            member.CollectionTypeNames,
+            member.GetValue);
     }
 
     private sealed class MappedFieldInfo
@@ -361,6 +375,7 @@ public sealed class HollowObjectTypeMapper : HollowTypeMapper
             Type? declaredType,
             string? typeNameOverride,
             string[]? hashKeyFieldPaths,
+            CollectionTypeNames collectionTypeNames,
             Func<object, object?> getValue)
         {
             Name = name;
@@ -368,6 +383,7 @@ public sealed class HollowObjectTypeMapper : HollowTypeMapper
             DeclaredType = declaredType;
             TypeNameOverride = typeNameOverride;
             HashKeyFieldPaths = hashKeyFieldPaths;
+            CollectionTypeNames = collectionTypeNames;
             _getValue = getValue;
         }
 
@@ -385,18 +401,31 @@ public sealed class HollowObjectTypeMapper : HollowTypeMapper
         /// </summary>
         internal string[]? HashKeyFieldPaths { get; }
 
+        /// <summary>
+        /// The type names this member declares for what the collection it references holds.
+        /// </summary>
+        internal CollectionTypeNames CollectionTypeNames { get; }
+
         internal object? GetValue(object instance) => _getValue(instance);
 
         internal static MappedFieldInfo Scalar(string name, FieldType fieldType, Func<object, object?> getValue) =>
-            new(name, fieldType, null, null, null, getValue);
+            new(name, fieldType, null, null, null, CollectionTypeNames.None, getValue);
 
         internal static MappedFieldInfo Reference(
             string name,
             Type declaredType,
             string? typeNameOverride,
             string[]? hashKeyFieldPaths,
+            CollectionTypeNames collectionTypeNames,
             Func<object, object?> getValue) =>
-            new(name, FieldType.Reference, declaredType, typeNameOverride, hashKeyFieldPaths, getValue);
+            new(
+                name,
+                FieldType.Reference,
+                declaredType,
+                typeNameOverride,
+                hashKeyFieldPaths,
+                collectionTypeNames,
+                getValue);
     }
 }
 
@@ -407,16 +436,26 @@ public sealed class HollowListTypeMapper : HollowTypeMapper
 {
     private readonly HollowObjectMapper _parentMapper;
     private readonly Type _elementType;
+    private readonly string? _elementTypeName;
     private readonly HollowListSchema _schema;
 
     internal HollowListTypeMapper(
-        HollowObjectMapper parentMapper, Type type, Type elementType, string? typeName)
+        HollowObjectMapper parentMapper,
+        Type type,
+        Type elementType,
+        string? typeName,
+        CollectionTypeNames collectionTypeNames = default)
     {
         _parentMapper = parentMapper;
         _elementType = elementType;
+        _elementTypeName = collectionTypeNames.ElementOrKey;
 
+        // The list's own name is derived from the CLR type, whatever its elements are called. So a
+        // List<int> whose elements are named MovieId is still a ListOfInteger unless HollowTypeName
+        // says otherwise, which is what Java does and what its documentation tells you to compose.
         TypeName = HollowObjectMapper.ResolveTypeName(type, typeName);
-        _schema = new HollowListSchema(TypeName, HollowObjectMapper.ResolveTypeName(elementType, null));
+        _schema = new HollowListSchema(
+            TypeName, HollowObjectMapper.ResolveTypeName(elementType, _elementTypeName));
     }
 
     /// <inheritdoc />
@@ -440,7 +479,8 @@ public sealed class HollowListTypeMapper : HollowTypeMapper
                     $"List type {TypeName} contains a null element; Hollow collections cannot hold nulls.");
             }
 
-            record.AddElement(_parentMapper.GetTypeMapper(_elementType, null, null).Write(element));
+            record.AddElement(
+                _parentMapper.GetTypeMapper(_elementType, _elementTypeName, null).Write(element));
         }
 
         return _parentMapper.StateEngine.Add(TypeName, record);
@@ -453,7 +493,7 @@ public sealed class HollowListTypeMapper : HollowTypeMapper
 
     /// <inheritdoc />
     protected internal override void RegisterReferencedTypes(HollowObjectMapper parentMapper) =>
-        parentMapper.GetTypeMapper(_elementType, null, null);
+        parentMapper.GetTypeMapper(_elementType, _elementTypeName, null);
 }
 
 /// <summary>
@@ -463,6 +503,7 @@ public sealed class HollowSetTypeMapper : HollowTypeMapper
 {
     private readonly HollowObjectMapper _parentMapper;
     private readonly Type _elementType;
+    private readonly string? _elementTypeName;
     private readonly HollowSetSchema _schema;
 
     internal HollowSetTypeMapper(
@@ -470,15 +511,18 @@ public sealed class HollowSetTypeMapper : HollowTypeMapper
         Type type,
         Type elementType,
         string? typeName,
-        string[]? hashKeyFieldPaths)
+        string[]? hashKeyFieldPaths,
+        CollectionTypeNames collectionTypeNames = default)
     {
         _parentMapper = parentMapper;
 
         _elementType = elementType;
+        _elementTypeName = collectionTypeNames.ElementOrKey;
+
         TypeName = HollowObjectMapper.ResolveTypeName(type, typeName);
         _schema = new HollowSetSchema(
             TypeName,
-            HollowObjectMapper.ResolveTypeName(elementType, null),
+            HollowObjectMapper.ResolveTypeName(elementType, _elementTypeName),
             parentMapper.ResolveHashKey(hashKeyFieldPaths, elementType));
     }
 
@@ -503,7 +547,8 @@ public sealed class HollowSetTypeMapper : HollowTypeMapper
                     $"Set type {TypeName} contains a null element; Hollow collections cannot hold nulls.");
             }
 
-            record.AddElement(_parentMapper.GetTypeMapper(_elementType, null, null).Write(element));
+            record.AddElement(
+                _parentMapper.GetTypeMapper(_elementType, _elementTypeName, null).Write(element));
         }
 
         return _parentMapper.StateEngine.Add(TypeName, record);
@@ -516,7 +561,7 @@ public sealed class HollowSetTypeMapper : HollowTypeMapper
 
     /// <inheritdoc />
     protected internal override void RegisterReferencedTypes(HollowObjectMapper parentMapper) =>
-        parentMapper.GetTypeMapper(_elementType, null, null);
+        parentMapper.GetTypeMapper(_elementType, _elementTypeName, null);
 }
 
 /// <summary>
@@ -527,6 +572,8 @@ public sealed class HollowMapTypeMapper : HollowTypeMapper
     private readonly HollowObjectMapper _parentMapper;
     private readonly Type _keyType;
     private readonly Type _valueType;
+    private readonly string? _keyTypeName;
+    private readonly string? _valueTypeName;
     private readonly HollowMapSchema _schema;
 
     internal HollowMapTypeMapper(
@@ -535,18 +582,21 @@ public sealed class HollowMapTypeMapper : HollowTypeMapper
         Type keyType,
         Type valueType,
         string? typeName,
-        string[]? hashKeyFieldPaths)
+        string[]? hashKeyFieldPaths,
+        CollectionTypeNames collectionTypeNames = default)
     {
         _parentMapper = parentMapper;
 
         _keyType = keyType;
         _valueType = valueType;
+        _keyTypeName = collectionTypeNames.ElementOrKey;
+        _valueTypeName = collectionTypeNames.Value;
 
         TypeName = HollowObjectMapper.ResolveTypeName(type, typeName);
         _schema = new HollowMapSchema(
             TypeName,
-            HollowObjectMapper.ResolveTypeName(keyType, null),
-            HollowObjectMapper.ResolveTypeName(valueType, null),
+            HollowObjectMapper.ResolveTypeName(keyType, _keyTypeName),
+            HollowObjectMapper.ResolveTypeName(valueType, _valueTypeName),
             parentMapper.ResolveHashKey(hashKeyFieldPaths, keyType));
     }
 
@@ -571,8 +621,9 @@ public sealed class HollowMapTypeMapper : HollowTypeMapper
                     $"Map type {TypeName} contains a null key or value; Hollow maps cannot hold nulls.");
             }
 
-            int keyOrdinal = _parentMapper.GetTypeMapper(_keyType, null, null).Write(entry.Key);
-            int valueOrdinal = _parentMapper.GetTypeMapper(_valueType, null, null).Write(entry.Value);
+            int keyOrdinal = _parentMapper.GetTypeMapper(_keyType, _keyTypeName, null).Write(entry.Key);
+            int valueOrdinal =
+                _parentMapper.GetTypeMapper(_valueType, _valueTypeName, null).Write(entry.Value);
             record.AddEntry(keyOrdinal, valueOrdinal);
         }
 
@@ -587,7 +638,7 @@ public sealed class HollowMapTypeMapper : HollowTypeMapper
     /// <inheritdoc />
     protected internal override void RegisterReferencedTypes(HollowObjectMapper parentMapper)
     {
-        parentMapper.GetTypeMapper(_keyType, null, null);
-        parentMapper.GetTypeMapper(_valueType, null, null);
+        parentMapper.GetTypeMapper(_keyType, _keyTypeName, null);
+        parentMapper.GetTypeMapper(_valueType, _valueTypeName, null);
     }
 }
