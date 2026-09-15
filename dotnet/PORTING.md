@@ -778,8 +778,8 @@ where a record lands in a blob has to keep producing the same answer across runt
 
 Java packages map to .NET namespaces one for one with the `com.netflix` prefix dropped and each
 segment PascalCased. Java's one-public-type-per-file rule is not followed where a type is trivially
-small and only meaningful alongside its neighbour (for example the iterator interfaces and their empty
-implementations share a file).
+small and only meaningful alongside its neighbour (for example `OrdinalEnumerables.cs` holds the two
+entry structs alongside the class that yields them).
 
 ## Naming changes
 
@@ -788,9 +788,8 @@ type. The systematic changes are:
 
 - **Interfaces take an `I` prefix.** `ByteData` → `IByteData`, `FixedLengthData` → `IFixedLengthData`,
   `VariableLengthData` → `IVariableLengthData`, `ArraySegmentRecycler` → `IArraySegmentRecycler`,
-  `HollowDataset` → `IHollowDataset`, `TypeFilter` → `ITypeFilter`, `HollowOrdinalIterator` →
-  `IHollowOrdinalIterator`, `HollowTypeStateListener` → `IHollowTypeStateListener`, and the
-  `Hollow*TypeDataAccess` family.
+  `HollowDataset` → `IHollowDataset`, `TypeFilter` → `ITypeFilter`,
+  `HollowTypeStateListener` → `IHollowTypeStateListener`, and the `Hollow*TypeDataAccess` family.
 - **Getters and setters become properties.** `getName()` → `Name`, `numFields()` → `FieldCount`,
   `setElementTypeState(x)`/`getElementTypeState()` → `ElementTypeState { get; set; }`.
 - **`HashCodes.hashCode(...)` → `HashCodes.Compute(...)`**, because a static method named after
@@ -865,6 +864,45 @@ type. The systematic changes are:
   `IHollowMissingTypeDataAccess`, rather than by naming all four concrete classes at each check.
 
 ## Behavioural differences
+
+### Java's cursors are sequences here
+
+Java walks the elements of a collection record with a cursor. `HollowOrdinalIterator` hands back the
+next ordinal and returns `NO_MORE_ORDINALS` once there are none left; `HollowMapEntryOrdinalIterator`
+pairs a `next()` returning `false` with `getKey()` and `getValue()`. Neither is a
+`java.util.Iterator`, so neither works with `for-each` or the stream library.
+
+This port drops the interfaces and hands back `IEnumerable<int>` — or `IEnumerable<HollowMapEntry>`
+for a map — so a walk is a `foreach` and LINQ applies to it:
+
+| Java | Here |
+| --- | --- |
+| `HollowCollectionTypeDataAccess.ordinalIterator(ordinal)` | `ElementOrdinals(ordinal)` |
+| `HollowSetTypeDataAccess.potentialMatchOrdinalIterator(ordinal, hash)` | `PotentialMatchElementOrdinals(ordinal, hash)` |
+| `HollowMapTypeDataAccess.ordinalIterator(ordinal)` | `Entries(ordinal)` |
+| `HollowMapTypeDataAccess.potentialMatchOrdinalIterator(ordinal, hash)` | `PotentialMatchEntries(ordinal, hash)` |
+| `HollowHashIndexResult.iterator()` | the result *is* an `IEnumerable<int>` |
+| `HollowPrefixIndex.findKeysWithPrefix(prefix)` returning an iterator | returns `IEnumerable<int>` |
+| `MultiLinkedElementArray.iterator(index)` | `Elements(index)` |
+| `RemovedOrdinalIterator`, with `next()`, `reset()` and `countTotal()` | `RemovedOrdinals`, an `IEnumerable<int>` |
+| `IntMap`'s entry iterator | `IntMap.Entries()`, a sequence of `(Key, Value)` tuples |
+
+Three consequences are worth naming.
+
+**They are lazy.** Java reads the record's size when the cursor is built; here it is read when
+enumeration begins. Nothing in the library depends on the difference, but a sequence held across a
+delta transition is a description of a walk, not the result of one.
+
+**Enumerating again walks again.** That is what let `RemovedOrdinalIterator.reset()` go: the four
+delta historical state creators each make two passes over the removals — one to size the storage, one
+to copy into it — and with a cursor the second pass needed an explicit rewind. `countTotal()` is
+`Count()`.
+
+**A set or map walk still carries its bucket.** The record copiers need the bucket an element came
+from when `PreserveHashPositions` is on, which a bare sequence of ordinals would lose.
+`HollowMapEntry` carries `Bucket` alongside `KeyOrdinal` and `ValueOrdinal`, and
+`OrdinalEnumerables.SetElementsWithBuckets` yields `HollowSetElement`, which pairs an ordinal with its
+bucket. `ElementOrdinals` and `Entries` do not expose it, because nothing else wants it.
 
 ### The fixed-length bit string no longer uses unaligned reads
 
@@ -970,7 +1008,7 @@ index without complaint and then finds only some of the records. This port rejec
 This is inherent to the format rather than specific to the port, but it is easy to trip over. When a
 set or map schema declares a hash key, the producer places each element in the bucket a consumer
 probing by that key will look in — not the bucket its ordinal hashes to. `Contains`, `Get` and the
-potential-match iterators probe by ordinal, so on a keyed collection they no longer find anything
+potential-match walks probe by ordinal, so on a keyed collection they no longer find anything
 reliably; use `FindElement`, `FindKey`, `FindValue` and `FindEntry` instead. Iteration is unaffected,
 because it walks the buckets rather than probing them.
 `HashKeyTests.ADeclaredKeyReplacesOrdinalBasedLookup` pins this.
@@ -1855,7 +1893,7 @@ which is released when nothing refers to it any more.
 | `core.write.objectmapper` | `HollowObjectMapper`, the four type mappers, and the `HollowTypeName`/`HollowInline`/`HollowTransient`/`HollowPrimaryKey`/`HollowHashKey`/`HollowShardLargeType` attributes, including Java's default hash-key derivation |
 | `core.read` | `HollowBlobInput`, `HollowBlobHeaderReader`, `HollowBlobReader`, `HollowReadStateEngine`, `HollowTypeReadState`, `PopulatedOrdinalListener`, `SnapshotPopulatedOrdinalsReader`, the data-access interfaces, `ITypeFilter` |
 | `core.read.engine.*` | Data elements and read states for object, list, set and map |
-| `core.read.iterator` | The ordinal iterators, including the potential-match iterators used for key lookups |
+| `core.read.iterator` | `OrdinalEnumerables`, which walks a collection record's elements — including the potential-match walks used for key lookups |
 | `core.memory.encoding` (delta) | `GapEncodedVariableLengthIntegerReader` |
 | delta write path | `CalculateDelta`/`WriteCalculatedDelta` on all four type write states, `HollowBlobWriter.WriteDelta` |
 | delta read path | `ApplyDelta` on the data elements and read states of all four record kinds, `HollowBlobReader.ApplyDelta` |
@@ -1895,7 +1933,7 @@ which is released when nothing refers to it any more.
 | `hollow-explorer-ui` | `Hollow.Explorer`: four pages over a dataset; see [The explorer](#the-explorer) |
 | `hollow-diff-ui` (`diffview`, `diff.ui`) | `Hollow.Explorer.Diff`: the effigy, pairers, row tree and renderer, and four pages over a calculated diff; see [The diff UI](#the-diff-ui) |
 | `hollow-diff-ui` (`history.ui`) | `Hollow.Explorer.History`: the models, the record namer, the version-to-timestamp reading and six pages over a `HollowHistory`; see [The history UI](#the-history-ui) |
-| `tools.history` | `HollowHistory` and `HollowHistoricalState`, `HollowHistoricalStateCreator` and the four delta historical state creators, the historical data accesses, the key index and its ordinal mapper, `IntMap`, `RemovedOrdinalIterator`, `ObjectInternPool` and the two ordinal remappers |
+| `tools.history` | `HollowHistory` and `HollowHistoricalState`, `HollowHistoricalStateCreator` and the four delta historical state creators, the historical data accesses, the key index and its ordinal mapper, `IntMap`, `RemovedOrdinals`, `ObjectInternPool` and the two ordinal remappers |
 | `tools.combine` | `HollowCombiner` and its five copy directors, `HollowCombinerOrdinalRemapper` and `HollowCombinerPrimaryKeyOrdinalRemapper`; see [Combining, splitting and patching](#combining-splitting-and-patching) |
 | `tools.split` | `HollowSplitter`, `HollowSplitterShardCopier`, `HollowSplitterOrdinalRemapper` and the ordinal and primary-key copy directors; see [The splitter](#the-splitter) |
 | `tools.patch` | `HollowStateEngineRecordPatcher` with `TypeMatchSpec` and `HollowPatcherCombinerCopyDirector`, and `HollowStateDeltaPatcher` with `PartialOrdinalRemapper`; see [The patchers](#the-patchers) |
