@@ -116,6 +116,50 @@ one, drive it with `TriggerRefreshTo(version)`. Either way it follows deltas whe
 `ListenForDeltaUpdates()` stays valid — register an `IRefreshListener` to hear when that stops being
 true.
 
+## Schemas as text
+
+A dataset's schemas normally arrive inside the blob, and `HollowSchema.ToString()` writes them out in
+the form a data model is checked into a repository as:
+
+```
+Movie @PrimaryKey(id, country.code) {
+    int id;
+    string title;
+    Country country;
+}
+
+ListOfActor List<Actor>;
+SetOfActor Set<Actor> @HashKey(name);
+MapOfStringToActor Map<String,Actor>;
+```
+
+`HollowSchemaParser` reads that form back — `Parse` for one schema, `ParseCollection` for a file of
+them, over a string or a `TextReader`. Java's names are `parseSchema` and `parseCollectionOfSchemas`.
+
+Three things are worth knowing about the grammar.
+
+**An unrecognised field type is a reference.** `Country country;` declares a reference to the type
+`Country`, and so does `strnig title;` — a misspelling of `string` becomes a reference to a type
+called `strnig` rather than an error. That is Java's behaviour, and the format gives no way to tell
+the two apart.
+
+**`decimal` is a field type here.** Java has eight built-in names; this port has nine, because of
+[the `Decimal` field type](#format-extension-the-decimal-field-type). It has to be in the parser's
+table, or a schema this port wrote would read back with its decimal fields turned into references to
+a type called `decimal`.
+
+**A failure is a `FormatException`**, where Java throws `IOException`. Nothing here does any I/O
+beyond reading the text it was handed, and the message says what it expected and what it found.
+
+Java tokenises with `java.io.StreamTokenizer`, which .NET has no equivalent of. The tokenizer here is
+written for this grammar rather than being a general one: a word is a letter or an underscore
+followed by letters, digits, underscores and dots — the dots are what make `country.code` a single
+token rather than three — plus the punctuation the grammar uses, with both comment forms skipped.
+
+The tests keep Java's schema text verbatim and add the two schema files the Java repository holds,
+`schema1.txt` and `hollow_code_gen_test.schema`, copied into the test project as embedded resources.
+Each of them also has to survive being written back out and read again.
+
 ## Prefix and sparse-integer indexes
 
 Two more ways to find records, alongside the primary-key and hash indexes shown above.
@@ -953,6 +997,29 @@ A `decimal` member maps to the extension field type and, when non-nullable, is i
 numeric value types — the CLR does not classify `decimal` as primitive, but it behaves like one here.
 A `decimal?` becomes a reference to a wrapper type named `Decimal`, which no Java-produced blob will
 ever contain.
+
+### Naming what a collection holds
+
+`[HollowCollectionTypeName("MovieId")]` on a list or set member, and
+`[HollowMapTypeName(KeyTypeName = "SubTypeKey", ValueTypeName = "SubTypeValue")]` on a map member,
+name the Hollow type the elements, keys or values are stored as. Without them a `List<int>` puts its
+elements in the dataset's shared `Integer` type alongside every other loose integer; a type of its own
+means a smaller ordinal pool and fewer bits per reference. Adding either to an existing member changes
+the schema, so a producer and its consumers have to move together.
+
+Java's two annotations take their names as optional elements, both defaulting to the empty string.
+Here the collection one takes its single name as a constructor argument, and the map one has init-only
+properties so that either half may be given alone.
+
+**The collection's own name is unaffected**, in this port as in Java: a `List<int>` whose elements are
+named `MovieId` is still a `ListOfInteger`, holding `MovieId` records. `[HollowTypeName]` is what
+renames the collection, and composing the two is what Java's documentation shows.
+
+**One refusal Java does not make.** That naming rule makes it easy to end up with two `ListOfInteger`
+schemas over different element types — one member annotated, one not. Java keys its mappers by type
+name alone, so the second member silently gets the first's mapper and its annotation does nothing at
+all. Here two declarations of one type name have to agree on the schema, and a disagreement is a
+`HollowMappingException` naming both.
 
 ### NaN bit patterns
 
@@ -1962,11 +2029,12 @@ which is released when nothing refers to it any more.
 | `core.index.traversal` | The traversal tree and `HollowIndexerValueTraverser`, which enumerate every combination of values a record's indexed paths reach |
 | `core.index.key` | `PrimaryKey`, including its dataset-resolution helpers, and `HollowPrimaryKeyValueDeriver` |
 | `core` | `HollowConstants`, `IHollowDataset`, `HollowHeaderTags` (the header tags `HollowStateEngine` declares) |
+| `core.schema` (text) | `HollowSchemaParser`, which reads schemas back from the form `ToString` writes — see [Schemas as text](#schemas-as-text) |
 | `core.util` | `BitSet` and `IntList` (port-specific stand-ins for `java.util.BitSet` and Hollow's `IntList`), `InvariantFormatting`, `HollowWriteStateCreator` |
 | `tools.checksum` | `HollowChecksum` and `ApplyToChecksum` on the four read states, which the producer's integrity check compares |
 | `core.write` | The write records (object, list, set, map), `FieldStatistics`, `HollowTypeWriteState` and its four subclasses including the four-way partitioned ordinal map, `HollowWriteStateEngine`, `HollowBlobHeaderWriter`, `HollowBlobWriter`, `HollowBlobOutput` |
 | `core.write.copy` | `HollowRecordCopier` and the object/list/set/map copiers, plus `IOrdinalRemapper`/`IdentityOrdinalRemapper` (Java puts the remapper in `tools.combine`) |
-| `core.write.objectmapper` | `HollowObjectMapper`, the four type mappers, and the `HollowTypeName`/`HollowInline`/`HollowTransient`/`HollowPrimaryKey`/`HollowHashKey`/`HollowShardLargeType` attributes, including Java's default hash-key derivation |
+| `core.write.objectmapper` | `HollowObjectMapper`, the four type mappers, and the `HollowTypeName`/`HollowInline`/`HollowTransient`/`HollowPrimaryKey`/`HollowHashKey`/`HollowShardLargeType`/`HollowCollectionTypeName`/`HollowMapTypeName` attributes, including Java's default hash-key derivation |
 | `core.read` | `HollowBlobInput`, `HollowBlobHeaderReader`, `HollowBlobReader`, `HollowReadStateEngine`, `HollowTypeReadState`, `PopulatedOrdinalListener`, `SnapshotPopulatedOrdinalsReader`, the data-access interfaces, `ITypeFilter` |
 | `core.read.engine.*` | Data elements and read states for object, list, set and map |
 | `core.read.iterator` | `OrdinalEnumerables`, which walks a collection record's elements — including the potential-match walks used for key lookups |
