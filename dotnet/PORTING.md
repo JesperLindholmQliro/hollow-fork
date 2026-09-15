@@ -43,7 +43,11 @@ A dataset can also be read by a person rather than a program: `Hollow.Explorer` 
 application that already holds the dataset, or run it on a loopback port of its own. See
 [The explorer](#the-explorer).
 
-What is **not** here is shared-memory mode. The status section says exactly what is and is not ported.
+A dataset does not have to be on the heap at all: shared-memory mode maps the blob file and reads
+records out of the mapping, so a large dataset costs the garbage collector nothing and two processes on
+one machine share the pages. See [Shared-memory mode](#shared-memory-mode).
+
+The status section says exactly what is and is not ported.
 
 ## Building and testing
 
@@ -1733,14 +1737,111 @@ own and failed in the full suite, where a collection had actually run.
 Java's expired-usage stack trace recorder is not ported either. It exists to attribute a read of
 dropped data to the code that made it, which in .NET is what the exception's own stack trace is.
 
+## Shared-memory mode
+
+By default a consumer reads a snapshot *onto the heap*: every record is copied out of the blob into
+pooled arrays, and the blob is then closed and forgotten. Shared-memory mode does not copy. The blob
+file is mapped into the address space and left there, and a record is read out of the mapping when it
+is asked for.
+
+That changes three things. The dataset no longer counts against the managed heap, so it no longer
+counts against the garbage collector either — there is nothing to trace and nothing to compact. A
+process restarts without re-reading anything, because the pages are already in the operating system's
+cache. And two processes mapping the same file share those pages, which is where the mode gets its
+name: a second consumer on the same machine costs almost nothing.
+
+What it costs is that a read may fault. On-heap, the data is there; mapped, the first touch of a page
+may go to disk. The mode suits a large dataset read unevenly, and suits a small one read hot rather
+less.
+
+Turn it on by giving the state engine the mode and the reader a mapped input:
+
+```csharp
+HollowReadStateEngine readEngine = new(MemoryMode.SharedMemoryLazy);
+
+using HollowBlobInput input = HollowBlobInput.Mapped(snapshotPath);
+new HollowBlobReader(readEngine).ReadSnapshot(input);
+```
+
+The two have to agree — a state engine in this mode builds data elements that read through a mapping,
+and there is no mapping behind a serial input, so a mismatch is rejected rather than half-working.
+
+Everything above the read is unchanged. The indexes, the generic records, the generated API, the
+explorer and the diff all read through the same interfaces and cannot tell which storage they were
+handed. `SharedMemoryModeTests` is built around exactly that: it reads one blob both ways and compares
+the two states record by record with `HollowChecksum`.
+
+### Two things the mode refuses
+
+**A delta.** Applying one edits records in place, and a mapped file is read-only. A consumer in this
+mode follows the chain by mapping each new snapshot instead — which is cheap, since mapping does not
+read anything.
+
+**A filter.** Filtering rewrites each record's layout as it is read, dropping the excluded fields, and
+a mapped record is never rewritten. `MemoryMode.SupportsFiltering` is the test, and the blob reader
+makes it before touching the input.
+
+Both are refused with a `NotSupportedException` that says which mode and why, as Java does.
+
+### The pieces
+
+| Type | Java | What it is |
+| --- | --- | --- |
+| `MemoryMappedBlob` | `BlobByteBuffer` | The mapped file. Hands out bytes and 64-bit words by absolute offset. |
+| `EncodedLongBuffer` | same | `IFixedLengthData` over the mapping: the bit-packed fixed-length fields. |
+| `EncodedByteBuffer` | same | `IVariableLengthData` over the mapping: the string and bytes payloads. |
+| `FixedLengthDataFactory` | same | Picks between `FixedLengthElementArray` and `EncodedLongBuffer`. |
+| `VariableLengthDataFactory` | same | Picks between `SegmentedByteArray` and `EncodedByteBuffer`. |
+
+The two factories are the whole of the wiring. Each of the four data elements carries the mode it was
+built for and asks a factory for its storage; nothing else in the read path changed.
+
+### Byte order, which is the part that bites
+
+A bit string is written to a blob as a run of 64-bit words, each **big-endian**, because that is what
+`java.io.DataOutput` writes. The bit string's own numbering runs the other way: bit `i` is bit `i % 64`
+of word `i / 64`, counting from the least significant. So a word read out of the file has to be
+byte-swapped before its bits mean anything.
+
+Java does this a byte at a time, mapping logical byte `k` to file byte `(k & ~7) + 7 - (k & 7)`. In
+.NET the whole aligned word can be read and reversed in one instruction:
+
+```csharp
+long stored = _view.ReadInt64(at);
+
+return BitConverter.IsLittleEndian ? BinaryPrimitives.ReverseEndianness(stored) : stored;
+```
+
+Variable-length data gets **no** such treatment. It is a plain byte stream, and byte `n` of the stream
+is byte `n` of the file — `EncodedByteBuffer.Get` is a straight read. Getting this backwards is the
+easiest mistake in the mode and the hardest to spot, because short values still look plausible; the
+tests cover it with a 5,000-character string, which does not.
+
+A last wrinkle: the final element of a bit string is reached through a 64-bit window that may run off
+the end of the file. The bits past the end are shifted away by the caller, so `GetByte` answers zero
+for up to eight bytes past the end rather than failing.
+
+### One simplification over Java
+
+Java's `BlobByteBuffer` carries a **spine** of `MappedByteBuffer`s, one per gigabyte, because a Java
+buffer is indexed by `int`. Every read picks a buffer, shifts and masks an offset into it, and the
+whole arrangement tops out at two exabytes.
+
+A .NET `MemoryMappedViewAccessor` takes a `long` offset. One view covers the whole file, and the spine,
+its arithmetic and its ceiling all go away — `MemoryMappedBlob` is a view and a length.
+
+The mapping outlives the `HollowBlobInput` that opened it: the data elements read through it for as
+long as the state engine is alive. Disposing the input closes the stream and leaves the mapping be,
+which is released when nothing refers to it any more.
+
 ## Status
 
 ### Ported and tested
 
 | Java package | Notes |
 | --- | --- |
-| `core.memory` | `IByteData`, `ArrayByteData`, `ByteDataArray`, `SegmentedByteArray`, `SegmentedLongArray`, `ByteArrayOrdinalMap`, `FreeOrdinalTracker`, `ThreadSafeBitSet`, `IFixedLengthData`, `IVariableLengthData`, `MemoryMode` |
-| `core.memory.encoding` | `ZigZag`, `VarInt`, `HashCodes`, `FixedLengthElementArray`, `FixedLengthMultipleOccurrenceElementArray`, and `DecimalBits` (port-specific; see the format extension above) |
+| `core.memory` | `IByteData`, `ArrayByteData`, `ByteDataArray`, `SegmentedByteArray`, `SegmentedLongArray`, `ByteArrayOrdinalMap`, `FreeOrdinalTracker`, `ThreadSafeBitSet`, `IFixedLengthData`, `IVariableLengthData`, `MemoryMode`, `FixedLengthDataFactory`, `VariableLengthDataFactory` |
+| `core.memory.encoding` | `ZigZag`, `VarInt`, `HashCodes`, `FixedLengthElementArray`, `FixedLengthMultipleOccurrenceElementArray`, `MemoryMappedBlob` (Java's `BlobByteBuffer`), `EncodedLongBuffer`, `EncodedByteBuffer`, and `DecimalBits` (port-specific; see the format extension above) |
 | `core.memory.pool` | `IArraySegmentRecycler`, `WastefulRecycler`, `RecyclingRecycler` |
 | `core.schema` | `HollowSchema` and the object/list/set/map schemas, `FieldType`, `SchemaType`, `SimpleHollowDataset`, `HollowSchemaSorter`, `HollowSchemaHash` |
 | `core.index` | `FieldPaths` and the bound `FieldPath`/`FieldSegment`/`ObjectFieldSegment`/`FieldPathException` types, `HollowPrimaryKeyIndex`, `HollowUniqueKeyIndex`, `HollowHashIndex` and its builder, preindexer, field and result types, `HollowPrefixIndex` and the `TernarySearchTree` behind it, `HollowSparseIntegerSet`, `ValueFieldPath` (Java's package-private `core.index.FieldPath`), `GrowingSegmentedLongArray`, `MultiLinkedElementArray` |
@@ -1911,8 +2012,6 @@ sets of `TypeFilter` exist; the recursive rule DSL is still absent.
 
 ### Not ported
 
-- **Shared-memory mode.** `MemoryMode.SharedMemoryLazy` and the `BlobByteBuffer`, `EncodedByteBuffer`
-  and `EncodedLongBuffer` types behind it. Constructing a read state engine with it throws.
 - **Optional blob parts**, which split a snapshot across several streams.
 - **Producer metrics** (`api.producer.metrics`), asynchronous snapshot publishing, and the blob
   storage cleaner.
@@ -1955,8 +2054,8 @@ the chain, and a client generated at compile time reads it with types. What is l
 optimisation or a feature on top.
 
 Nothing is outstanding from the original list. What remains unported is listed above, and each item
-there is a feature on top rather than a gap in the loop: shared-memory mode, optional blob parts, and
-producer metrics.
+there is a feature on top rather than a gap in the loop: optional blob parts, producer metrics, and the
+consumer's optional layers.
 
 All three UIs are ported — the explorer, the diff and the history — and with the history went
 `tools.history` underneath it. `tools` is now ported in full: `combine`, `split` and `patch` went in
@@ -1964,7 +2063,9 @@ last, and the delta patcher's tests turned up a real bug in the object delta app
 — see [A delta bug the patcher found](#a-delta-bug-the-patcher-found).
 
 Object longevity went in after that — see [Object longevity](#object-longevity), where the tests turned
-up a hole in Java's own stale-reference detector. What remains is shared-memory mode.
+up a hole in Java's own stale-reference detector. Shared-memory mode went in last — see
+[Shared-memory mode](#shared-memory-mode) — and with it the last of the read path's storage options.
+`core`, `api` and `tools` are now ported in full.
 
 **Whatever comes next, read [The explorer](#the-explorer), [The diff UI](#the-diff-ui) and
 [The history UI](#the-history-ui) first if it has a page in it.** The decisions there about Razor,
