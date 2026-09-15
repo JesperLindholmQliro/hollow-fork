@@ -49,12 +49,6 @@ public sealed class HollowReadStateEngine : IHollowDataAccess
     /// </summary>
     public HollowReadStateEngine(MemoryMode memoryMode = MemoryMode.OnHeap, IArraySegmentRecycler? memoryRecycler = null)
     {
-        if (memoryMode != MemoryMode.OnHeap)
-        {
-            throw new NotSupportedException(
-                $"Memory mode {memoryMode} is not supported by the .NET port; see PORTING.md");
-        }
-
         MemoryMode = memoryMode;
         MemoryRecycler = memoryRecycler ?? new RecyclingRecycler();
     }

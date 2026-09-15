@@ -19,6 +19,7 @@ using System.Buffers;
 using System.Buffers.Binary;
 using Hollow.Core.Io;
 using Hollow.Core.Memory;
+using Hollow.Core.Memory.Encoding;
 
 namespace Hollow.Core.Read;
 
@@ -39,13 +40,15 @@ namespace Hollow.Core.Read;
 public sealed class HollowBlobInput : IDisposable
 {
     private readonly bool _leaveOpen;
+    private readonly MemoryMappedBlob? _blob;
     private Stream? _stream;
 
-    private HollowBlobInput(MemoryMode memoryMode, Stream stream, bool leaveOpen)
+    private HollowBlobInput(MemoryMode memoryMode, Stream stream, bool leaveOpen, MemoryMappedBlob? blob = null)
     {
         MemoryMode = memoryMode;
         _stream = stream;
         _leaveOpen = leaveOpen;
+        _blob = blob;
     }
 
     /// <summary>The memory mode this input was opened for.</summary>
@@ -91,6 +94,46 @@ public sealed class HollowBlobInput : IDisposable
             new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read),
             leaveOpen: false);
     }
+
+    /// <summary>
+    /// Opens a shared-memory input over a blob file, mapping it into the address space.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The header and the schemas are read through the stream exactly as they are on-heap; what changes
+    /// is what happens to the record data behind them, which is left in the file and reached through the
+    /// mapping. The stream and the mapping are two views of the same file, so a position in one is a
+    /// position in the other.
+    /// </para>
+    /// <para>
+    /// The mapping outlives this input: the data elements built from it read through it for as long as
+    /// the state engine is alive, so disposing the input closes the stream and leaves the mapping be.
+    /// It is released when nothing refers to it any more.
+    /// </para>
+    /// </remarks>
+    public static HollowBlobInput Mapped(string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+
+        MemoryMappedBlob blob = MemoryMappedBlob.Map(path);
+
+        return new HollowBlobInput(
+            MemoryMode.SharedMemoryLazy,
+            new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read),
+            leaveOpen: false,
+            blob);
+    }
+
+    /// <summary>
+    /// The mapping this input reads through.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// The input was not opened for shared-memory mode, so there is no mapping.
+    /// </exception>
+    public MemoryMappedBlob RequireMappedBlob() =>
+        _blob ?? throw new InvalidOperationException(
+            $"this input was opened in {MemoryMode} mode, which reads record data onto the heap rather "
+            + "than through a mapping");
 
     /// <summary>
     /// Reads the next byte as an integer in the range 0 to 255, or -1 at end of input.
@@ -174,6 +217,26 @@ public sealed class HollowBlobInput : IDisposable
     /// </summary>
     /// <exception cref="NotSupportedException">The underlying stream is not seekable.</exception>
     public void Seek(long position) => Stream.Position = position;
+
+    /// <summary>
+    /// Skips <paramref name="count"/> bytes, which must all be there.
+    /// </summary>
+    /// <remarks>
+    /// This is how shared-memory mode passes over record data: the bytes are left where they are and
+    /// only their position is kept, so a short skip is a truncated blob rather than a benign end of
+    /// input.
+    /// </remarks>
+    /// <exception cref="EndOfStreamException">The input ended first.</exception>
+    public void Skip(long count)
+    {
+        long skipped = SkipBytes(count);
+
+        if (skipped != count)
+        {
+            throw new EndOfStreamException(
+                $"the blob ended {count - skipped} bytes into a {count}-byte run of record data");
+        }
+    }
 
     /// <summary>
     /// Attempts to skip <paramref name="count"/> bytes, returning the number actually skipped.

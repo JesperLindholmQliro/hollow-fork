@@ -33,12 +33,22 @@ public abstract class HollowTypeDataElements
     /// <summary>
     /// Initialises empty storage drawing from <paramref name="memoryRecycler"/>.
     /// </summary>
-    protected HollowTypeDataElements(IArraySegmentRecycler memoryRecycler)
+    /// <param name="memoryRecycler">The pool this shard's storage is drawn from and returned to.</param>
+    /// <param name="memoryMode">
+    /// How the records are to be held. In <see cref="MemoryMode.SharedMemoryLazy"/> the recycler goes
+    /// unused: nothing is copied out of the blob, so there is no pooled storage to draw or return.
+    /// </param>
+    protected HollowTypeDataElements(
+        IArraySegmentRecycler memoryRecycler, MemoryMode memoryMode = MemoryMode.OnHeap)
     {
         ArgumentNullException.ThrowIfNull(memoryRecycler);
 
         MemoryRecycler = memoryRecycler;
+        MemoryMode = memoryMode;
     }
+
+    /// <summary>How this shard holds its records.</summary>
+    public MemoryMode MemoryMode { get; }
 
     /// <summary>The highest ordinal this shard holds, or -1 when it holds none.</summary>
     public int MaxOrdinal { get; internal set; } = -1;

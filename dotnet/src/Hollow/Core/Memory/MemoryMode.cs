@@ -28,7 +28,10 @@ public enum MemoryMode
     /// <summary>
     /// Record data is lazily paged in from a memory-mapped blob file.
     /// </summary>
-    /// <remarks>Not yet implemented by the .NET port; see <c>PORTING.md</c>.</remarks>
+    /// <remarks>
+    /// Nothing is loaded up front and nothing is copied: a record is read out of the mapping when it is
+    /// asked for. Only snapshots can be read this way, and a filter cannot be applied to one.
+    /// </remarks>
     SharedMemoryLazy,
 }
 

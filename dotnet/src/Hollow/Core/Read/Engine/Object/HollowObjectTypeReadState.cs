@@ -146,7 +146,7 @@ public sealed partial class HollowObjectTypeReadState : HollowTypeReadState, IHo
         Shard[] shards = new Shard[numShards];
         for (int i = 0; i < numShards; i++)
         {
-            HollowObjectTypeDataElements dataElements = new(Schema, memoryRecycler);
+            HollowObjectTypeDataElements dataElements = new(Schema, memoryRecycler, MemoryMode);
             dataElements.ReadSnapshot(input, _unfilteredSchema);
             shards[i] = new Shard(dataElements, shardOrdinalShift);
         }

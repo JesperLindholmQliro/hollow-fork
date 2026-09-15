@@ -15,6 +15,7 @@
  *
  */
 
+using Hollow.Core.Memory;
 using Hollow.Core.Memory.Encoding;
 using Hollow.Core.Read.Engine.List;
 using Hollow.Core.Read.Engine.Map;
@@ -71,6 +72,17 @@ public sealed class HollowBlobReader
     {
         ArgumentNullException.ThrowIfNull(input);
 
+        RequireMatchingMemoryMode(input);
+
+        // A filtered read rewrites each record's layout as it is read, which means writing; a mapped
+        // blob is only ever read. Java refuses this the same way.
+        if (!_stateEngine.MemoryMode.SupportsFiltering() && filter is not null && !ReferenceEquals(filter, TypeFilter.IncludeAll))
+        {
+            throw new NotSupportedException(
+                $"a type filter cannot be applied in {_stateEngine.MemoryMode} mode, which reads records "
+                + "in place rather than copying them");
+        }
+
         HollowBlobHeader header = _headerReader.ReadHeader(input);
 
         filter ??= TypeFilter.IncludeAll;
@@ -117,6 +129,14 @@ public sealed class HollowBlobReader
     {
         ArgumentNullException.ThrowIfNull(input);
 
+        // Applying a delta edits the records in place, and a mapped blob cannot be edited. A consumer
+        // in shared-memory mode moves along the chain by mapping the next snapshot instead.
+        if (_stateEngine.MemoryMode != MemoryMode.OnHeap)
+        {
+            throw new NotSupportedException(
+                $"a delta cannot be applied in {_stateEngine.MemoryMode} mode; read a snapshot instead");
+        }
+
         HollowBlobHeader header = _headerReader.ReadHeader(input);
 
         if (_stateEngine.RandomizedTag != 0 && header.OriginRandomizedTag != _stateEngine.RandomizedTag)
@@ -138,6 +158,24 @@ public sealed class HollowBlobReader
         }
 
         _stateEngine.NotifyEndUpdate();
+    }
+
+    /// <summary>
+    /// Checks that the input was opened the way the state engine expects to read.
+    /// </summary>
+    /// <remarks>
+    /// The two have to agree: a state engine in shared-memory mode builds data elements that read
+    /// through a mapping, and there is no mapping behind a serial input.
+    /// </remarks>
+    private void RequireMatchingMemoryMode(HollowBlobInput input)
+    {
+        if (input.MemoryMode != _stateEngine.MemoryMode)
+        {
+            throw new ArgumentException(
+                $"this state engine reads in {_stateEngine.MemoryMode} mode, but the input was opened in "
+                + $"{input.MemoryMode} mode",
+                nameof(input));
+        }
     }
 
     private void ReadTypeStateDelta(HollowBlobInput input)

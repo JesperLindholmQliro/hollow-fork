@@ -35,8 +35,9 @@ public sealed partial class HollowSetTypeDataElements : HollowTypeDataElements
     /// <summary>
     /// Initialises empty storage.
     /// </summary>
-    public HollowSetTypeDataElements(IArraySegmentRecycler memoryRecycler)
-        : base(memoryRecycler)
+    public HollowSetTypeDataElements(
+        IArraySegmentRecycler memoryRecycler, MemoryMode memoryMode = MemoryMode.OnHeap)
+        : base(memoryRecycler, memoryMode)
     {
         ArgumentNullException.ThrowIfNull(memoryRecycler);
     }
@@ -81,8 +82,8 @@ public sealed partial class HollowSetTypeDataElements : HollowTypeDataElements
         EmptyBucketValue = (1 << BitsPerElement) - 1;
         TotalNumberOfBuckets = VarInt.ReadVLong(input);
 
-        SetPointerAndSizeData = FixedLengthElementArray.NewFrom(input, MemoryRecycler);
-        ElementData = FixedLengthElementArray.NewFrom(input, MemoryRecycler);
+        SetPointerAndSizeData = FixedLengthDataFactory.Get(input, MemoryMode, MemoryRecycler);
+        ElementData = FixedLengthDataFactory.Get(input, MemoryMode, MemoryRecycler);
     }
 
     /// <summary>The number of elements in <paramref name="ordinal"/>'s set.</summary>
@@ -260,7 +261,7 @@ public sealed partial class HollowSetTypeReadState : HollowTypeReadState, IHollo
         Shard[] shards = new Shard[numShards];
         for (int i = 0; i < numShards; i++)
         {
-            HollowSetTypeDataElements dataElements = new(memoryRecycler);
+            HollowSetTypeDataElements dataElements = new(memoryRecycler, MemoryMode);
             dataElements.ReadSnapshot(input);
             shards[i] = new Shard(dataElements, shardOrdinalShift);
         }

@@ -35,8 +35,9 @@ public sealed partial class HollowMapTypeDataElements : HollowTypeDataElements
     /// <summary>
     /// Initialises empty storage.
     /// </summary>
-    public HollowMapTypeDataElements(IArraySegmentRecycler memoryRecycler)
-        : base(memoryRecycler)
+    public HollowMapTypeDataElements(
+        IArraySegmentRecycler memoryRecycler, MemoryMode memoryMode = MemoryMode.OnHeap)
+        : base(memoryRecycler, memoryMode)
     {
         ArgumentNullException.ThrowIfNull(memoryRecycler);
     }
@@ -89,8 +90,8 @@ public sealed partial class HollowMapTypeDataElements : HollowTypeDataElements
         EmptyBucketKeyValue = (1 << BitsPerKeyElement) - 1;
         TotalNumberOfBuckets = VarInt.ReadVLong(input);
 
-        MapPointerAndSizeData = FixedLengthElementArray.NewFrom(input, MemoryRecycler);
-        EntryData = FixedLengthElementArray.NewFrom(input, MemoryRecycler);
+        MapPointerAndSizeData = FixedLengthDataFactory.Get(input, MemoryMode, MemoryRecycler);
+        EntryData = FixedLengthDataFactory.Get(input, MemoryMode, MemoryRecycler);
     }
 
     /// <summary>The number of entries in <paramref name="ordinal"/>'s map.</summary>
@@ -271,7 +272,7 @@ public sealed partial class HollowMapTypeReadState : HollowTypeReadState, IHollo
         Shard[] shards = new Shard[numShards];
         for (int i = 0; i < numShards; i++)
         {
-            HollowMapTypeDataElements dataElements = new(memoryRecycler);
+            HollowMapTypeDataElements dataElements = new(memoryRecycler, MemoryMode);
             dataElements.ReadSnapshot(input);
             shards[i] = new Shard(dataElements, shardOrdinalShift);
         }

@@ -35,8 +35,11 @@ public sealed partial class HollowObjectTypeDataElements : HollowTypeDataElement
     /// <summary>
     /// Initialises empty storage for <paramref name="schema"/>.
     /// </summary>
-    public HollowObjectTypeDataElements(HollowObjectSchema schema, IArraySegmentRecycler memoryRecycler)
-        : base(memoryRecycler)
+    public HollowObjectTypeDataElements(
+        HollowObjectSchema schema,
+        IArraySegmentRecycler memoryRecycler,
+        MemoryMode memoryMode = MemoryMode.OnHeap)
+        : base(memoryRecycler, memoryMode)
     {
         ArgumentNullException.ThrowIfNull(schema);
         ArgumentNullException.ThrowIfNull(memoryRecycler);
@@ -87,7 +90,9 @@ public sealed partial class HollowObjectTypeDataElements : HollowTypeDataElement
 
         ReadFieldStatistics(input, unfilteredSchema);
 
-        FixedLengthData = FixedLengthElementArray.NewFrom(input, MemoryRecycler);
+        FixedLengthData = FixedLengthDataFactory.Get(input, MemoryMode, MemoryRecycler);
+
+        // A filter cannot be applied in shared-memory mode, so this only ever has work to do on-heap.
         RemoveExcludedFieldsFromFixedLengthData();
 
         ReadVarLengthData(input, unfilteredSchema);
@@ -251,7 +256,7 @@ public sealed partial class HollowObjectTypeDataElements : HollowTypeDataElement
             {
                 if (numBytesInVarLengthData != 0)
                 {
-                    SegmentedByteArray data = new(MemoryRecycler);
+                    IVariableLengthData data = VariableLengthDataFactory.Get(MemoryMode, MemoryRecycler);
                     data.LoadFrom(input, numBytesInVarLengthData);
                     VarLengthData[filteredFieldIndex] = data;
                 }

@@ -36,8 +36,9 @@ public sealed partial class HollowListTypeDataElements : HollowTypeDataElements
     /// <summary>
     /// Initialises empty storage.
     /// </summary>
-    public HollowListTypeDataElements(IArraySegmentRecycler memoryRecycler)
-        : base(memoryRecycler)
+    public HollowListTypeDataElements(
+        IArraySegmentRecycler memoryRecycler, MemoryMode memoryMode = MemoryMode.OnHeap)
+        : base(memoryRecycler, memoryMode)
     {
         ArgumentNullException.ThrowIfNull(memoryRecycler);
     }
@@ -70,8 +71,8 @@ public sealed partial class HollowListTypeDataElements : HollowTypeDataElements
         BitsPerElement = VarInt.ReadVInt(input);
         TotalNumberOfElements = VarInt.ReadVLong(input);
 
-        ListPointerData = FixedLengthElementArray.NewFrom(input, MemoryRecycler);
-        ElementData = FixedLengthElementArray.NewFrom(input, MemoryRecycler);
+        ListPointerData = FixedLengthDataFactory.Get(input, MemoryMode, MemoryRecycler);
+        ElementData = FixedLengthDataFactory.Get(input, MemoryMode, MemoryRecycler);
     }
 
     /// <summary>The index of the first element of <paramref name="ordinal"/>'s list.</summary>
@@ -225,7 +226,7 @@ public sealed partial class HollowListTypeReadState : HollowTypeReadState, IHoll
         Shard[] shards = new Shard[numShards];
         for (int i = 0; i < numShards; i++)
         {
-            HollowListTypeDataElements dataElements = new(memoryRecycler);
+            HollowListTypeDataElements dataElements = new(memoryRecycler, MemoryMode);
             dataElements.ReadSnapshot(input);
             shards[i] = new Shard(dataElements, shardOrdinalShift);
         }
