@@ -21,6 +21,16 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!--
+      The two schema files Java's own tests parse, copied here so that the port's parser is held to the
+      same text rather than to text written to suit it.
+    -->
+    <EmbeddedResource Include="Resources/schema1.txt" LogicalName="schema1.txt" />
+    <EmbeddedResource Include="Resources/hollow_code_gen_test.schema"
+                      LogicalName="hollow_code_gen_test.schema" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="../../src/Hollow/Hollow.csproj" />
     <!--
       The explorer's tests drive it as a running web application rather than calling its controller, so
