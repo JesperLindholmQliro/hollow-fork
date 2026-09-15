@@ -265,6 +265,9 @@ internal sealed class EmitterOptions
     /// <summary>Whether to emit a unique-key index for each type declaring a primary key.</summary>
     internal bool GenerateUniqueKeyIndexes { get; init; } = true;
 
+    /// <summary>Whether to emit a data accessor for each type declaring a primary key.</summary>
+    internal bool GenerateDataAccessors { get; init; } = true;
+
     /// <summary>Whether to emit a cached delegate per object type.</summary>
     internal bool GenerateCachedDelegates { get; init; } = true;
 

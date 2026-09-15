@@ -66,6 +66,11 @@ internal sealed class CodeEmitter(EmitterOptions options)
                 files[CodeNames.UniqueKeyIndex(type.TypeName) + ".cs"] =
                     GenerateUniqueKeyIndex(model, type);
             }
+
+            if (_options.GenerateDataAccessors && type.PrimaryKeyFieldPaths is { Count: > 0 })
+            {
+                files[CodeNames.DataAccessor(type.TypeName) + ".cs"] = GenerateDataAccessor(type);
+            }
         }
 
         files[_options.ApiClassName + ".cs"] = GenerateApi(model);
@@ -1074,6 +1079,106 @@ internal sealed class CodeEmitter(EmitterOptions options)
             : [];
 
     /// <summary>
+    /// Emits the accessor that says what the last transition did to one type's records.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The work is <c>HollowDataAccessor&lt;T&gt;</c>'s; all this adds is the type name and a read
+    /// through the generated API, which is the shape Java's <c>HollowDataAccessorGenerator</c> emits
+    /// too.
+    /// </para>
+    /// <para>
+    /// Java emits one for every object type. This port emits one only for a type that declares a
+    /// primary key, because telling a replacement from an addition and a removal needs a key, and an
+    /// accessor over a keyless type would throw the moment it was asked anything.
+    /// </para>
+    /// </remarks>
+    private string GenerateDataAccessor(GeneratedType type)
+    {
+        CodeWriter writer = new();
+        string api = _options.ApiClassName;
+        string accessor = CodeNames.DataAccessor(type.TypeName);
+        string record = type.RecordType;
+        string noData = "\"the consumer holds no data yet\"";
+
+        Preamble(writer);
+
+        writer.Line("/// <summary>");
+        writer.Line(
+            $"/// What the last transition did to the <c>{type.TypeName}</c> records: which arrived, "
+            + "which went");
+        writer.Line("/// away, and which were replaced.");
+        writer.Line("/// </summary>");
+        writer.Line("/// <remarks>");
+        writer.Line(
+            "/// Records are matched across the transition by <c>"
+            + string.Join(", ", type.PrimaryKeyFieldPaths!) + "</c> unless another key is given.");
+        writer.Line("/// </remarks>");
+        writer.Line($"public sealed class {accessor} : HollowDataAccessor<{record}>");
+
+        using (writer.Open())
+        {
+            writer.Line($"private readonly {api} _api;");
+            writer.Blank();
+
+            writer.Doc("The Hollow type this reads.");
+            writer.Line($"public const string TypeName = {Quote(type.TypeName)};");
+            writer.Blank();
+
+            writer.Doc($"Reads the <c>{type.TypeName}</c> records <paramref name=\"consumer\"/> holds.");
+            using (writer.Open($"public {accessor}(HollowConsumer consumer) : base(consumer, TypeName)"))
+            {
+                writer.Line("ArgumentNullException.ThrowIfNull(consumer);");
+                writer.Blank();
+                writer.Line($"_api = ({api})(consumer.Api ?? throw new InvalidOperationException({noData}));");
+            }
+
+            writer.Blank();
+            writer.Doc($"Reads the <c>{type.TypeName}</c> records <paramref name=\"stateEngine\"/> holds.");
+            using (writer.Open(
+                $"public {accessor}(HollowReadStateEngine stateEngine, {api} api)"
+                + " : base(stateEngine, TypeName)"))
+            {
+                writer.Line("ArgumentNullException.ThrowIfNull(api);");
+                writer.Blank();
+                writer.Line("_api = api;");
+            }
+
+            writer.Blank();
+            writer.Doc("Matches records on <paramref name=\"primaryKey\"/> rather than on the declared key.");
+            using (writer.Open(
+                $"public {accessor}(HollowReadStateEngine stateEngine, {api} api, PrimaryKey primaryKey)"
+                + " : base(stateEngine, TypeName, primaryKey)"))
+            {
+                writer.Line("ArgumentNullException.ThrowIfNull(api);");
+                writer.Blank();
+                writer.Line("_api = api;");
+            }
+
+            writer.Blank();
+            writer.Doc("Matches records on <paramref name=\"fieldPaths\"/> rather than on the declared key.");
+            using (writer.Open(
+                $"public {accessor}(HollowReadStateEngine stateEngine, {api} api, params string[] fieldPaths)"
+                + " : base(stateEngine, TypeName, fieldPaths)"))
+            {
+                writer.Line("ArgumentNullException.ThrowIfNull(api);");
+                writer.Blank();
+                writer.Line("_api = api;");
+            }
+
+            writer.Blank();
+            writer.Line("/// <inheritdoc />");
+            writer.Line($"public override {record} GetRecord(int ordinal) =>");
+            writer.Line($"    _api.{CodeNames.ApiAccessor(type.TypeName)}(ordinal)");
+            writer.Line(
+                "    ?? throw new InvalidOperationException("
+                + $"$\"there is no {type.TypeName} record at ordinal {{ordinal}}\");");
+        }
+
+        return writer.ToString();
+    }
+
+    /// <summary>
     /// Emits the API's own lookup by primary key, which builds its index the first time it is asked.
     /// </summary>
     /// <remarks>
@@ -1331,12 +1436,14 @@ internal sealed class CodeEmitter(EmitterOptions options)
         writer.Line("using System.Linq;");
         writer.Line("using Hollow.Api.Client;");
         writer.Line("using Hollow.Api.Consumer;");
+        writer.Line("using Hollow.Api.Consumer.Data;");
         writer.Line("using Hollow.Api.Custom;");
         writer.Line("using Hollow.Api.Objects;");
         writer.Line("using Hollow.Api.Objects.Delegate;");
         writer.Line("using Hollow.Api.Objects.Provider;");
         writer.Line("using Hollow.Core;");
         writer.Line("using Hollow.Core.Index;");
+        writer.Line("using Hollow.Core.Index.Key;");
         writer.Line("using Hollow.Core.Read.DataAccess;");
         writer.Line("using Hollow.Core.Read.Engine;");
         writer.Line("using Hollow.Core.Schema;");

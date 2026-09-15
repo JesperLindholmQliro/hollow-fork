@@ -77,6 +77,12 @@ public sealed class HollowGeneratedApiAttribute : Attribute
     public bool GenerateUniqueKeyIndexes { get; init; } = true;
 
     /// <summary>
+    /// Whether to emit a data accessor for each type that declares a primary key — what the last
+    /// transition added, removed and replaced, as records. On by default.
+    /// </summary>
+    public bool GenerateDataAccessors { get; init; } = true;
+
+    /// <summary>
     /// Whether to emit a cached delegate per object type, which holds a record's field values. On by
     /// default.
     /// </summary>

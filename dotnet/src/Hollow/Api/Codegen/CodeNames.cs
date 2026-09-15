@@ -73,6 +73,9 @@ internal static class CodeNames
     /// <summary>The class name for the unique-key index over <paramref name="typeName"/>.</summary>
     internal static string UniqueKeyIndex(string typeName) => Pascal(typeName) + "UniqueKeyIndex";
 
+    /// <summary>The name of the data accessor generated for <paramref name="typeName"/>.</summary>
+    internal static string DataAccessor(string typeName) => Pascal(typeName) + "DataAccessor";
+
     /// <summary>
     /// The record name for the primary key of <paramref name="typeName"/>.
     /// </summary>
