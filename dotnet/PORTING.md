@@ -56,6 +56,9 @@ dotnet build
 dotnet test
 ```
 
+The benchmarks are a project of their own and are not part of either — see
+[The benchmarks](#the-benchmarks) for how to run them, and measure a Release build when you do.
+
 Requires the .NET 10 SDK. On a machine without ICU installed, set
 `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1` — nothing in the port depends on culture-sensitive
 behaviour.
@@ -769,6 +772,8 @@ where a record lands in a blob has to keep producing the same answer across runt
 | `hollow/src/main/java/com/netflix/hollow/...` | `dotnet/src/Hollow/...` |
 | `hollow/src/test/java/com/netflix/hollow/...` | `dotnet/tests/Hollow.Tests/...` |
 | (no equivalent) | `dotnet/samples/Hollow.Sample/` |
+| `hollow-fakedata/src/main/java/hollow/...` | `dotnet/samples/Hollow.FakeData/` |
+| `hollow-perf/src/jmh/java/com/netflix/hollow/...` | `dotnet/benchmarks/Hollow.Benchmarks/` |
 | package `com.netflix.hollow.core.memory.encoding` | namespace `Hollow.Core.Memory.Encoding` |
 | package `com.netflix.hollow.api.error` | namespace `Hollow.Api.Error` |
 | package `com.netflix.hollow.api.consumer` | namespace `Hollow.Api.Consumer` |
@@ -1548,6 +1553,77 @@ by `("Id", "Studio.Country")`, so correcting a studio's country changes the *key
 references it, and the overview counts two removals and two additions rather than two modifications.
 That is what a primary key means, and it is worth seeing once.
 
+### The fake data generator
+
+`samples/Hollow.FakeData` is the port of `hollow-fakedata`. It is not a sample of how to use Hollow —
+the four above are that. It is a generator: a fake book catalogue published over a long delta chain,
+with the explorer and the history UI served over it while it runs, for when what those need is a
+dataset big enough and churny enough to be worth looking at.
+
+The model is the point of it. A book references an id, a country, its images and its metadata; the
+images are a map of size name to a list of art; the metadata holds an enum and a list of chapters; a
+chapter holds a byte array and a list of scenes; a scene holds a set of character names. Object, list,
+set and map records, an inline scalar and referenced ones, an enum and a byte array — so every page
+the explorer and the history have is reachable from it. Three types declare a primary key, which is
+what lets the history follow a record from one version to the next.
+
+Four differences from Java, all covered in the sample's `README.md`:
+
+- **One seeded random.** Java calls `new Random()` at each use site and draws its words from
+  javafaker, so no two runs produce the same catalogue — which makes whatever you find at cycle 60
+  impossible to go back to. Here every draw comes from one `Random` built from `--seed`, the words are
+  a few lists, and the timestamps come from a fixed clock. Same seed, same dataset, down to the
+  ordinals.
+- **Java's constants are command-line options**, rather than something to recompile.
+- **Three Java bugs are not reproduced.** `populateCatalog(start, count)` loops
+  `for (id = start; id < count; id++)`, treating the count as an end, so no book is ever added after
+  the first cycle. `modifyBook` calls `Map.remove` with a `Map.Entry` rather than a key, so a book's
+  art only ever grows. And the artists go into a `HashSet` of a class that declares no equality, so
+  the deduplication it is reaching for never happens — which matters, because `Artist` is keyed on its
+  name.
+
+### The benchmarks
+
+`benchmarks/Hollow.Benchmarks` is the port of `hollow-perf`: eleven suites over the parts of Hollow
+that sit on a hot path — the hash functions, the ordinal map, the bit string, both indexes, reading a
+long and reading a string, checksumming a collection type, the snapshot round trip, the duplicate-key
+validator, and reading while delta transitions replace the storage underneath.
+
+Java runs these under JMH. BenchmarkDotNet is the .NET equivalent and is deliberately not used: it
+cannot be restored on every machine this port gets built on, and a benchmark project that will not
+build is worth less than a rough one that will. `Harness.cs` does the three things that matter — a
+calibrated operation count so the stopwatch does not become the measurement, discarded warmup
+iterations, and JMH's 99.9% error bar — and the `README.md` says plainly what it leaves out, which is
+everything else. The numbers are ratios between cases in one run, not absolutes to quote.
+
+Two things did not port, for the same kind of reason each time: the thing being measured is not in
+this port.
+
+- **`FixedLengthElementArrayPlainPut` and `SegmentedLongArrayPlainPut`**, the two classes in
+  `hollow-perf/src/main`, and the `writePlain` case that uses them. They are copies of core classes
+  with `Unsafe.putOrderedLong` swapped for `Unsafe.putLong`, to price the release store in
+  `setElementValue`. There is no release store here to price: `SegmentedLongArray.Set` is an ordinary
+  array store, and publication is ordered once by the fence before the ordinal is written rather than
+  per word — see [Concurrency primitives](#concurrency-primitives). Both classes and the comparison
+  fall away together.
+- **`deltaLaggedIndex`**, the third case of the duplicate-detection benchmark, which prices
+  `DuplicateDataDetectionValidator.findDuplicateKeysInDelta`. That method does not exist here; the
+  validator has only the full-scan path, and the two snapshot cases it would be compared against are
+  ported.
+
+One thing the benchmarks needed that the library does not have: `core.util.StateEngineRoundTripper`,
+which Java ships in the main artifact. This port keeps it out of the library, since it is only ever
+used by tests, so the test project and the benchmark project each have their own copy of the same ten
+lines.
+
+Two suites measure something slightly different from Java's, and say so where they are defined.
+`Read` and `ReadLarge` run the same code, because this port dropped Java's unaligned single-word read
+path; keeping both cases is how a run that disagrees would show up. And the delta-transition suite
+fences its read against the transition with a `ReaderWriterLockSlim`, which Java's does not: applying
+a delta releases the storage it replaced the moment the new storage is published — here and in Java
+alike — so a read part way through the old elements faults. That is what object longevity is for, and
+it is not what the benchmark is pricing.
+
 ## Combining, splitting and patching
 
 `Hollow.Core.Tools.Combine`, `.Split` and `.Patch` are the ports of `tools.combine`, `tools.split` and
@@ -2059,9 +2135,12 @@ sets of `TypeFilter` exist; the recursive rule DSL is still absent.
   `api.client` that `HollowConsumer` uses are ported.
 - **`api.codegen`'s three extras** (the POJO, "performance API" and test-data builder generators; the
   client API generator itself is ported — see [The code generator](#the-code-generator)),
-  **sampling** (`api.sampling`, deliberately — see below), and every module outside
-  `hollow` except the two UIs — `hollow-jsonadapter`, `hollow-protoadapter`, `hollow-zenoadapter`,
-  `hollow-test`, `hollow-fakedata`. `hollow-explorer-ui` is ported as `Hollow.Explorer`
+  **sampling** (`api.sampling`, deliberately — see below), and the adapter modules —
+  `hollow-jsonadapter`, `hollow-protoadapter`, `hollow-zenoadapter`, `hollow-test`.
+  `hollow-fakedata` is ported as `samples/Hollow.FakeData`
+  ([The fake data generator](#the-fake-data-generator)) and `hollow-perf` as
+  `benchmarks/Hollow.Benchmarks` ([The benchmarks](#the-benchmarks)).
+  `hollow-explorer-ui` is ported as `Hollow.Explorer`
   ([The explorer](#the-explorer)), `hollow-diff-ui`'s `diffview` and `diff.ui` packages as
   `Hollow.Explorer.Diff` ([The diff UI](#the-diff-ui)), and its `history.ui` package as
   `Hollow.Explorer.History` ([The history UI](#the-history-ui)).
