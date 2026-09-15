@@ -122,7 +122,7 @@ public class CollectionRoundTripTests
                 Assert.Equal(lists[i][j], readState.GetElementOrdinal(ordinal, j));
             }
 
-            Assert.Equal(lists[i], readState.OrdinalIterator(ordinal).AsEnumerable());
+            Assert.Equal(lists[i], readState.ElementOrdinals(ordinal).AsEnumerable());
         }
     }
 
@@ -184,7 +184,7 @@ public class CollectionRoundTripTests
             Assert.Equal(sets[i].Length, readState.Size(ordinal));
 
             // Iteration order is the hash table's, so compare as sets.
-            Assert.Equal([.. sets[i].Order()], readState.OrdinalIterator(ordinal).AsEnumerable().Order());
+            Assert.Equal([.. sets[i].Order()], readState.ElementOrdinals(ordinal).AsEnumerable().Order());
 
             foreach (int element in sets[i])
             {
@@ -193,7 +193,7 @@ public class CollectionRoundTripTests
                 // A potential-match run must include the element it was seeded with.
                 Assert.Contains(
                     element,
-                    readState.PotentialMatchOrdinalIterator(ordinal, element).AsEnumerable());
+                    readState.PotentialMatchElementOrdinals(ordinal, element).AsEnumerable());
             }
 
             foreach (int absent in valueOrdinals.Except(sets[i]))
@@ -259,10 +259,9 @@ public class CollectionRoundTripTests
 
             // Iterating must yield exactly the entries that were written.
             Dictionary<int, int> iterated = [];
-            IHollowMapEntryOrdinalIterator iterator = readState.OrdinalIterator(ordinal);
-            while (iterator.Next())
+            foreach (HollowMapEntry entry in readState.Entries(ordinal))
             {
-                iterated[iterator.Key] = iterator.Value;
+                iterated[entry.KeyOrdinal] = entry.ValueOrdinal;
             }
 
             Assert.Equal(maps[i].Count, iterated.Count);
@@ -320,7 +319,7 @@ public class CollectionRoundTripTests
         HollowSetTypeReadState sets = Assert.IsType<HollowSetTypeReadState>(readEngine.GetTypeState("ValueSet"));
         HollowMapTypeReadState maps = Assert.IsType<HollowMapTypeReadState>(readEngine.GetTypeState("ValueMap"));
 
-        Assert.Equal([valueOrdinals[0], valueOrdinals[1]], lists.OrdinalIterator(listOrdinal).AsEnumerable());
+        Assert.Equal([valueOrdinals[0], valueOrdinals[1]], lists.ElementOrdinals(listOrdinal).AsEnumerable());
         Assert.True(sets.Contains(setOrdinal, valueOrdinals[2]));
         Assert.Equal(valueOrdinals[3], maps.Get(mapOrdinal, valueOrdinals[2]));
 
@@ -415,6 +414,6 @@ public class CollectionRoundTripTests
             Assert.True(readState.Contains(ordinal, element));
         }
 
-        Assert.Equal(valueOrdinals.Order(), readState.OrdinalIterator(ordinal).AsEnumerable().Order());
+        Assert.Equal(valueOrdinals.Order(), readState.ElementOrdinals(ordinal).AsEnumerable().Order());
     }
 }

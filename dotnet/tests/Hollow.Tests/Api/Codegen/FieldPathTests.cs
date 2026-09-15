@@ -196,17 +196,7 @@ public class FieldPathTests
 
         Assert.Equal(
             [byText.GetMatchingOrdinal(1)],
-            [.. Ordinals(titles.FindKeysWithPrefix("the matrix"))]);
-    }
-
-    private static IEnumerable<int> Ordinals(IHollowOrdinalIterator iterator)
-    {
-        for (int ordinal = iterator.Next();
-            ordinal != IHollowOrdinalIterator.NoMoreOrdinals;
-            ordinal = iterator.Next())
-        {
-            yield return ordinal;
-        }
+            [.. titles.FindKeysWithPrefix("the matrix")]);
     }
 
     /// <summary>The <c>TValue</c> a generated route was declared with.</summary>

@@ -193,8 +193,8 @@ public sealed class HollowListMissingDataAccess(IHollowDataAccess dataAccess, st
         DataAccess.MissingDataHandler.HandleListElementOrdinal(MissingTypeName, ordinal, listIndex);
 
     /// <inheritdoc />
-    public IHollowOrdinalIterator OrdinalIterator(int ordinal) =>
-        DataAccess.MissingDataHandler.HandleListIterator(MissingTypeName, ordinal);
+    public IEnumerable<int> ElementOrdinals(int ordinal) =>
+        DataAccess.MissingDataHandler.HandleListElementOrdinals(MissingTypeName, ordinal);
 }
 
 /// <summary>
@@ -242,12 +242,13 @@ public sealed class HollowSetMissingDataAccess(IHollowDataAccess dataAccess, str
         throw MissingDataAccess.NoBuckets(MissingTypeName);
 
     /// <inheritdoc />
-    public IHollowOrdinalIterator PotentialMatchOrdinalIterator(int ordinal, int hashCode) =>
-        DataAccess.MissingDataHandler.HandleSetPotentialMatchIterator(MissingTypeName, ordinal, hashCode);
+    public IEnumerable<int> PotentialMatchElementOrdinals(int ordinal, int hashCode) =>
+        DataAccess.MissingDataHandler.HandleSetPotentialMatchElementOrdinals(
+            MissingTypeName, ordinal, hashCode);
 
     /// <inheritdoc />
-    public IHollowOrdinalIterator OrdinalIterator(int ordinal) =>
-        DataAccess.MissingDataHandler.HandleSetIterator(MissingTypeName, ordinal);
+    public IEnumerable<int> ElementOrdinals(int ordinal) =>
+        DataAccess.MissingDataHandler.HandleSetElementOrdinals(MissingTypeName, ordinal);
 
     /// <inheritdoc />
     public int FindElement(int ordinal, params object?[] hashKey) =>
@@ -296,13 +297,12 @@ public sealed class HollowMapMissingDataAccess(IHollowDataAccess dataAccess, str
         throw MissingDataAccess.NoBuckets(MissingTypeName);
 
     /// <inheritdoc />
-    public IHollowMapEntryOrdinalIterator PotentialMatchOrdinalIterator(int ordinal, int hashCode) =>
-        DataAccess.MissingDataHandler.HandleMapPotentialMatchOrdinalIterator(
-            MissingTypeName, ordinal, hashCode);
+    public IEnumerable<HollowMapEntry> PotentialMatchEntries(int ordinal, int hashCode) =>
+        DataAccess.MissingDataHandler.HandleMapPotentialMatchEntries(MissingTypeName, ordinal, hashCode);
 
     /// <inheritdoc />
-    public IHollowMapEntryOrdinalIterator OrdinalIterator(int ordinal) =>
-        DataAccess.MissingDataHandler.HandleMapOrdinalIterator(MissingTypeName, ordinal);
+    public IEnumerable<HollowMapEntry> Entries(int ordinal) =>
+        DataAccess.MissingDataHandler.HandleMapEntries(MissingTypeName, ordinal);
 
     /// <inheritdoc />
     public int FindKey(int ordinal, params object?[] hashKey) =>

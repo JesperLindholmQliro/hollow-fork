@@ -362,12 +362,12 @@ public sealed partial class HollowMapTypeReadState : HollowTypeReadState, IHollo
     }
 
     /// <inheritdoc />
-    public IHollowMapEntryOrdinalIterator OrdinalIterator(int ordinal) =>
-        new HollowMapEntryOrdinalIteratorImpl(ordinal, this);
+    public IEnumerable<HollowMapEntry> Entries(int ordinal) =>
+        OrdinalEnumerables.MapEntries(this, ordinal);
 
     /// <inheritdoc />
-    public IHollowMapEntryOrdinalIterator PotentialMatchOrdinalIterator(int ordinal, int hashCode) =>
-        new PotentialMatchHollowMapEntryOrdinalIteratorImpl(ordinal, this, hashCode);
+    public IEnumerable<HollowMapEntry> PotentialMatchEntries(int ordinal, int hashCode) =>
+        OrdinalEnumerables.PotentialMatchMapEntries(this, ordinal, hashCode);
 
     /// <summary>
     /// The shard holding <paramref name="ordinal"/>, read through one load of the shards holder so

@@ -146,7 +146,7 @@ public class HashKeyTests
         {
             int elementOrdinal = sets.FindElement(setOrdinal, movie.Id);
             Assert.NotEqual(HollowConstants.OrdinalNone, elementOrdinal);
-            Assert.Contains(elementOrdinal, sets.OrdinalIterator(setOrdinal).AsEnumerable());
+            Assert.Contains(elementOrdinal, sets.ElementOrdinals(setOrdinal).AsEnumerable());
 
             // The map's key ordinals index the same Movie records the set holds.
             Assert.Equal(elementOrdinal, maps.FindKey(mapOrdinal, movie.Id));
@@ -294,8 +294,8 @@ public class HashKeyTests
             Assert.IsType<HollowSetTypeReadState>(unkeyedConsumer.GetTypeState("MovieSet"));
 
         Assert.Equal(
-            unkeyedSets.OrdinalIterator(unkeyedSet).AsEnumerable().Order(),
-            keyedSets.OrdinalIterator(keyedSet).AsEnumerable().Order());
+            unkeyedSets.ElementOrdinals(unkeyedSet).AsEnumerable().Order(),
+            keyedSets.ElementOrdinals(keyedSet).AsEnumerable().Order());
 
         HollowMapTypeReadState keyedMaps =
             Assert.IsType<HollowMapTypeReadState>(keyedConsumer.GetTypeState("MovieMap"));
@@ -323,13 +323,13 @@ public class HashKeyTests
         HollowMapTypeReadState maps = Assert.IsType<HollowMapTypeReadState>(consumer.GetTypeState("MovieMap"));
 
         // Iteration still yields every element, because it walks the buckets rather than probing them.
-        Assert.Equal(movies.Length, sets.OrdinalIterator(setOrdinal).AsEnumerable().Count());
+        Assert.Equal(movies.Length, sets.ElementOrdinals(setOrdinal).AsEnumerable().Count());
         Assert.Equal(movies.Length, ReadEntries(maps, mapOrdinal).Count);
 
         // Probing by ordinal, however, looks in the bucket the ordinal hashes to, which is not where a
         // keyed collection put it. An individual probe may still land on its element by chance, so the
         // claim is that ordinal-based lookup is no longer reliable, not that it never succeeds.
-        int[] elementOrdinals = [.. sets.OrdinalIterator(setOrdinal).AsEnumerable()];
+        int[] elementOrdinals = [.. sets.ElementOrdinals(setOrdinal).AsEnumerable()];
 
         Assert.NotEqual(
             elementOrdinals.Length, elementOrdinals.Count(o => sets.Contains(setOrdinal, o)));
@@ -342,11 +342,9 @@ public class HashKeyTests
     private static Dictionary<int, int> ReadEntries(HollowMapTypeReadState maps, int ordinal)
     {
         Dictionary<int, int> entries = [];
-        IHollowMapEntryOrdinalIterator iterator = maps.OrdinalIterator(ordinal);
-
-        while (iterator.Next())
+        foreach (HollowMapEntry entry in maps.Entries(ordinal))
         {
-            entries[iterator.Key] = iterator.Value;
+            entries[entry.KeyOrdinal] = entry.ValueOrdinal;
         }
 
         return entries;

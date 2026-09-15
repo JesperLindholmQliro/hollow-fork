@@ -178,7 +178,7 @@ public sealed class HollowListProxyDataAccess(HollowProxyDataAccess dataAccess)
     public int Size(int ordinal) => Reading.Size(ordinal);
 
     /// <inheritdoc />
-    public IHollowOrdinalIterator OrdinalIterator(int ordinal) => Reading.OrdinalIterator(ordinal);
+    public IEnumerable<int> ElementOrdinals(int ordinal) => Reading.ElementOrdinals(ordinal);
 
     /// <inheritdoc />
     public int GetElementOrdinal(int ordinal, int listIndex) => Reading.GetElementOrdinal(ordinal, listIndex);
@@ -204,7 +204,7 @@ public sealed class HollowSetProxyDataAccess(HollowProxyDataAccess dataAccess)
     public int Size(int ordinal) => Reading.Size(ordinal);
 
     /// <inheritdoc />
-    public IHollowOrdinalIterator OrdinalIterator(int ordinal) => Reading.OrdinalIterator(ordinal);
+    public IEnumerable<int> ElementOrdinals(int ordinal) => Reading.ElementOrdinals(ordinal);
 
     /// <inheritdoc />
     public bool Contains(int ordinal, int value) => Reading.Contains(ordinal, value);
@@ -216,8 +216,8 @@ public sealed class HollowSetProxyDataAccess(HollowProxyDataAccess dataAccess)
     public int RelativeBucketValue(int ordinal, int bucketIndex) => Reading.RelativeBucketValue(ordinal, bucketIndex);
 
     /// <inheritdoc />
-    public IHollowOrdinalIterator PotentialMatchOrdinalIterator(int ordinal, int hashCode) =>
-        Reading.PotentialMatchOrdinalIterator(ordinal, hashCode);
+    public IEnumerable<int> PotentialMatchElementOrdinals(int ordinal, int hashCode) =>
+        Reading.PotentialMatchElementOrdinals(ordinal, hashCode);
 
     /// <inheritdoc />
     public int FindElement(int ordinal, params object?[] hashKey) => Reading.FindElement(ordinal, hashKey);
@@ -249,11 +249,11 @@ public sealed class HollowMapProxyDataAccess(HollowProxyDataAccess dataAccess)
     public long RelativeBucket(int ordinal, int bucketIndex) => Reading.RelativeBucket(ordinal, bucketIndex);
 
     /// <inheritdoc />
-    public IHollowMapEntryOrdinalIterator PotentialMatchOrdinalIterator(int ordinal, int hashCode) =>
-        Reading.PotentialMatchOrdinalIterator(ordinal, hashCode);
+    public IEnumerable<HollowMapEntry> PotentialMatchEntries(int ordinal, int hashCode) =>
+        Reading.PotentialMatchEntries(ordinal, hashCode);
 
     /// <inheritdoc />
-    public IHollowMapEntryOrdinalIterator OrdinalIterator(int ordinal) => Reading.OrdinalIterator(ordinal);
+    public IEnumerable<HollowMapEntry> Entries(int ordinal) => Reading.Entries(ordinal);
 
     /// <inheritdoc />
     public int FindKey(int ordinal, params object?[] hashKey) => Reading.FindKey(ordinal, hashKey);

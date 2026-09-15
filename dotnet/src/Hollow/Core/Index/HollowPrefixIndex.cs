@@ -146,23 +146,23 @@ public sealed class HollowPrefixIndex : IHollowTypeStateListener, IDisposable
     /// An empty prefix returns every indexed ordinal. Shorter prefixes match more records, so a large
     /// dataset queried with one character returns a great many.
     /// </remarks>
-    public IHollowOrdinalIterator FindKeysWithPrefix(string prefix)
+    public IEnumerable<int> FindKeysWithPrefix(string prefix)
     {
         ArgumentNullException.ThrowIfNull(prefix);
 
         TernarySearchTree current;
-        IHollowOrdinalIterator iterator;
+        IEnumerable<int> ordinals;
 
         // A delta rebuild replaces the whole tree, so a query that spans one re-runs against the new
         // tree rather than reading a half-recycled one.
         do
         {
             current = _prefixIndex;
-            iterator = current.FindKeysWithPrefix(prefix);
+            ordinals = current.FindKeysWithPrefix(prefix);
         }
         while (!ReferenceEquals(current, _prefixIndex));
 
-        return iterator;
+        return ordinals;
     }
 
     /// <summary>

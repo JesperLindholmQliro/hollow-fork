@@ -218,7 +218,7 @@ public static class TransitiveSetTraverser
 
         foreach (int ordinal in matchingOrdinals.EnumerateSetBits())
         {
-            foreach (int elementOrdinal in typeState.OrdinalIterator(ordinal).AsEnumerable())
+            foreach (int elementOrdinal in typeState.ElementOrdinals(ordinal))
             {
                 childOrdinals.Set(elementOrdinal);
             }
@@ -242,11 +242,10 @@ public static class TransitiveSetTraverser
 
         foreach (int ordinal in matchingOrdinals.EnumerateSetBits())
         {
-            IHollowMapEntryOrdinalIterator iterator = typeState.OrdinalIterator(ordinal);
-            while (iterator.Next())
+            foreach (HollowMapEntry entry in typeState.Entries(ordinal))
             {
-                keyOrdinals?.Set(iterator.Key);
-                valueOrdinals?.Set(iterator.Value);
+                keyOrdinals?.Set(entry.KeyOrdinal);
+                valueOrdinals?.Set(entry.ValueOrdinal);
             }
         }
     }
@@ -331,7 +330,7 @@ public static class TransitiveSetTraverser
                 continue;
             }
 
-            foreach (int referencedOrdinal in referencerState.OrdinalIterator(ordinal).AsEnumerable())
+            foreach (int referencedOrdinal in referencerState.ElementOrdinals(ordinal))
             {
                 if (referencedMatches.Get(referencedOrdinal))
                 {
@@ -367,17 +366,16 @@ public static class TransitiveSetTraverser
                 continue;
             }
 
-            IHollowMapEntryOrdinalIterator iterator = referencerState.OrdinalIterator(ordinal);
-            while (iterator.Next())
+            foreach (HollowMapEntry entry in referencerState.Entries(ordinal))
             {
-                if (keyTypeMatches && referencedMatches.Get(iterator.Key))
+                if (keyTypeMatches && referencedMatches.Get(entry.KeyOrdinal))
                 {
-                    Apply(action, referencerMatches, ordinal, referencedMatches, iterator.Key);
+                    Apply(action, referencerMatches, ordinal, referencedMatches, entry.KeyOrdinal);
                 }
 
-                if (valueTypeMatches && referencedMatches.Get(iterator.Value))
+                if (valueTypeMatches && referencedMatches.Get(entry.ValueOrdinal))
                 {
-                    Apply(action, referencerMatches, ordinal, referencedMatches, iterator.Value);
+                    Apply(action, referencerMatches, ordinal, referencedMatches, entry.ValueOrdinal);
                 }
             }
         }

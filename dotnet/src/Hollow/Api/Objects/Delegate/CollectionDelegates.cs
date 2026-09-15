@@ -254,8 +254,8 @@ public interface IHollowSetDelegate<T> : IHollowRecordDelegate
     /// </summary>
     T? FindElement(HollowSet<T> set, int ordinal, params object?[] hashKey);
 
-    /// <summary>Iterates the element ordinals of the given record.</summary>
-    IHollowOrdinalIterator Iterator(int ordinal);
+    /// <summary>The element ordinals of the given record.</summary>
+    IEnumerable<int> ElementOrdinals(int ordinal);
 }
 
 /// <summary>
@@ -294,7 +294,7 @@ public sealed class HollowSetLookupDelegate<T> : IHollowSetDelegate<T>
 
     /// <inheritdoc />
     public bool Contains(HollowSet<T> set, int ordinal, object? item) =>
-        SetDelegateHelper.Contains(TypeDataAccess, set, ordinal, item, TypeDataAccess.OrdinalIterator(ordinal));
+        SetDelegateHelper.Contains(TypeDataAccess, set, ordinal, item, TypeDataAccess.ElementOrdinals(ordinal));
 
     /// <inheritdoc />
     public T? FindElement(HollowSet<T> set, int ordinal, params object?[] hashKey)
@@ -307,7 +307,7 @@ public sealed class HollowSetLookupDelegate<T> : IHollowSetDelegate<T>
     }
 
     /// <inheritdoc />
-    public IHollowOrdinalIterator Iterator(int ordinal) => TypeDataAccess.OrdinalIterator(ordinal);
+    public IEnumerable<int> ElementOrdinals(int ordinal) => TypeDataAccess.ElementOrdinals(ordinal);
 }
 
 /// <summary>
@@ -323,7 +323,7 @@ public sealed class HollowSetCachedDelegate<T> : IHollowSetDelegate<T>, IHollowC
         ArgumentNullException.ThrowIfNull(typeDataAccess);
 
         TypeDataAccess = typeDataAccess;
-        _elementOrdinals = [.. typeDataAccess.OrdinalIterator(ordinal).AsEnumerable()];
+        _elementOrdinals = [.. typeDataAccess.ElementOrdinals(ordinal)];
     }
 
     /// <summary>Caches the record at <paramref name="ordinal"/>.</summary>
@@ -333,7 +333,7 @@ public sealed class HollowSetCachedDelegate<T> : IHollowSetDelegate<T>, IHollowC
 
         TypeDataAccess = typeApi.TypeDataAccess;
         TypeApi = typeApi;
-        _elementOrdinals = [.. TypeDataAccess.OrdinalIterator(ordinal).AsEnumerable()];
+        _elementOrdinals = [.. TypeDataAccess.ElementOrdinals(ordinal)];
     }
 
     /// <inheritdoc />
@@ -375,7 +375,7 @@ public sealed class HollowSetCachedDelegate<T> : IHollowSetDelegate<T>, IHollowC
     }
 
     /// <inheritdoc />
-    public IHollowOrdinalIterator Iterator(int ordinal) => new CachedOrdinalIterator(_elementOrdinals);
+    public IEnumerable<int> ElementOrdinals(int ordinal) => _elementOrdinals;
 
     /// <inheritdoc />
     public void UpdateTypeApi(HollowTypeApi typeApi)
@@ -424,8 +424,8 @@ public interface IHollowMapDelegate<TKey, TValue> : IHollowRecordDelegate
     /// <summary>The entry matching the type's declared hash key, or <see langword="null"/>.</summary>
     KeyValuePair<TKey, TValue>? FindEntry(HollowMap<TKey, TValue> map, int ordinal, params object?[] hashKey);
 
-    /// <summary>Iterates the entries of the given record.</summary>
-    IHollowMapEntryOrdinalIterator Iterator(int ordinal);
+    /// <summary>The entries of the given record.</summary>
+    IEnumerable<HollowMapEntry> Entries(int ordinal);
 }
 
 /// <summary>
@@ -509,7 +509,7 @@ public sealed class HollowMapLookupDelegate<TKey, TValue> : IHollowMapDelegate<T
     }
 
     /// <inheritdoc />
-    public IHollowMapEntryOrdinalIterator Iterator(int ordinal) => TypeDataAccess.OrdinalIterator(ordinal);
+    public IEnumerable<HollowMapEntry> Entries(int ordinal) => TypeDataAccess.Entries(ordinal);
 }
 
 /// <summary>
@@ -517,7 +517,7 @@ public sealed class HollowMapLookupDelegate<TKey, TValue> : IHollowMapDelegate<T
 /// </summary>
 public sealed class HollowMapCachedDelegate<TKey, TValue> : IHollowMapDelegate<TKey, TValue>, IHollowCachedDelegate
 {
-    private readonly long[] _entries;
+    private readonly HollowMapEntry[] _entries;
 
     /// <summary>Caches the record at <paramref name="ordinal"/>.</summary>
     public HollowMapCachedDelegate(IHollowMapTypeDataAccess typeDataAccess, int ordinal)
@@ -555,11 +555,11 @@ public sealed class HollowMapCachedDelegate<TKey, TValue> : IHollowMapDelegate<T
     {
         ArgumentNullException.ThrowIfNull(map);
 
-        foreach (long entry in _entries)
+        foreach (HollowMapEntry entry in _entries)
         {
-            if (map.EqualsKey((int)(entry >> 32), key))
+            if (map.EqualsKey(entry.KeyOrdinal, key))
             {
-                return map.InstantiateValue((int)entry);
+                return map.InstantiateValue(entry.ValueOrdinal);
             }
         }
 
@@ -571,7 +571,7 @@ public sealed class HollowMapCachedDelegate<TKey, TValue> : IHollowMapDelegate<T
     {
         ArgumentNullException.ThrowIfNull(map);
 
-        return _entries.Any(entry => map.EqualsKey((int)(entry >> 32), key));
+        return _entries.Any(entry => map.EqualsKey(entry.KeyOrdinal, key));
     }
 
     /// <inheritdoc />
@@ -579,7 +579,7 @@ public sealed class HollowMapCachedDelegate<TKey, TValue> : IHollowMapDelegate<T
     {
         ArgumentNullException.ThrowIfNull(map);
 
-        return _entries.Any(entry => map.EqualsValue((int)entry, value));
+        return _entries.Any(entry => map.EqualsValue(entry.ValueOrdinal, value));
     }
 
     /// <inheritdoc />
@@ -617,7 +617,7 @@ public sealed class HollowMapCachedDelegate<TKey, TValue> : IHollowMapDelegate<T
     }
 
     /// <inheritdoc />
-    public IHollowMapEntryOrdinalIterator Iterator(int ordinal) => new CachedMapEntryIterator(_entries);
+    public IEnumerable<HollowMapEntry> Entries(int ordinal) => _entries;
 
     /// <inheritdoc />
     public void UpdateTypeApi(HollowTypeApi typeApi)
@@ -628,18 +628,8 @@ public sealed class HollowMapCachedDelegate<TKey, TValue> : IHollowMapDelegate<T
         TypeDataAccess = TypeApi.TypeDataAccess;
     }
 
-    private static long[] ReadEntries(IHollowMapTypeDataAccess typeDataAccess, int ordinal)
-    {
-        List<long> entries = [];
-
-        IHollowMapEntryOrdinalIterator iterator = typeDataAccess.OrdinalIterator(ordinal);
-        while (iterator.Next())
-        {
-            entries.Add(((long)iterator.Key << 32) | (uint)iterator.Value);
-        }
-
-        return [.. entries];
-    }
+    private static HollowMapEntry[] ReadEntries(IHollowMapTypeDataAccess typeDataAccess, int ordinal) =>
+        [.. typeDataAccess.Entries(ordinal)];
 }
 
 /// <summary>
@@ -661,7 +651,7 @@ internal static class SetDelegateHelper
         HollowSet<T> set,
         int ordinal,
         object? item,
-        IHollowOrdinalIterator iterator)
+        IEnumerable<int> elementOrdinals)
     {
         ArgumentNullException.ThrowIfNull(set);
 
@@ -673,7 +663,7 @@ internal static class SetDelegateHelper
             return typeDataAccess.Contains(ordinal, record.Ordinal);
         }
 
-        foreach (int elementOrdinal in iterator.AsEnumerable())
+        foreach (int elementOrdinal in elementOrdinals)
         {
             if (set.EqualsElement(elementOrdinal, item))
             {
@@ -709,12 +699,11 @@ internal static class MapDelegateHelper
             return valueOrdinal == HollowConstants.OrdinalNone ? default : map.InstantiateValue(valueOrdinal);
         }
 
-        IHollowMapEntryOrdinalIterator iterator = typeDataAccess.OrdinalIterator(ordinal);
-        while (iterator.Next())
+        foreach (HollowMapEntry entry in typeDataAccess.Entries(ordinal))
         {
-            if (map.EqualsKey(iterator.Key, key))
+            if (map.EqualsKey(entry.KeyOrdinal, key))
             {
-                return map.InstantiateValue(iterator.Value);
+                return map.InstantiateValue(entry.ValueOrdinal);
             }
         }
 
@@ -734,10 +723,9 @@ internal static class MapDelegateHelper
             return typeDataAccess.Get(ordinal, record.Ordinal) != HollowConstants.OrdinalNone;
         }
 
-        IHollowMapEntryOrdinalIterator iterator = typeDataAccess.OrdinalIterator(ordinal);
-        while (iterator.Next())
+        foreach (HollowMapEntry entry in typeDataAccess.Entries(ordinal))
         {
-            if (map.EqualsKey(iterator.Key, key))
+            if (map.EqualsKey(entry.KeyOrdinal, key))
             {
                 return true;
             }
@@ -752,10 +740,9 @@ internal static class MapDelegateHelper
     {
         ArgumentNullException.ThrowIfNull(map);
 
-        IHollowMapEntryOrdinalIterator iterator = typeDataAccess.OrdinalIterator(ordinal);
-        while (iterator.Next())
+        foreach (HollowMapEntry entry in typeDataAccess.Entries(ordinal))
         {
-            if (map.EqualsValue(iterator.Value, value))
+            if (map.EqualsValue(entry.ValueOrdinal, value))
             {
                 return true;
             }
@@ -765,27 +752,3 @@ internal static class MapDelegateHelper
     }
 }
 
-/// <summary>
-/// Walks a cached set record's element ordinals.
-/// </summary>
-internal sealed class CachedOrdinalIterator(int[] ordinals) : IHollowOrdinalIterator
-{
-    private int _index;
-
-    public int Next() =>
-        _index < ordinals.Length ? ordinals[_index++] : IHollowOrdinalIterator.NoMoreOrdinals;
-}
-
-/// <summary>
-/// Walks a cached map record's entries.
-/// </summary>
-internal sealed class CachedMapEntryIterator(long[] entries) : IHollowMapEntryOrdinalIterator
-{
-    private int _index = -1;
-
-    public int Key => (int)(entries[_index] >> 32);
-
-    public int Value => (int)entries[_index];
-
-    public bool Next() => ++_index < entries.Length;
-}

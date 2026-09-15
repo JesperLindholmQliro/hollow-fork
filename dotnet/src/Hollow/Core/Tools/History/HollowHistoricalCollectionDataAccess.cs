@@ -55,10 +55,10 @@ public sealed class HollowHistoricalListDataAccess(
             : ForwardTo<IHollowListTypeDataAccess>(ordinal).Size(ordinal);
 
     /// <inheritdoc />
-    public IHollowOrdinalIterator OrdinalIterator(int ordinal) =>
+    public IEnumerable<int> ElementOrdinals(int ordinal) =>
         OrdinalIsPresent(ordinal)
-            ? Removed.OrdinalIterator(GetMappedOrdinal(ordinal))
-            : ForwardTo<IHollowListTypeDataAccess>(ordinal).OrdinalIterator(ordinal);
+            ? Removed.ElementOrdinals(GetMappedOrdinal(ordinal))
+            : ForwardTo<IHollowListTypeDataAccess>(ordinal).ElementOrdinals(ordinal);
 }
 
 /// <summary>
@@ -103,16 +103,16 @@ public sealed class HollowHistoricalSetDataAccess(
             : ForwardTo<IHollowSetTypeDataAccess>(ordinal).RelativeBucketValue(ordinal, bucketIndex);
 
     /// <inheritdoc />
-    public IHollowOrdinalIterator PotentialMatchOrdinalIterator(int ordinal, int hashCode) =>
+    public IEnumerable<int> PotentialMatchElementOrdinals(int ordinal, int hashCode) =>
         OrdinalIsPresent(ordinal)
-            ? Removed.PotentialMatchOrdinalIterator(GetMappedOrdinal(ordinal), hashCode)
-            : ForwardTo<IHollowSetTypeDataAccess>(ordinal).PotentialMatchOrdinalIterator(ordinal, hashCode);
+            ? Removed.PotentialMatchElementOrdinals(GetMappedOrdinal(ordinal), hashCode)
+            : ForwardTo<IHollowSetTypeDataAccess>(ordinal).PotentialMatchElementOrdinals(ordinal, hashCode);
 
     /// <inheritdoc />
-    public IHollowOrdinalIterator OrdinalIterator(int ordinal) =>
+    public IEnumerable<int> ElementOrdinals(int ordinal) =>
         OrdinalIsPresent(ordinal)
-            ? Removed.OrdinalIterator(GetMappedOrdinal(ordinal))
-            : ForwardTo<IHollowSetTypeDataAccess>(ordinal).OrdinalIterator(ordinal);
+            ? Removed.ElementOrdinals(GetMappedOrdinal(ordinal))
+            : ForwardTo<IHollowSetTypeDataAccess>(ordinal).ElementOrdinals(ordinal);
 
     /// <inheritdoc />
     /// <remarks>
@@ -208,16 +208,16 @@ public sealed class HollowHistoricalMapDataAccess(
             : ForwardTo<IHollowMapTypeDataAccess>(ordinal).RelativeBucket(ordinal, bucketIndex);
 
     /// <inheritdoc />
-    public IHollowMapEntryOrdinalIterator PotentialMatchOrdinalIterator(int ordinal, int hashCode) =>
+    public IEnumerable<HollowMapEntry> PotentialMatchEntries(int ordinal, int hashCode) =>
         OrdinalIsPresent(ordinal)
-            ? Removed.PotentialMatchOrdinalIterator(GetMappedOrdinal(ordinal), hashCode)
-            : ForwardTo<IHollowMapTypeDataAccess>(ordinal).PotentialMatchOrdinalIterator(ordinal, hashCode);
+            ? Removed.PotentialMatchEntries(GetMappedOrdinal(ordinal), hashCode)
+            : ForwardTo<IHollowMapTypeDataAccess>(ordinal).PotentialMatchEntries(ordinal, hashCode);
 
     /// <inheritdoc />
-    public IHollowMapEntryOrdinalIterator OrdinalIterator(int ordinal) =>
+    public IEnumerable<HollowMapEntry> Entries(int ordinal) =>
         OrdinalIsPresent(ordinal)
-            ? Removed.OrdinalIterator(GetMappedOrdinal(ordinal))
-            : ForwardTo<IHollowMapTypeDataAccess>(ordinal).OrdinalIterator(ordinal);
+            ? Removed.Entries(GetMappedOrdinal(ordinal))
+            : ForwardTo<IHollowMapTypeDataAccess>(ordinal).Entries(ordinal);
 
     /// <inheritdoc />
     public int FindKey(int ordinal, params object?[] hashKey) => (int)(FindEntry(ordinal, hashKey) >> 32);

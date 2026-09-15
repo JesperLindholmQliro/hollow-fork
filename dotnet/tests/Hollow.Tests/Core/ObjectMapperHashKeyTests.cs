@@ -195,7 +195,7 @@ public class ObjectMapperHashKeyTests
 
         // Ordinal-based lookup still works, because that is how the buckets were laid out.
         int pairsOrdinal = Referenced(consumer, "Catalogue", ordinal, "Pairs");
-        int element = Assert.Single(pairs.OrdinalIterator(pairsOrdinal).AsEnumerable());
+        int element = Assert.Single(pairs.ElementOrdinals(pairsOrdinal).AsEnumerable());
         Assert.True(pairs.Contains(pairsOrdinal, element));
     }
 
@@ -255,7 +255,7 @@ public class ObjectMapperHashKeyTests
 
         int setOrdinal = Referenced(consumer, "DeclaredKeys", ordinal, "Unkeyed");
 
-        foreach (int element in unkeyed.OrdinalIterator(setOrdinal).AsEnumerable())
+        foreach (int element in unkeyed.ElementOrdinals(setOrdinal).AsEnumerable())
         {
             Assert.True(unkeyed.Contains(setOrdinal, element));
         }
@@ -310,7 +310,7 @@ public class ObjectMapperHashKeyTests
         int yearsOrdinal = Referenced(consumer, "Catalogue", ordinal, "Years");
         HollowSetTypeReadState years = Sets(consumer, "SetOfInteger");
 
-        foreach (int element in years.OrdinalIterator(yearsOrdinal).AsEnumerable())
+        foreach (int element in years.ElementOrdinals(yearsOrdinal).AsEnumerable())
         {
             Assert.True(years.Contains(yearsOrdinal, element));
         }
@@ -364,7 +364,7 @@ public class ObjectMapperHashKeyTests
 
         Assert.Equal(
             years,
-            set.OrdinalIterator(setOrdinal).AsEnumerable().Select(o => integers.ReadInt(o, intValue)).Order());
+            set.ElementOrdinals(setOrdinal).AsEnumerable().Select(o => integers.ReadInt(o, intValue)).Order());
 
         foreach (int year in years)
         {

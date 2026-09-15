@@ -75,13 +75,13 @@ public class DiffEqualityCollectionMapper : DiffEqualityTypeMapper
     protected override bool RecordsAreEqual(int fromOrdinal, int toOrdinal)
     {
         if (!PopulateElements(
-            _fromElements, From.OrdinalIterator(fromOrdinal), _elementEqualOrdinalMap.FromOrdinalIdentityTranslator))
+            _fromElements, From.ElementOrdinals(fromOrdinal), _elementEqualOrdinalMap.FromOrdinalIdentityTranslator))
         {
             return false;
         }
 
         if (!PopulateElements(
-            _toElements, To.OrdinalIterator(toOrdinal), _elementEqualOrdinalMap.ToOrdinalIdentityTranslator))
+            _toElements, To.ElementOrdinals(toOrdinal), _elementEqualOrdinalMap.ToOrdinalIdentityTranslator))
         {
             return false;
         }
@@ -103,12 +103,9 @@ public class DiffEqualityCollectionMapper : DiffEqualityTypeMapper
         ArgumentNullException.ThrowIfNull(typeState);
         ArgumentNullException.ThrowIfNull(identityTranslator);
 
-        IHollowOrdinalIterator iterator = typeState.OrdinalIterator(ordinal);
         int hashCode = 0;
 
-        for (int elementOrdinal = iterator.Next();
-            elementOrdinal != IHollowOrdinalIterator.NoMoreOrdinals;
-            elementOrdinal = iterator.Next())
+        foreach (int elementOrdinal in typeState.ElementOrdinals(ordinal))
         {
             int identity = identityTranslator(elementOrdinal);
 
@@ -129,13 +126,11 @@ public class DiffEqualityCollectionMapper : DiffEqualityTypeMapper
     }
 
     private bool PopulateElements(
-        IntList elements, IHollowOrdinalIterator iterator, Func<int, int> identityTranslator)
+        IntList elements, IEnumerable<int> elementOrdinals, Func<int, int> identityTranslator)
     {
         elements.Clear();
 
-        for (int elementOrdinal = iterator.Next();
-            elementOrdinal != IHollowOrdinalIterator.NoMoreOrdinals;
-            elementOrdinal = iterator.Next())
+        foreach (int elementOrdinal in elementOrdinals)
         {
             int identity = identityTranslator(elementOrdinal);
 
@@ -172,12 +167,9 @@ public sealed class DiffEqualityOrderedListMapper(
         ArgumentNullException.ThrowIfNull(typeState);
         ArgumentNullException.ThrowIfNull(identityTranslator);
 
-        IHollowOrdinalIterator iterator = typeState.OrdinalIterator(ordinal);
         int hashCode = 0;
 
-        for (int elementOrdinal = iterator.Next();
-            elementOrdinal != IHollowOrdinalIterator.NoMoreOrdinals;
-            elementOrdinal = iterator.Next())
+        foreach (int elementOrdinal in typeState.ElementOrdinals(ordinal))
         {
             int identity = identityTranslator(elementOrdinal);
 

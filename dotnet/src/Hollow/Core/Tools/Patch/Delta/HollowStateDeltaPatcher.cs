@@ -428,8 +428,8 @@ public sealed class HollowStateDeltaPatcher
         HollowSetTypeReadState fromState, HollowSetTypeReadState toState) =>
         ordinal =>
             fromState.Size(ordinal) == toState.Size(ordinal)
-            && fromState.OrdinalIterator(ordinal).AsEnumerable().Order()
-                .SequenceEqual(toState.OrdinalIterator(ordinal).AsEnumerable().Order());
+            && fromState.ElementOrdinals(ordinal).Order()
+                .SequenceEqual(toState.ElementOrdinals(ordinal).Order());
 
     /// <summary>
     /// Compares two maps by their entries, sorted, each entry packed into one long so that a key and
@@ -439,22 +439,16 @@ public sealed class HollowStateDeltaPatcher
         HollowMapTypeReadState fromState, HollowMapTypeReadState toState) =>
         ordinal =>
             fromState.Size(ordinal) == toState.Size(ordinal)
-            && Entries(fromState, ordinal).SequenceEqual(Entries(toState, ordinal));
+            && SortedEntries(fromState, ordinal).SequenceEqual(SortedEntries(toState, ordinal));
 
-    private static IEnumerable<long> Entries(HollowMapTypeReadState typeState, int ordinal)
-    {
-        List<long> entries = [];
-        IHollowMapEntryOrdinalIterator iterator = typeState.OrdinalIterator(ordinal);
-
-        while (iterator.Next())
-        {
-            entries.Add(((long)iterator.Key << 32) | (uint)iterator.Value);
-        }
-
-        entries.Sort();
-
-        return entries;
-    }
+    /// <summary>
+    /// A map record's entries, each packed into one long so that a key and its value sort and compare
+    /// together, in order.
+    /// </summary>
+    private static IEnumerable<long> SortedEntries(HollowMapTypeReadState typeState, int ordinal) =>
+        typeState.Entries(ordinal)
+            .Select(entry => ((long)entry.KeyOrdinal << 32) | (uint)entry.ValueOrdinal)
+            .Order();
 
     /// <summary>
     /// The schemas both states have, narrowed for an object type to the fields both declare.

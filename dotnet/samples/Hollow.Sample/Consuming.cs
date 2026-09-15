@@ -303,11 +303,8 @@ internal static class Consuming
         foreach (string prefix in (string[])["the", "away", "z"])
         {
             List<string> matches = [];
-            IHollowOrdinalIterator iterator = titles.FindKeysWithPrefix(prefix);
 
-            for (int ordinal = iterator.Next();
-                ordinal != IHollowOrdinalIterator.NoMoreOrdinals;
-                ordinal = iterator.Next())
+            foreach (int ordinal in titles.FindKeysWithPrefix(prefix))
             {
                 matches.Add(api.GetMovie(ordinal)?.Title ?? "?");
             }

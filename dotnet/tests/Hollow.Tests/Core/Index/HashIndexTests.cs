@@ -479,6 +479,7 @@ public class HashIndexTests
             Assert.True(result.Contains(ordinal));
         }
 
-        Assert.False(result.Contains(IHollowOrdinalIterator.NoMoreOrdinals - 1));
+        // An ordinal no record has, to prove Contains is not answering yes to everything.
+        Assert.False(result.Contains(int.MaxValue - 1));
     }
 }

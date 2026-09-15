@@ -142,24 +142,23 @@ public class CollectionDeltaTests
         foreach (int ordinal in lists.PopulatedOrdinals.EnumerateSetBits())
         {
             // Order is part of a list's identity, so it is compared as written.
-            listContents[ordinal] = [.. lists.OrdinalIterator(ordinal).AsEnumerable()];
+            listContents[ordinal] = [.. lists.ElementOrdinals(ordinal).AsEnumerable()];
         }
 
         Dictionary<int, int[]> setContents = [];
         foreach (int ordinal in sets.PopulatedOrdinals.EnumerateSetBits())
         {
             // Iteration order is the hash table's, which the bucket count may legitimately change.
-            setContents[ordinal] = [.. sets.OrdinalIterator(ordinal).AsEnumerable().Order()];
+            setContents[ordinal] = [.. sets.ElementOrdinals(ordinal).AsEnumerable().Order()];
         }
 
         Dictionary<int, (int Key, int Value)[]> mapContents = [];
         foreach (int ordinal in maps.PopulatedOrdinals.EnumerateSetBits())
         {
             List<(int Key, int Value)> entries = [];
-            IHollowMapEntryOrdinalIterator iterator = maps.OrdinalIterator(ordinal);
-            while (iterator.Next())
+            foreach (HollowMapEntry entry in maps.Entries(ordinal))
             {
-                entries.Add((iterator.Key, iterator.Value));
+                entries.Add((entry.KeyOrdinal, entry.ValueOrdinal));
             }
 
             mapContents[ordinal] = [.. entries.Order()];

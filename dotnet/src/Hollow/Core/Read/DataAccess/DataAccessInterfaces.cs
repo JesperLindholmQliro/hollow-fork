@@ -221,8 +221,11 @@ public interface IHollowCollectionTypeDataAccess : IHollowTypeDataAccess
     /// <summary>The number of elements in the given record.</summary>
     int Size(int ordinal);
 
-    /// <summary>Iterates the element ordinals of the given record.</summary>
-    IHollowOrdinalIterator OrdinalIterator(int ordinal);
+    /// <summary>
+    /// The element ordinals of the given record.
+    /// </summary>
+    /// <remarks>Named <c>ordinalIterator</c> in Java, where it hands back a cursor.</remarks>
+    IEnumerable<int> ElementOrdinals(int ordinal);
 }
 
 /// <summary>
@@ -258,10 +261,10 @@ public interface IHollowSetTypeDataAccess : IHollowCollectionTypeDataAccess
     int RelativeBucketValue(int ordinal, int bucketIndex);
 
     /// <summary>
-    /// Iterates the elements of the given record whose hash code matches
-    /// <paramref name="hashCode"/>.
+    /// The elements of the given record whose hash code matches <paramref name="hashCode"/>.
     /// </summary>
-    IHollowOrdinalIterator PotentialMatchOrdinalIterator(int ordinal, int hashCode);
+    /// <remarks>Named <c>potentialMatchOrdinalIterator</c> in Java.</remarks>
+    IEnumerable<int> PotentialMatchElementOrdinals(int ordinal, int hashCode);
 
     /// <summary>
     /// The ordinal of the element matching <paramref name="hashKey"/>, or
@@ -300,13 +303,16 @@ public interface IHollowMapTypeDataAccess : IHollowTypeDataAccess
     long RelativeBucket(int ordinal, int bucketIndex);
 
     /// <summary>
-    /// Iterates the entries of the given record whose key hash code matches
-    /// <paramref name="hashCode"/>.
+    /// The entries of the given record whose key hash code matches <paramref name="hashCode"/>.
     /// </summary>
-    IHollowMapEntryOrdinalIterator PotentialMatchOrdinalIterator(int ordinal, int hashCode);
+    /// <remarks>Named <c>potentialMatchOrdinalIterator</c> in Java.</remarks>
+    IEnumerable<HollowMapEntry> PotentialMatchEntries(int ordinal, int hashCode);
 
-    /// <summary>Iterates every entry of the given record.</summary>
-    IHollowMapEntryOrdinalIterator OrdinalIterator(int ordinal);
+    /// <summary>
+    /// Every entry of the given record.
+    /// </summary>
+    /// <remarks>Named <c>ordinalIterator</c> in Java, where it hands back a cursor.</remarks>
+    IEnumerable<HollowMapEntry> Entries(int ordinal);
 
     /// <summary>
     /// The key ordinal of the entry matching <paramref name="hashKey"/>, or

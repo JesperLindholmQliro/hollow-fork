@@ -297,8 +297,8 @@ public class HollowListTypeApi(HollowApi api, IHollowListTypeDataAccess typeData
     public int GetElementOrdinal(int ordinal, int listIndex) =>
         TypeDataAccess.GetElementOrdinal(ordinal, listIndex);
 
-    /// <summary>Iterates the element ordinals of the given record.</summary>
-    public IHollowOrdinalIterator OrdinalIterator(int ordinal) => TypeDataAccess.OrdinalIterator(ordinal);
+    /// <summary>The element ordinals of the given record.</summary>
+    public IEnumerable<int> ElementOrdinals(int ordinal) => TypeDataAccess.ElementOrdinals(ordinal);
 }
 
 /// <summary>
@@ -326,12 +326,12 @@ public class HollowSetTypeApi(HollowApi api, IHollowSetTypeDataAccess typeDataAc
     public int FindElement(int ordinal, params object?[] hashKey) =>
         TypeDataAccess.FindElement(ordinal, hashKey);
 
-    /// <summary>Iterates the elements whose hash code matches.</summary>
-    public IHollowOrdinalIterator PotentialMatchOrdinalIterator(int ordinal, int hashCode) =>
-        TypeDataAccess.PotentialMatchOrdinalIterator(ordinal, hashCode);
+    /// <summary>The elements whose hash code matches.</summary>
+    public IEnumerable<int> PotentialMatchElementOrdinals(int ordinal, int hashCode) =>
+        TypeDataAccess.PotentialMatchElementOrdinals(ordinal, hashCode);
 
-    /// <summary>Iterates the element ordinals of the given record.</summary>
-    public IHollowOrdinalIterator OrdinalIterator(int ordinal) => TypeDataAccess.OrdinalIterator(ordinal);
+    /// <summary>The element ordinals of the given record.</summary>
+    public IEnumerable<int> ElementOrdinals(int ordinal) => TypeDataAccess.ElementOrdinals(ordinal);
 }
 
 /// <summary>
@@ -364,11 +364,10 @@ public class HollowMapTypeApi(HollowApi api, IHollowMapTypeDataAccess typeDataAc
     public long FindEntry(int ordinal, params object?[] hashKey) =>
         TypeDataAccess.FindEntry(ordinal, hashKey);
 
-    /// <summary>Iterates every entry of the given record.</summary>
-    public IHollowMapEntryOrdinalIterator OrdinalIterator(int ordinal) =>
-        TypeDataAccess.OrdinalIterator(ordinal);
+    /// <summary>Every entry of the given record.</summary>
+    public IEnumerable<HollowMapEntry> Entries(int ordinal) => TypeDataAccess.Entries(ordinal);
 
-    /// <summary>Iterates the entries whose key hash code matches.</summary>
-    public IHollowMapEntryOrdinalIterator PotentialMatchOrdinalIterator(int ordinal, int hashCode) =>
-        TypeDataAccess.PotentialMatchOrdinalIterator(ordinal, hashCode);
+    /// <summary>The entries whose key hash code matches.</summary>
+    public IEnumerable<HollowMapEntry> PotentialMatchEntries(int ordinal, int hashCode) =>
+        TypeDataAccess.PotentialMatchEntries(ordinal, hashCode);
 }

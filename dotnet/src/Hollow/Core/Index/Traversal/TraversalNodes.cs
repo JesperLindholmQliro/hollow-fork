@@ -341,11 +341,8 @@ internal class HollowIndexerCollectionTraversalNode(
         }
 
         int numMatches = 0;
-        IHollowOrdinalIterator iterator = CollectionDataAccess.OrdinalIterator(ordinal);
 
-        for (int elementOrdinal = iterator.Next();
-            elementOrdinal != IHollowOrdinalIterator.NoMoreOrdinals;
-            elementOrdinal = iterator.Next())
+        foreach (int elementOrdinal in CollectionDataAccess.ElementOrdinals(ordinal))
         {
             PrepareMultiply();
             Child.Traverse(elementOrdinal);
@@ -415,14 +412,13 @@ internal sealed class HollowIndexerMapTraversalNode(
     protected override int DoTraversal(int ordinal)
     {
         int numMatches = 0;
-        IHollowMapEntryOrdinalIterator iterator = MapDataAccess.OrdinalIterator(ordinal);
 
-        while (iterator.Next())
+        foreach (HollowMapEntry entry in MapDataAccess.Entries(ordinal))
         {
             PrepareMultiply();
 
-            _keyNode?.Traverse(iterator.Key);
-            _valueNode?.Traverse(iterator.Value);
+            _keyNode?.Traverse(entry.KeyOrdinal);
+            _valueNode?.Traverse(entry.ValueOrdinal);
 
             numMatches += DoMultiply();
         }

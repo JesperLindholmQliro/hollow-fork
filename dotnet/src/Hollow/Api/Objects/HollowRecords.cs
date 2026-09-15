@@ -402,7 +402,7 @@ public abstract class HollowSet<T> : IHollowRecord, IReadOnlyCollection<T>
     /// <inheritdoc />
     public IEnumerator<T> GetEnumerator()
     {
-        foreach (int elementOrdinal in SetDelegate.Iterator(Ordinal).AsEnumerable())
+        foreach (int elementOrdinal in SetDelegate.ElementOrdinals(Ordinal))
         {
             yield return InstantiateElement(elementOrdinal);
         }
@@ -493,12 +493,10 @@ public abstract class HollowMap<TKey, TValue> : IHollowRecord, IReadOnlyCollecti
     /// <inheritdoc />
     public IEnumerator<KeyValuePair<TKey, TValue>> GetEnumerator()
     {
-        IHollowMapEntryOrdinalIterator iterator = MapDelegate.Iterator(Ordinal);
-
-        while (iterator.Next())
+        foreach (HollowMapEntry entry in MapDelegate.Entries(Ordinal))
         {
             yield return new KeyValuePair<TKey, TValue>(
-                InstantiateKey(iterator.Key), InstantiateValue(iterator.Value));
+                InstantiateKey(entry.KeyOrdinal), InstantiateValue(entry.ValueOrdinal));
         }
     }
 

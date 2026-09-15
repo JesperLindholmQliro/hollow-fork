@@ -252,16 +252,11 @@ public sealed class HollowSetCopier : HollowRecordCopier
         _record.Reset();
 
         string elementType = ((HollowSetSchema)_readState.Schema).ElementType;
-        HollowSetOrdinalIterator iterator = new(ordinal, _readState);
-
-        int elementOrdinal = iterator.Next();
-        while (elementOrdinal != IHollowOrdinalIterator.NoMoreOrdinals)
+        foreach (HollowSetElement element in OrdinalEnumerables.SetElementsWithBuckets(_readState, ordinal))
         {
-            int remappedOrdinal = OrdinalRemapper.GetMappedOrdinal(elementType, elementOrdinal);
+            int remappedOrdinal = OrdinalRemapper.GetMappedOrdinal(elementType, element.Ordinal);
             _record.AddElement(
-                remappedOrdinal, PreserveHashPositions ? iterator.CurrentBucket : remappedOrdinal);
-
-            elementOrdinal = iterator.Next();
+                remappedOrdinal, PreserveHashPositions ? element.Bucket : remappedOrdinal);
         }
 
         return _record;
@@ -298,15 +293,13 @@ public sealed class HollowMapCopier : HollowRecordCopier
         _record.Reset();
 
         HollowMapSchema schema = (HollowMapSchema)_readState.Schema;
-        HollowMapEntryOrdinalIteratorImpl iterator = new(ordinal, _readState);
-
-        while (iterator.Next())
+        foreach (HollowMapEntry entry in _readState.Entries(ordinal))
         {
-            int keyOrdinal = OrdinalRemapper.GetMappedOrdinal(schema.KeyType, iterator.Key);
-            int valueOrdinal = OrdinalRemapper.GetMappedOrdinal(schema.ValueType, iterator.Value);
+            int keyOrdinal = OrdinalRemapper.GetMappedOrdinal(schema.KeyType, entry.KeyOrdinal);
+            int valueOrdinal = OrdinalRemapper.GetMappedOrdinal(schema.ValueType, entry.ValueOrdinal);
 
             _record.AddEntry(
-                keyOrdinal, valueOrdinal, PreserveHashPositions ? iterator.CurrentBucket : keyOrdinal);
+                keyOrdinal, valueOrdinal, PreserveHashPositions ? entry.Bucket : keyOrdinal);
         }
 
         return _record;

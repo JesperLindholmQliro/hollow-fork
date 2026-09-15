@@ -105,8 +105,8 @@ public class DeltaHistoricalStateCreatorTests
 
             // Order is part of a list's identity, so it is compared as written.
             Assert.Equal(
-                before.OrdinalIterator(ordinal).AsEnumerable(),
-                historical.OrdinalIterator(mapped).AsEnumerable());
+                before.ElementOrdinals(ordinal).AsEnumerable(),
+                historical.ElementOrdinals(mapped).AsEnumerable());
         }
     }
 
@@ -135,8 +135,8 @@ public class DeltaHistoricalStateCreatorTests
 
             // A set has no order of its own, so comparing it sorted is what the type actually promises.
             Assert.Equal(
-                before.OrdinalIterator(ordinal).AsEnumerable().Order(),
-                historical.OrdinalIterator(mapped).AsEnumerable().Order());
+                before.ElementOrdinals(ordinal).AsEnumerable().Order(),
+                historical.ElementOrdinals(mapped).AsEnumerable().Order());
         }
     }
 
@@ -455,11 +455,9 @@ public class DeltaHistoricalStateCreatorTests
     private static (int Key, int Value)[] Entries(HollowMapTypeReadState typeState, int ordinal)
     {
         List<(int Key, int Value)> entries = [];
-        IHollowMapEntryOrdinalIterator iterator = typeState.OrdinalIterator(ordinal);
-
-        while (iterator.Next())
+        foreach (HollowMapEntry entry in typeState.Entries(ordinal))
         {
-            entries.Add((iterator.Key, iterator.Value));
+            entries.Add((entry.KeyOrdinal, entry.ValueOrdinal));
         }
 
         return [.. entries.Order()];

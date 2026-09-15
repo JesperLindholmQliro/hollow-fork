@@ -248,19 +248,19 @@ public class ObjectMapperTests
         int tagsOrdinal = catalogues.ReadOrdinal(ordinal, catalogues.Schema.GetPosition("Tags"));
         Assert.Equal(
             ["classic", "restored"],
-            tags.OrdinalIterator(tagsOrdinal).AsEnumerable().Select(o => strings.ReadString(o, stringValue)));
+            tags.ElementOrdinals(tagsOrdinal).AsEnumerable().Select(o => strings.ReadString(o, stringValue)));
 
         int yearsOrdinal = catalogues.ReadOrdinal(ordinal, catalogues.Schema.GetPosition("Years"));
         Assert.Equal(
             [1957, 1966],
-            years.OrdinalIterator(yearsOrdinal).AsEnumerable().Select(o => integers.ReadInt(o, intValue)).Order());
+            years.ElementOrdinals(yearsOrdinal).AsEnumerable().Select(o => integers.ReadInt(o, intValue)).Order());
 
         int ratingsOrdinal = catalogues.ReadOrdinal(ordinal, catalogues.Schema.GetPosition("RatingsByTitle"));
         Dictionary<string, int> readRatings = [];
-        IHollowMapEntryOrdinalIterator iterator = ratings.OrdinalIterator(ratingsOrdinal);
-        while (iterator.Next())
+        foreach (HollowMapEntry entry in ratings.Entries(ratingsOrdinal))
         {
-            readRatings[strings.ReadString(iterator.Key, stringValue)!] = integers.ReadInt(iterator.Value, intValue);
+            readRatings[strings.ReadString(entry.KeyOrdinal, stringValue)!] =
+                integers.ReadInt(entry.ValueOrdinal, intValue);
         }
 
         Assert.Equal(9, readRatings["Persona"]);
@@ -377,7 +377,7 @@ public class ObjectMapperTests
         Assert.Equal("root", FollowStringReference(readEngine, nodes, ordinal, "Label"));
 
         int childrenOrdinal = nodes.ReadOrdinal(ordinal, nodes.Schema.GetPosition("Children"));
-        int[] childOrdinals = [.. children.OrdinalIterator(childrenOrdinal).AsEnumerable()];
+        int[] childOrdinals = [.. children.ElementOrdinals(childrenOrdinal).AsEnumerable()];
 
         Assert.Equal(2, childOrdinals.Length);
         Assert.Equal(
@@ -386,7 +386,7 @@ public class ObjectMapperTests
 
         // And the grandchild, one level deeper.
         int rightChildren = nodes.ReadOrdinal(childOrdinals[1], nodes.Schema.GetPosition("Children"));
-        int leaf = Assert.Single(children.OrdinalIterator(rightChildren).AsEnumerable());
+        int leaf = Assert.Single(children.ElementOrdinals(rightChildren).AsEnumerable());
         Assert.Equal("leaf", FollowStringReference(readEngine, nodes, leaf, "Label"));
     }
 

@@ -338,7 +338,7 @@ internal sealed class TernarySearchTree
     /// Every ordinal indexed under a key starting with <paramref name="prefix"/>. An empty prefix
     /// reaches every ordinal in the tree.
     /// </summary>
-    internal IHollowOrdinalIterator FindKeysWithPrefix(string prefix)
+    internal IEnumerable<int> FindKeysWithPrefix(string prefix)
     {
         ArgumentNullException.ThrowIfNull(prefix);
 
@@ -390,7 +390,7 @@ internal sealed class TernarySearchTree
             }
         }
 
-        return new OrdinalSetIterator(ordinals);
+        return ordinals;
     }
 
     /// <summary>
@@ -436,14 +436,4 @@ internal sealed class TernarySearchTree
     private void SetEndNode(long nodeIndex) =>
         _nodes.SetElementValue((nodeIndex * _bitsPerNode) + _isEndFlagOffset, 1, 1);
 
-    /// <summary>
-    /// Hands out the ordinals a prefix query gathered.
-    /// </summary>
-    private sealed class OrdinalSetIterator(HashSet<int> ordinals) : IHollowOrdinalIterator
-    {
-        private readonly IEnumerator<int> _enumerator = ordinals.GetEnumerator();
-
-        public int Next() =>
-            _enumerator.MoveNext() ? _enumerator.Current : IHollowOrdinalIterator.NoMoreOrdinals;
-    }
 }

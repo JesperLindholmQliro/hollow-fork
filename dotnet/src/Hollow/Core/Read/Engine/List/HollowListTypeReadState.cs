@@ -282,7 +282,7 @@ public sealed partial class HollowListTypeReadState : HollowTypeReadState, IHoll
     }
 
     /// <inheritdoc />
-    public IHollowOrdinalIterator OrdinalIterator(int ordinal) => new HollowListOrdinalIterator(ordinal, this);
+    public IEnumerable<int> ElementOrdinals(int ordinal) => OrdinalEnumerables.ListElements(this, ordinal);
 
     /// <summary>
     /// The shard holding <paramref name="ordinal"/>, read through one load of the shards holder so

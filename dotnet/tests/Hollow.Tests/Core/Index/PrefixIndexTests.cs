@@ -81,7 +81,7 @@ public class PrefixIndexTests
         return (writeEngine, readEngine, mapper);
     }
 
-    private static HashSet<int> Ordinals(IHollowOrdinalIterator iterator) => [.. iterator.AsEnumerable()];
+    private static HashSet<int> Ordinals(IEnumerable<int> ordinals) => [.. ordinals];
 
     /// <summary>Splits each key on whitespace, so a query matches a word anywhere in the title.</summary>
     private static IEnumerable<string> SplitOnWhitespace(IEnumerable<string> keys) =>
@@ -461,7 +461,7 @@ public class PrefixIndexTests
     }
 
     /// <summary>The titles of the records a query returned.</summary>
-    private static List<string> Titles(HollowReadStateEngine readEngine, IHollowOrdinalIterator iterator)
+    private static List<string> Titles(HollowReadStateEngine readEngine, IEnumerable<int> ordinals)
     {
         HollowObjectTypeReadState movies =
             (HollowObjectTypeReadState)readEngine.GetTypeState("SimpleMovie")!;
@@ -473,7 +473,7 @@ public class PrefixIndexTests
 
         return
         [
-            .. Ordinals(iterator)
+            .. Ordinals(ordinals)
                 .Select(ordinal => strings.ReadString(movies.ReadOrdinal(ordinal, namePosition), valuePosition)!)
                 .Order(StringComparer.Ordinal),
         ];

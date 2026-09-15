@@ -119,11 +119,17 @@ public sealed class MultiLinkedElementArray
             : (int)(listPointer & int.MaxValue);
     }
 
-    /// <summary>Iterates the elements of the list at <paramref name="listIndex"/>.</summary>
-    public IHollowOrdinalIterator Iterator(int listIndex) =>
+    /// <summary>
+    /// The elements of the list at <paramref name="listIndex"/>.
+    /// </summary>
+    /// <remarks>
+    /// Named <c>iterator</c> in Java, where each of the two layouts below has its own
+    /// <c>HollowOrdinalIterator</c> class.
+    /// </remarks>
+    public IEnumerable<int> Elements(int listIndex) =>
         (_listPointersAndSizes.Get(listIndex) & InlineMarker) != 0
-            ? new InlineElementIterator(this, listIndex)
-            : new LinkedElementIterator(this, listIndex);
+            ? InlineElements(listIndex)
+            : LinkedElements(listIndex);
 
     /// <summary>Returns the backing storage to the recycler.</summary>
     public void Destroy()
@@ -135,66 +141,42 @@ public sealed class MultiLinkedElementArray
     /// <summary>
     /// Walks a list that spilled into the linked array, following the head link backwards.
     /// </summary>
-    private sealed class LinkedElementIterator(MultiLinkedElementArray owner, int listIndex)
-        : IHollowOrdinalIterator
+    private IEnumerable<int> LinkedElements(int listIndex)
     {
-        private int _currentElement = (int)(owner._listPointersAndSizes.Get(listIndex) >> 32);
-        private bool _lastElement;
-        private bool _finished;
+        int currentElement = (int)(_listPointersAndSizes.Get(listIndex) >> 32);
 
-        public int Next()
+        while (true)
         {
-            if (_finished)
-            {
-                return IHollowOrdinalIterator.NoMoreOrdinals;
-            }
-
-            if (_lastElement)
-            {
-                _finished = true;
-
-                // The tail link is the spilled header word, whose high half held the first element.
-                return (int)((ulong)owner._linkedElements.Get(_currentElement) >> 32) & int.MaxValue;
-            }
-
-            long element = owner._linkedElements.Get(_currentElement);
+            long element = _linkedElements.Get(currentElement);
 
             if (element < 0)
             {
-                // The spilled header word, whose low half holds the second element.
-                _lastElement = true;
-                return (int)element & int.MaxValue;
+                // The spilled header word: its low half holds the second element and its high half the
+                // first, so the walk ends with the two of them.
+                yield return (int)element & int.MaxValue;
+                yield return (int)((ulong)element >> 32) & int.MaxValue;
+
+                yield break;
             }
 
-            _currentElement = (int)element;
-            return (int)(element >> 32);
+            currentElement = (int)element;
+
+            yield return (int)(element >> 32);
         }
     }
 
     /// <summary>
     /// Walks a list of one or two elements held in its own header word.
     /// </summary>
-    private sealed class InlineElementIterator(MultiLinkedElementArray owner, int listIndex)
-        : IHollowOrdinalIterator
+    private IEnumerable<int> InlineElements(int listIndex)
     {
-        private int _position;
+        long element = _listPointersAndSizes.Get(listIndex);
 
-        public int Next()
+        if ((element & 0xFFFFFFFFL) != 0)
         {
-            if (_position > 1)
-            {
-                return IHollowOrdinalIterator.NoMoreOrdinals;
-            }
-
-            long element = owner._listPointersAndSizes.Get(listIndex);
-
-            if (_position++ == 0 && (element & 0xFFFFFFFFL) != 0)
-            {
-                return (int)element & int.MaxValue;
-            }
-
-            _position++;
-            return (int)((ulong)element >> 32) & int.MaxValue;
+            yield return (int)element & int.MaxValue;
         }
+
+        yield return (int)((ulong)element >> 32) & int.MaxValue;
     }
 }

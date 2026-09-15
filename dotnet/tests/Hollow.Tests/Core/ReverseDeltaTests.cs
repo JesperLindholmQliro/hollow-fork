@@ -428,23 +428,22 @@ public class ReverseDeltaTests
         Dictionary<int, int[]> listContents = [];
         foreach (int ordinal in lists.PopulatedOrdinals.EnumerateSetBits())
         {
-            listContents[ordinal] = [.. lists.OrdinalIterator(ordinal).AsEnumerable()];
+            listContents[ordinal] = [.. lists.ElementOrdinals(ordinal).AsEnumerable()];
         }
 
         Dictionary<int, int[]> setContents = [];
         foreach (int ordinal in sets.PopulatedOrdinals.EnumerateSetBits())
         {
-            setContents[ordinal] = [.. sets.OrdinalIterator(ordinal).AsEnumerable().Order()];
+            setContents[ordinal] = [.. sets.ElementOrdinals(ordinal).AsEnumerable().Order()];
         }
 
         Dictionary<int, (int Key, int Value)[]> mapContents = [];
         foreach (int ordinal in maps.PopulatedOrdinals.EnumerateSetBits())
         {
             List<(int Key, int Value)> entries = [];
-            IHollowMapEntryOrdinalIterator iterator = maps.OrdinalIterator(ordinal);
-            while (iterator.Next())
+            foreach (HollowMapEntry entry in maps.Entries(ordinal))
             {
-                entries.Add((iterator.Key, iterator.Value));
+                entries.Add((entry.KeyOrdinal, entry.ValueOrdinal));
             }
 
             mapContents[ordinal] = [.. entries.Order()];

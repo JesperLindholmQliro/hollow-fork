@@ -142,15 +142,7 @@ public abstract class HollowStringifier
         int ordinal,
         bool sortSingleFieldSetElements)
     {
-        IHollowOrdinalIterator iterator = typeDataAccess.OrdinalIterator(ordinal);
-        List<int> elementOrdinals = [];
-
-        for (int element = iterator.Next();
-            element != IHollowOrdinalIterator.NoMoreOrdinals;
-            element = iterator.Next())
-        {
-            elementOrdinals.Add(element);
-        }
+        List<int> elementOrdinals = [.. typeDataAccess.ElementOrdinals(ordinal)];
 
         if (sortSingleFieldSetElements
             && dataAccess.GetTypeDataAccess(typeDataAccess.Schema.ElementType)
@@ -248,19 +240,17 @@ public sealed class HollowRecordStringifier(
         AppendHeader(writer, schema.Name, ordinal);
         indentation++;
 
-        IHollowMapEntryOrdinalIterator iterator = typeDataAccess.OrdinalIterator(ordinal);
-
-        while (iterator.Next())
+        foreach (HollowMapEntry entry in typeDataAccess.Entries(ordinal))
         {
             writer.Write(Newline);
             AppendIndentation(writer, indentation);
             writer.Write("k: ");
-            AppendStringify(writer, dataAccess, schema.KeyType, iterator.Key, indentation);
+            AppendStringify(writer, dataAccess, schema.KeyType, entry.KeyOrdinal, indentation);
 
             writer.Write(Newline);
             AppendIndentation(writer, indentation);
             writer.Write("v: ");
-            AppendStringify(writer, dataAccess, schema.ValueType, iterator.Value, indentation);
+            AppendStringify(writer, dataAccess, schema.ValueType, entry.ValueOrdinal, indentation);
         }
     }
 

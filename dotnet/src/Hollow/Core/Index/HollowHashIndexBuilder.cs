@@ -280,7 +280,7 @@ internal sealed class HollowHashIndexBuilder
 
             FillSelectTable(
                 finalSelectArray,
-                intermediateSelectLists.Iterator(i),
+                intermediateSelectLists.Elements(i),
                 currentSelectArrayBucket,
                 matchIndexBucketMask);
 
@@ -321,13 +321,11 @@ internal sealed class HollowHashIndexBuilder
     /// </summary>
     private void FillSelectTable(
         FixedLengthElementArray finalSelectArray,
-        IHollowOrdinalIterator selectOrdinalIterator,
+        IEnumerable<int> selectOrdinals,
         long currentSelectArrayBucket,
         int matchIndexBucketMask)
     {
-        for (int selectOrdinal = selectOrdinalIterator.Next();
-            selectOrdinal != IHollowOrdinalIterator.NoMoreOrdinals;
-            selectOrdinal = selectOrdinalIterator.Next())
+        foreach (int selectOrdinal in selectOrdinals)
         {
             int selectBucket = HashCodes.HashInt(selectOrdinal) & matchIndexBucketMask;
             int bucketOrdinal = ReadSelectBucket(
@@ -464,11 +462,7 @@ internal sealed class HollowHashIndexBuilder
             Array.Fill(selectArray, -1, 0, predictedBuckets);
 
             int setSize = 0;
-            IHollowOrdinalIterator iterator = elementArray.Iterator(i);
-
-            for (int selectOrdinal = iterator.Next();
-                selectOrdinal != IHollowOrdinalIterator.NoMoreOrdinals;
-                selectOrdinal = iterator.Next())
+            foreach (int selectOrdinal in elementArray.Elements(i))
             {
                 int bucket = HashCodes.HashInt(selectOrdinal) & hashMask;
 

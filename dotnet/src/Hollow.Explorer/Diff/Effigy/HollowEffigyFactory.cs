@@ -165,11 +165,8 @@ public sealed class HollowEffigyFactory
         HollowEffigy effigy, IHollowCollectionTypeDataAccess typeDataAccess)
     {
         List<HollowEffigyField> fields = [];
-        IHollowOrdinalIterator iterator = typeDataAccess.OrdinalIterator(effigy.Ordinal);
 
-        for (int elementOrdinal = iterator.Next();
-            elementOrdinal != IHollowOrdinalIterator.NoMoreOrdinals;
-            elementOrdinal = iterator.Next())
+        foreach (int elementOrdinal in typeDataAccess.ElementOrdinals(effigy.Ordinal))
         {
             HollowEffigy? element = Effigy(
                 typeDataAccess.DataAccess, typeDataAccess.Schema.ElementType, elementOrdinal);
@@ -186,20 +183,21 @@ public sealed class HollowEffigyFactory
     {
         HollowMapSchema schema = typeDataAccess.Schema;
         List<HollowEffigyField> fields = [];
-        IHollowMapEntryOrdinalIterator iterator = typeDataAccess.OrdinalIterator(effigy.Ordinal);
 
-        while (iterator.Next())
+        foreach (HollowMapEntry mapEntry in typeDataAccess.Entries(effigy.Ordinal))
         {
             // An entry has no record of its own, so it becomes a node standing for the pairing.
             HollowEffigy entry = new("Map.Entry");
 
             entry.Add(new HollowEffigyField(
-                "key", schema.KeyType, Effigy(typeDataAccess.DataAccess, schema.KeyType, iterator.Key)));
+                "key",
+                schema.KeyType,
+                Effigy(typeDataAccess.DataAccess, schema.KeyType, mapEntry.KeyOrdinal)));
 
             entry.Add(new HollowEffigyField(
                 "value",
                 schema.ValueType,
-                Effigy(typeDataAccess.DataAccess, schema.ValueType, iterator.Value)));
+                Effigy(typeDataAccess.DataAccess, schema.ValueType, mapEntry.ValueOrdinal)));
 
             fields.Add(new HollowEffigyField("entry", "Map.Entry", entry));
         }

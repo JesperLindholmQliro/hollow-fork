@@ -139,11 +139,13 @@ public sealed class ValueFieldPath
                 bool throughKeys = IsKeySegment(fieldIndex);
                 string keyOrValueType = throughKeys ? mapAccess.Schema.KeyType : mapAccess.Schema.ValueType;
 
-                IHollowMapEntryOrdinalIterator iterator = mapAccess.OrdinalIterator(ordinal);
-                while (iterator.Next())
+                foreach (HollowMapEntry entry in mapAccess.Entries(ordinal))
                 {
                     values.AddRange(
-                        FindValues(throughKeys ? iterator.Key : iterator.Value, keyOrValueType, fieldIndex + 1));
+                        FindValues(
+                            throughKeys ? entry.KeyOrdinal : entry.ValueOrdinal,
+                            keyOrValueType,
+                            fieldIndex + 1));
                 }
 
                 return values;
@@ -154,7 +156,7 @@ public sealed class ValueFieldPath
                 List<object?> values = [];
                 string elementType = collectionAccess.Schema.ElementType;
 
-                foreach (int elementOrdinal in collectionAccess.OrdinalIterator(ordinal).AsEnumerable())
+                foreach (int elementOrdinal in collectionAccess.ElementOrdinals(ordinal))
                 {
                     values.AddRange(FindValues(elementOrdinal, elementType, fieldIndex + 1));
                 }
@@ -191,20 +193,24 @@ public sealed class ValueFieldPath
                 bool throughKeys = IsKeySegment(fieldIndex);
                 string keyOrValueType = throughKeys ? mapAccess.Schema.KeyType : mapAccess.Schema.ValueType;
 
-                IHollowMapEntryOrdinalIterator iterator = mapAccess.OrdinalIterator(ordinal);
+                // The first entry alone, where Java advances the cursor once and reads it.
+                foreach (HollowMapEntry entry in mapAccess.Entries(ordinal))
+                {
+                    return FindValue(
+                        throughKeys ? entry.KeyOrdinal : entry.ValueOrdinal, keyOrValueType, fieldIndex + 1);
+                }
 
-                return iterator.Next()
-                    ? FindValue(throughKeys ? iterator.Key : iterator.Value, keyOrValueType, fieldIndex + 1)
-                    : null;
+                return null;
             }
 
             case IHollowCollectionTypeDataAccess collectionAccess:
             {
-                int elementOrdinal = collectionAccess.OrdinalIterator(ordinal).Next();
+                foreach (int elementOrdinal in collectionAccess.ElementOrdinals(ordinal))
+                {
+                    return FindValue(elementOrdinal, collectionAccess.Schema.ElementType, fieldIndex + 1);
+                }
 
-                return elementOrdinal == IHollowOrdinalIterator.NoMoreOrdinals
-                    ? null
-                    : FindValue(elementOrdinal, collectionAccess.Schema.ElementType, fieldIndex + 1);
+                return null;
             }
 
             case IHollowObjectTypeDataAccess objectAccess when _fieldTypes[fieldIndex] == FieldType.Reference:

@@ -237,8 +237,8 @@ public class ReshardingTests
             // the layout survived and not merely the membership. A consumer probes the table by bucket,
             // and an element that moved bucket is one it may fail to find.
             Assert.Equal(
-                beforeSets.OrdinalIterator(ordinal).AsEnumerable(),
-                afterSets.OrdinalIterator(ordinal).AsEnumerable());
+                beforeSets.ElementOrdinals(ordinal).AsEnumerable(),
+                afterSets.ElementOrdinals(ordinal).AsEnumerable());
         }
 
         HollowMapTypeReadState beforeMaps = Maps(before);
@@ -440,10 +440,9 @@ public class ReshardingTests
     {
         List<(int Key, int Value)> entries = [];
 
-        IHollowMapEntryOrdinalIterator iterator = readState.OrdinalIterator(ordinal);
-        while (iterator.Next())
+        foreach (HollowMapEntry entry in readState.Entries(ordinal))
         {
-            entries.Add((iterator.Key, iterator.Value));
+            entries.Add((entry.KeyOrdinal, entry.ValueOrdinal));
         }
 
         return entries;

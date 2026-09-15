@@ -299,7 +299,7 @@ public class HollowCombinerTests
         {
             HashSet<string> values =
             [
-                .. sets.OrdinalIterator(ordinal).AsEnumerable()
+                .. sets.ElementOrdinals(ordinal).AsEnumerable()
                     .Select(element => new GenericHollowObject(output, "C", element).GetString("c1")!),
             ];
 

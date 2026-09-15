@@ -162,18 +162,18 @@ public sealed class HollowRecordJsonStringifier(
             return;
         }
 
-        IHollowMapEntryOrdinalIterator iterator = typeDataAccess.OrdinalIterator(ordinal);
+        IEnumerable<HollowMapEntry> entries = typeDataAccess.Entries(ordinal);
 
         // A JSON key can only be a string, so only a key that is itself a value can become one — a key
         // that is a record has to become a list of pairs instead.
         if (dataAccess.GetTypeDataAccess(schema.KeyType) is IHollowObjectTypeDataAccess keyAccess
             && IsPrimitiveWrapper(keyAccess.Schema))
         {
-            KeyValueAsObject(writer, dataAccess, indentation, keyAccess, schema.ValueType, iterator);
+            KeyValueAsObject(writer, dataAccess, indentation, keyAccess, schema.ValueType, entries);
         }
         else
         {
-            KeyValueAsList(writer, dataAccess, indentation, schema.KeyType, schema.ValueType, iterator);
+            KeyValueAsList(writer, dataAccess, indentation, schema.KeyType, schema.ValueType, entries);
         }
     }
 
@@ -183,7 +183,7 @@ public sealed class HollowRecordJsonStringifier(
         int indentation,
         IHollowObjectTypeDataAccess keyTypeDataAccess,
         string valueType,
-        IHollowMapEntryOrdinalIterator iterator)
+        IEnumerable<HollowMapEntry> entries)
     {
         HollowObjectSchema keySchema = keyTypeDataAccess.Schema;
 
@@ -192,7 +192,7 @@ public sealed class HollowRecordJsonStringifier(
 
         bool firstEntry = true;
 
-        while (iterator.Next())
+        foreach (HollowMapEntry entry in entries)
         {
             if (!firstEntry)
             {
@@ -215,7 +215,7 @@ public sealed class HollowRecordJsonStringifier(
                 writer.Write("\"");
             }
 
-            AppendField(writer, dataAccess, keyTypeDataAccess, keySchema, iterator.Key, 0, indentation);
+            AppendField(writer, dataAccess, keyTypeDataAccess, keySchema, entry.KeyOrdinal, 0, indentation);
 
             if (needToQuoteKey)
             {
@@ -223,7 +223,7 @@ public sealed class HollowRecordJsonStringifier(
             }
 
             writer.Write(": ");
-            AppendStringify(writer, dataAccess, valueType, iterator.Value, indentation);
+            AppendStringify(writer, dataAccess, valueType, entry.ValueOrdinal, indentation);
         }
 
         if (prettyPrint && !firstEntry)
@@ -241,14 +241,14 @@ public sealed class HollowRecordJsonStringifier(
         int indentation,
         string keyType,
         string valueType,
-        IHollowMapEntryOrdinalIterator iterator)
+        IEnumerable<HollowMapEntry> entries)
     {
         writer.Write("[");
         AppendNewline(writer);
 
         bool firstEntry = true;
 
-        while (iterator.Next())
+        foreach (HollowMapEntry entry in entries)
         {
             if (!firstEntry)
             {
@@ -272,7 +272,7 @@ public sealed class HollowRecordJsonStringifier(
             }
 
             writer.Write("\"key\":");
-            AppendStringify(writer, dataAccess, keyType, iterator.Key, indentation + 1);
+            AppendStringify(writer, dataAccess, keyType, entry.KeyOrdinal, indentation + 1);
             writer.Write(",");
 
             if (prettyPrint)
@@ -282,7 +282,7 @@ public sealed class HollowRecordJsonStringifier(
             }
 
             writer.Write("\"value\":");
-            AppendStringify(writer, dataAccess, valueType, iterator.Value, indentation + 1);
+            AppendStringify(writer, dataAccess, valueType, entry.ValueOrdinal, indentation + 1);
 
             if (prettyPrint)
             {

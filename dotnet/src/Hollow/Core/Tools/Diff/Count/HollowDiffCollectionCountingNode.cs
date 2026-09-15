@@ -131,11 +131,7 @@ public sealed class HollowDiffCollectionCountingNode : HollowDiffCountingNode
 
         for (int i = 0; i < ordinals.Count; i++)
         {
-            IHollowOrdinalIterator iterator = typeState.OrdinalIterator(ordinals.Get(i));
-
-            for (int elementOrdinal = iterator.Next();
-                elementOrdinal != IHollowOrdinalIterator.NoMoreOrdinals;
-                elementOrdinal = iterator.Next())
+            foreach (int elementOrdinal in typeState.ElementOrdinals(ordinals.Get(i)))
             {
                 fillList.Add(elementOrdinal);
             }
@@ -277,12 +273,10 @@ public sealed class HollowDiffMapCountingNode : HollowDiffCountingNode
 
         for (int i = 0; i < ordinals.Count; i++)
         {
-            IHollowMapEntryOrdinalIterator iterator = typeState.OrdinalIterator(ordinals.Get(i));
-
-            while (iterator.Next())
+            foreach (HollowMapEntry entry in typeState.Entries(ordinals.Get(i)))
             {
-                fillKeys.Add(iterator.Key);
-                fillValues.Add(iterator.Value);
+                fillKeys.Add(entry.KeyOrdinal);
+                fillValues.Add(entry.ValueOrdinal);
             }
         }
     }

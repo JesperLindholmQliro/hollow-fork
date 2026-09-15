@@ -86,17 +86,17 @@ public interface IMissingDataHandler
     /// <summary>The element ordinal a missing list record reads as.</summary>
     int HandleListElementOrdinal(string type, int ordinal, int index);
 
-    /// <summary>The elements a missing list record iterates.</summary>
-    IHollowOrdinalIterator HandleListIterator(string type, int ordinal);
+    /// <summary>The elements a missing list record reads as.</summary>
+    IEnumerable<int> HandleListElementOrdinals(string type, int ordinal);
 
     /// <summary>The size a missing set record reads as.</summary>
     int HandleSetSize(string type, int ordinal);
 
-    /// <summary>The elements a missing set record iterates.</summary>
-    IHollowOrdinalIterator HandleSetIterator(string type, int ordinal);
+    /// <summary>The elements a missing set record reads as.</summary>
+    IEnumerable<int> HandleSetElementOrdinals(string type, int ordinal);
 
-    /// <summary>The potential matches a missing set record iterates.</summary>
-    IHollowOrdinalIterator HandleSetPotentialMatchIterator(string type, int ordinal, int hashCode);
+    /// <summary>The potential matches a missing set record reads as.</summary>
+    IEnumerable<int> HandleSetPotentialMatchElementOrdinals(string type, int ordinal, int hashCode);
 
     /// <summary>Whether a missing set record contains an element.</summary>
     bool HandleSetContainsElement(string type, int ordinal, int elementOrdinal, int elementOrdinalHashCode);
@@ -107,12 +107,11 @@ public interface IMissingDataHandler
     /// <summary>The size a missing map record reads as.</summary>
     int HandleMapSize(string type, int ordinal);
 
-    /// <summary>The entries a missing map record iterates.</summary>
-    IHollowMapEntryOrdinalIterator HandleMapOrdinalIterator(string type, int ordinal);
+    /// <summary>The entries a missing map record reads as.</summary>
+    IEnumerable<HollowMapEntry> HandleMapEntries(string type, int ordinal);
 
-    /// <summary>The potential matches a missing map record iterates.</summary>
-    IHollowMapEntryOrdinalIterator HandleMapPotentialMatchOrdinalIterator(
-        string type, int ordinal, int keyHashCode);
+    /// <summary>The potential matches a missing map record reads as.</summary>
+    IEnumerable<HollowMapEntry> HandleMapPotentialMatchEntries(string type, int ordinal, int keyHashCode);
 
     /// <summary>The value a missing map record maps a key to.</summary>
     int HandleMapGet(string type, int ordinal, int keyOrdinal, int keyOrdinalHashCode);
@@ -187,19 +186,17 @@ public class DefaultMissingDataHandler : IMissingDataHandler
         HollowConstants.OrdinalNone;
 
     /// <inheritdoc />
-    public virtual IHollowOrdinalIterator HandleListIterator(string type, int ordinal) =>
-        EmptyOrdinalIterator.Instance;
+    public virtual IEnumerable<int> HandleListElementOrdinals(string type, int ordinal) => [];
 
     /// <inheritdoc />
     public virtual int HandleSetSize(string type, int ordinal) => 0;
 
     /// <inheritdoc />
-    public virtual IHollowOrdinalIterator HandleSetIterator(string type, int ordinal) =>
-        EmptyOrdinalIterator.Instance;
+    public virtual IEnumerable<int> HandleSetElementOrdinals(string type, int ordinal) => [];
 
     /// <inheritdoc />
-    public virtual IHollowOrdinalIterator HandleSetPotentialMatchIterator(
-        string type, int ordinal, int hashCode) => EmptyOrdinalIterator.Instance;
+    public virtual IEnumerable<int> HandleSetPotentialMatchElementOrdinals(
+        string type, int ordinal, int hashCode) => [];
 
     /// <inheritdoc />
     public virtual bool HandleSetContainsElement(
@@ -213,12 +210,11 @@ public class DefaultMissingDataHandler : IMissingDataHandler
     public virtual int HandleMapSize(string type, int ordinal) => 0;
 
     /// <inheritdoc />
-    public virtual IHollowMapEntryOrdinalIterator HandleMapOrdinalIterator(string type, int ordinal) =>
-        EmptyMapOrdinalIterator.Instance;
+    public virtual IEnumerable<HollowMapEntry> HandleMapEntries(string type, int ordinal) => [];
 
     /// <inheritdoc />
-    public virtual IHollowMapEntryOrdinalIterator HandleMapPotentialMatchOrdinalIterator(
-        string type, int ordinal, int keyHashCode) => EmptyMapOrdinalIterator.Instance;
+    public virtual IEnumerable<HollowMapEntry> HandleMapPotentialMatchEntries(
+        string type, int ordinal, int keyHashCode) => [];
 
     /// <inheritdoc />
     public virtual int HandleMapGet(string type, int ordinal, int keyOrdinal, int keyOrdinalHashCode) =>

@@ -195,7 +195,7 @@ public sealed class HollowListDisabledDataAccess : IHollowListTypeDataAccess
     public int Size(int ordinal) => throw new HollowDataAccessDisabledException();
 
     /// <inheritdoc />
-    public IHollowOrdinalIterator OrdinalIterator(int ordinal) => throw new HollowDataAccessDisabledException();
+    public IEnumerable<int> ElementOrdinals(int ordinal) => throw new HollowDataAccessDisabledException();
 
     /// <inheritdoc />
     public int GetElementOrdinal(int ordinal, int listIndex) => throw new HollowDataAccessDisabledException();
@@ -232,7 +232,7 @@ public sealed class HollowSetDisabledDataAccess : IHollowSetTypeDataAccess
     public int Size(int ordinal) => throw new HollowDataAccessDisabledException();
 
     /// <inheritdoc />
-    public IHollowOrdinalIterator OrdinalIterator(int ordinal) => throw new HollowDataAccessDisabledException();
+    public IEnumerable<int> ElementOrdinals(int ordinal) => throw new HollowDataAccessDisabledException();
 
     /// <inheritdoc />
     public bool Contains(int ordinal, int value) => throw new HollowDataAccessDisabledException();
@@ -244,7 +244,7 @@ public sealed class HollowSetDisabledDataAccess : IHollowSetTypeDataAccess
     public int RelativeBucketValue(int ordinal, int bucketIndex) => throw new HollowDataAccessDisabledException();
 
     /// <inheritdoc />
-    public IHollowOrdinalIterator PotentialMatchOrdinalIterator(int ordinal, int hashCode) =>
+    public IEnumerable<int> PotentialMatchElementOrdinals(int ordinal, int hashCode) =>
         throw new HollowDataAccessDisabledException();
 
     /// <inheritdoc />
@@ -288,11 +288,11 @@ public sealed class HollowMapDisabledDataAccess : IHollowMapTypeDataAccess
     public long RelativeBucket(int ordinal, int bucketIndex) => throw new HollowDataAccessDisabledException();
 
     /// <inheritdoc />
-    public IHollowMapEntryOrdinalIterator PotentialMatchOrdinalIterator(int ordinal, int hashCode) =>
+    public IEnumerable<HollowMapEntry> PotentialMatchEntries(int ordinal, int hashCode) =>
         throw new HollowDataAccessDisabledException();
 
     /// <inheritdoc />
-    public IHollowMapEntryOrdinalIterator OrdinalIterator(int ordinal) =>
+    public IEnumerable<HollowMapEntry> Entries(int ordinal) =>
         throw new HollowDataAccessDisabledException();
 
     /// <inheritdoc />

@@ -15,8 +15,8 @@
  *
  */
 
+using System.Collections;
 using Hollow.Core.Memory.Encoding;
-using Hollow.Core.Read.Iterator;
 
 namespace Hollow.Core.Index;
 
@@ -28,7 +28,7 @@ namespace Hollow.Core.Index;
 /// probe rather than a scan. Iteration walks the table, so the order is the hash's, not the order the
 /// records were added.
 /// </remarks>
-public sealed class HollowHashIndexResult
+public sealed class HollowHashIndexResult : IEnumerable<int>
 {
     private readonly HollowHashIndex.HashIndexState _hashIndexState;
     private readonly long _selectTableStartPointer;
@@ -70,34 +70,32 @@ public sealed class HollowHashIndexResult
     }
 
     /// <summary>
-    /// Iterates the matched ordinals, which may be used with the read state to inspect the records.
+    /// Enumerates the matched ordinals, which may be used with the read state to inspect the records.
     /// </summary>
-    public IHollowOrdinalIterator Iterator() => new ResultIterator(this);
+    /// <remarks>
+    /// Java hands back a <c>HollowOrdinalIterator</c> from <c>iterator()</c>. The result is the
+    /// sequence here, so it works with <c>foreach</c> and LINQ without an intermediate.
+    /// </remarks>
+    public IEnumerator<int> GetEnumerator()
+    {
+        long endBucket = _selectTableStartPointer + _selectTableBuckets;
 
-    /// <summary>Enumerates the matched ordinals.</summary>
-    public IEnumerable<int> AsEnumerable() => Iterator().AsEnumerable();
+        for (long bucket = _selectTableStartPointer; bucket < endBucket; bucket++)
+        {
+            int selectOrdinal = ReadBucket(bucket);
+
+            if (selectOrdinal != HollowConstants.OrdinalNone)
+            {
+                yield return selectOrdinal;
+            }
+        }
+    }
+
+    /// <inheritdoc />
+    IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 
     private int ReadBucket(long bucket) =>
         (int)_hashIndexState.SelectHashArray.GetElementValue(
             bucket * _hashIndexState.BitsPerSelectHashEntry, _hashIndexState.BitsPerSelectHashEntry) - 1;
 
-    private sealed class ResultIterator(HollowHashIndexResult result) : IHollowOrdinalIterator
-    {
-        private readonly long _endBucket = result._selectTableStartPointer + result._selectTableBuckets;
-        private long _currentBucket = result._selectTableStartPointer;
-
-        public int Next()
-        {
-            while (_currentBucket < _endBucket)
-            {
-                int selectOrdinal = result.ReadBucket(_currentBucket++);
-                if (selectOrdinal != HollowConstants.OrdinalNone)
-                {
-                    return selectOrdinal;
-                }
-            }
-
-            return IHollowOrdinalIterator.NoMoreOrdinals;
-        }
-    }
 }

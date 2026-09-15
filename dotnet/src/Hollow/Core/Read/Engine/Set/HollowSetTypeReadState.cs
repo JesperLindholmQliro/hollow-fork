@@ -346,11 +346,11 @@ public sealed partial class HollowSetTypeReadState : HollowTypeReadState, IHollo
     }
 
     /// <inheritdoc />
-    public IHollowOrdinalIterator OrdinalIterator(int ordinal) => new HollowSetOrdinalIterator(ordinal, this);
+    public IEnumerable<int> ElementOrdinals(int ordinal) => OrdinalEnumerables.SetElements(this, ordinal);
 
     /// <inheritdoc />
-    public IHollowOrdinalIterator PotentialMatchOrdinalIterator(int ordinal, int hashCode) =>
-        new PotentialMatchHollowSetOrdinalIterator(ordinal, this, hashCode);
+    public IEnumerable<int> PotentialMatchElementOrdinals(int ordinal, int hashCode) =>
+        OrdinalEnumerables.PotentialMatchSetElements(this, ordinal, hashCode);
 
     /// <summary>
     /// The shard holding <paramref name="ordinal"/>, read through one load of the shards holder so

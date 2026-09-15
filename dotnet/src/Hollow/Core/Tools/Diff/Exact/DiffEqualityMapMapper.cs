@@ -70,14 +70,14 @@ public sealed class DiffEqualityMapMapper : DiffEqualityTypeMapper
     /// <inheritdoc />
     protected override int FromRecordHashCode(int ordinal) =>
         RecordHashCode(
-            From.OrdinalIterator(ordinal),
+            From.Entries(ordinal),
             _keyEqualOrdinalMap.FromOrdinalIdentityTranslator,
             _valueEqualOrdinalMap.FromOrdinalIdentityTranslator);
 
     /// <inheritdoc />
     protected override int ToRecordHashCode(int ordinal) =>
         RecordHashCode(
-            To.OrdinalIterator(ordinal),
+            To.Entries(ordinal),
             _keyEqualOrdinalMap.ToOrdinalIdentityTranslator,
             _valueEqualOrdinalMap.ToOrdinalIdentityTranslator);
 
@@ -87,7 +87,7 @@ public sealed class DiffEqualityMapMapper : DiffEqualityTypeMapper
         if (!PopulateEntries(
             _fromKeys,
             _fromValues,
-            From.OrdinalIterator(fromOrdinal),
+            From.Entries(fromOrdinal),
             _keyEqualOrdinalMap.FromOrdinalIdentityTranslator,
             _valueEqualOrdinalMap.FromOrdinalIdentityTranslator))
         {
@@ -97,7 +97,7 @@ public sealed class DiffEqualityMapMapper : DiffEqualityTypeMapper
         if (!PopulateEntries(
             _toKeys,
             _toValues,
-            To.OrdinalIterator(toOrdinal),
+            To.Entries(toOrdinal),
             _keyEqualOrdinalMap.ToOrdinalIdentityTranslator,
             _valueEqualOrdinalMap.ToOrdinalIdentityTranslator))
         {
@@ -108,23 +108,25 @@ public sealed class DiffEqualityMapMapper : DiffEqualityTypeMapper
     }
 
     private static int RecordHashCode(
-        IHollowMapEntryOrdinalIterator iterator,
+        IEnumerable<HollowMapEntry> entries,
         Func<int, int> keyTranslator,
         Func<int, int> valueTranslator)
     {
         int hashCode = 0;
 
-        while (iterator.Next())
+        foreach (HollowMapEntry entry in entries)
         {
-            int keyIdentity = keyTranslator(iterator.Key);
-            int valueIdentity = valueTranslator(iterator.Value);
+            int keyIdentity = keyTranslator(entry.KeyOrdinal);
+            int valueIdentity = valueTranslator(entry.ValueOrdinal);
 
-            if (keyIdentity == HollowConstants.OrdinalNone && iterator.Key != HollowConstants.OrdinalNone)
+            if (keyIdentity == HollowConstants.OrdinalNone
+                && entry.KeyOrdinal != HollowConstants.OrdinalNone)
             {
                 return -1;
             }
 
-            if (valueIdentity == HollowConstants.OrdinalNone && iterator.Value != HollowConstants.OrdinalNone)
+            if (valueIdentity == HollowConstants.OrdinalNone
+                && entry.ValueOrdinal != HollowConstants.OrdinalNone)
             {
                 return -1;
             }
@@ -138,24 +140,26 @@ public sealed class DiffEqualityMapMapper : DiffEqualityTypeMapper
     private static bool PopulateEntries(
         IntList keys,
         IntList values,
-        IHollowMapEntryOrdinalIterator iterator,
+        IEnumerable<HollowMapEntry> entries,
         Func<int, int> keyTranslator,
         Func<int, int> valueTranslator)
     {
         keys.Clear();
         values.Clear();
 
-        while (iterator.Next())
+        foreach (HollowMapEntry entry in entries)
         {
-            int keyIdentity = keyTranslator(iterator.Key);
-            int valueIdentity = valueTranslator(iterator.Value);
+            int keyIdentity = keyTranslator(entry.KeyOrdinal);
+            int valueIdentity = valueTranslator(entry.ValueOrdinal);
 
-            if (keyIdentity == HollowConstants.OrdinalNone && iterator.Key != HollowConstants.OrdinalNone)
+            if (keyIdentity == HollowConstants.OrdinalNone
+                && entry.KeyOrdinal != HollowConstants.OrdinalNone)
             {
                 return false;
             }
 
-            if (valueIdentity == HollowConstants.OrdinalNone && iterator.Value != HollowConstants.OrdinalNone)
+            if (valueIdentity == HollowConstants.OrdinalNone
+                && entry.ValueOrdinal != HollowConstants.OrdinalNone)
             {
                 return false;
             }
