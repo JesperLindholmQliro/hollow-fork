@@ -9,6 +9,7 @@
     <Project Path="samples/Hollow.Explorer.Sample/Hollow.Explorer.Sample.csproj" />
     <Project Path="samples/Hollow.DiffUI.Sample/Hollow.DiffUI.Sample.csproj" />
     <Project Path="samples/Hollow.HistoryUI.Sample/Hollow.HistoryUI.Sample.csproj" />
+    <Project Path="samples/Hollow.FakeData/Hollow.FakeData.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Hollow.Tests/Hollow.Tests.csproj" />

@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <RootNamespace>Hollow.FakeData</RootNamespace>
+
+    <!-- A sample explains itself in prose rather than in XML doc comments. -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The explorer assembly carries the history UI as well, and the core library behind both. No
+         source generator: nothing here reads the dataset through a generated client. -->
+    <ProjectReference Include="../../src/Hollow.Explorer/Hollow.Explorer.csproj" />
+  </ItemGroup>
+
+</Project>
