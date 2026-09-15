@@ -20,6 +20,8 @@ using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using Hollow.Core.Schema;
+using Hollow.Core.Write.ObjectMapper.FlatRecords;
+using Hollow.Core.Write.ObjectMapper.FlatRecords.Traversal;
 
 namespace Hollow.Core.Write.ObjectMapper;
 
@@ -89,6 +91,78 @@ public sealed class HollowObjectMapper
     {
         ArgumentNullException.ThrowIfNull(value);
         return GetTypeMapper(value.GetType(), typeName: null, hashKeyFieldPaths: null).Write(value);
+    }
+
+    /// <summary>
+    /// Writes <paramref name="value"/> and everything it references as a flat record, standing on its
+    /// own.
+    /// </summary>
+    /// <remarks>
+    /// Nothing is added to the state engine. The engine is still what says which types exist and what
+    /// their schemas are, which is why a mapper is needed at all rather than the object by itself.
+    /// </remarks>
+    public FlatRecord WriteFlat(object value, IHollowSchemaIdentifierMapper schemaIdMapper)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        ArgumentNullException.ThrowIfNull(schemaIdMapper);
+
+        FlatRecordWriter writer = new(_stateEngine, schemaIdMapper);
+        WriteFlat(value, writer);
+
+        return writer.GenerateFlatRecord();
+    }
+
+    /// <summary>
+    /// Writes <paramref name="value"/> into a writer already building a record, returning the index it
+    /// took.
+    /// </summary>
+    /// <remarks>
+    /// Use this where the object being written is part of a larger record; the overload taking a schema
+    /// identifier mapper is the whole of it where it is not.
+    /// </remarks>
+    public int WriteFlat(object value, FlatRecordWriter writer)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        ArgumentNullException.ThrowIfNull(writer);
+
+        return GetTypeMapper(value.GetType(), typeName: null, hashKeyFieldPaths: null)
+            .WriteFlat(value, writer);
+    }
+
+    /// <summary>
+    /// Reads a flat record back as a <typeparamref name="T"/>.
+    /// </summary>
+    /// <exception cref="HollowMappingException">
+    /// The record is not of <typeparamref name="T"/>'s Hollow type, or <typeparamref name="T"/> cannot
+    /// be built from what the record holds.
+    /// </exception>
+    public T? ReadFlat<T>(FlatRecord record) => (T?)ReadFlat(typeof(T), record);
+
+    /// <summary>
+    /// Reads a flat record back as <paramref name="type"/>.
+    /// </summary>
+    /// <exception cref="HollowMappingException">
+    /// The record is not of <paramref name="type"/>'s Hollow type, or it cannot be built from what the
+    /// record holds.
+    /// </exception>
+    public object? ReadFlat(Type type, FlatRecord record)
+    {
+        ArgumentNullException.ThrowIfNull(type);
+        ArgumentNullException.ThrowIfNull(record);
+
+        HollowTypeMapper mapper = GetTypeMapper(type, typeName: null, hashKeyFieldPaths: null);
+
+        // The last record written is the top one, and it need not be an object: a flat record of a
+        // list is a perfectly good flat record.
+        FlatRecordOrdinalReader reader = new(record);
+        IFlatRecordTraversalNode top = FlatRecordTraversal.Node(reader, reader.OrdinalCount - 1);
+
+        // Reading a record as the wrong type would not fail on its own: the fields it looks for would
+        // simply not be there, and every one of them would come back null.
+        return top.Schema.Name == mapper.TypeName
+            ? mapper.ParseFlatRecord(top)
+            : throw new HollowMappingException(
+                $"The record is a {top.Schema.Name}, and {type.Name} maps to {mapper.TypeName}");
     }
 
     /// <summary>
@@ -488,6 +562,25 @@ public abstract class HollowTypeMapper
     public abstract int Write(object value);
 
     /// <summary>
+    /// Writes <paramref name="value"/> into <paramref name="writer"/>, returning the index it took in
+    /// the flat record being built.
+    /// </summary>
+    /// <remarks>
+    /// The same records as <see cref="Write"/> produces, addressed differently: what a reference field
+    /// holds is an index into the flat record rather than an ordinal of a dataset.
+    /// </remarks>
+    public abstract int WriteFlat(object value, FlatRecordWriter writer);
+
+    /// <summary>
+    /// Builds the object <paramref name="node"/> holds, or <see langword="null"/> where it is null.
+    /// </summary>
+    /// <remarks>
+    /// The inverse of <see cref="WriteFlat"/>, and the only place in the mapper that goes from a record
+    /// back to a CLR object.
+    /// </remarks>
+    public abstract object? ParseFlatRecord(IFlatRecordTraversalNode? node);
+
+    /// <summary>
     /// The write state this mapper adds records to.
     /// </summary>
     protected abstract HollowTypeWriteState CreateWriteState();
@@ -570,6 +663,16 @@ internal sealed class MappedMember
         Name = member.Name;
         MemberType = memberType;
         _getValue = getValue;
+
+        // An init-only property is settable here: `init` is a rule the compiler enforces, and
+        // reflection is not the compiler. A get-only auto-property is not, and is left to the
+        // constructor-matching path.
+        SetValue = member switch
+        {
+            PropertyInfo { SetMethod: not null } property => property.SetValue,
+            FieldInfo { IsInitOnly: false } field => field.SetValue,
+            _ => null,
+        };
         IsInlined = member.GetCustomAttribute<HollowInlineAttribute>() is not null;
         TypeNameOverride = member.GetCustomAttribute<HollowTypeNameAttribute>()?.Name;
         HashKeyFieldPaths = member.GetCustomAttribute<HollowHashKeyAttribute>()?.Fields;
@@ -597,6 +700,9 @@ internal sealed class MappedMember
     internal CollectionTypeNames CollectionTypeNames { get; }
 
     internal object? GetValue(object instance) => _getValue(instance);
+
+    /// <summary>Assigns this member, for a type being read back out of a record.</summary>
+    internal Action<object, object?>? SetValue { get; }
 
     /// <summary>
     /// The public instance properties and fields of <paramref name="type"/>, in declaration order,
