@@ -66,6 +66,13 @@ public abstract class HollowTypeReadState : IHollowTypeDataAccess
     /// <summary>An approximation of the memory this type's records occupy, in bytes.</summary>
     public abstract long ApproxHeapFootprintInBytes { get; }
 
+    /// <summary>An approximation of the memory one shard of this type occupies, in bytes.</summary>
+    /// <remarks>
+    /// Java divides by the shard count unconditionally. A type state with no shards at all is only
+    /// reachable before a snapshot has been read, and answering nothing is better than dividing by zero.
+    /// </remarks>
+    public long ApproxShardSizeInBytes => NumShards == 0 ? 0 : ApproxHeapFootprintInBytes / NumShards;
+
     /// <summary>
     /// An approximation of how much of <see cref="ApproxHeapFootprintInBytes"/> is spent on ordinals
     /// holding nothing, in bytes.

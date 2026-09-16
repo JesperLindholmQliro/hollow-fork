@@ -83,6 +83,22 @@ public sealed class HollowReadStateEngine : IHollowDataAccess
     /// </remarks>
     public long ApproxDataSize => _typeStates.Values.Sum(state => state.ApproxHeapFootprintInBytes);
 
+    /// <summary>How many shards each type is split into.</summary>
+    /// <remarks>Named <c>numShardsPerType</c> in Java.</remarks>
+    public IReadOnlyDictionary<string, int> NumShardsPerType =>
+        _typeStates.ToDictionary(entry => entry.Key, entry => entry.Value.NumShards, StringComparer.Ordinal);
+
+    /// <summary>
+    /// An approximation of the memory one shard of each type occupies, in bytes.
+    /// </summary>
+    /// <remarks>
+    /// Named <c>calcApproxShardSizePerType</c> in Java. Reported alongside
+    /// <see cref="NumShardsPerType"/>, because a type's shard count only means something next to how
+    /// big a shard is.
+    /// </remarks>
+    public IReadOnlyDictionary<string, long> ApproxShardSizePerType =>
+        _typeStates.ToDictionary(entry => entry.Key, entry => entry.Value.ApproxShardSizeInBytes, StringComparer.Ordinal);
+
     /// <summary>
     /// Gets the read state of the named type, or <see langword="null"/> when this dataset has no such
     /// type.
