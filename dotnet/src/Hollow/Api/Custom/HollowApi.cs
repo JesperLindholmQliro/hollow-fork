@@ -17,6 +17,9 @@
 
 using Hollow.Core.Read.DataAccess;
 
+using Hollow.Api.Sampling;
+using Hollow.Core.Read.Filter;
+
 namespace Hollow.Api.Custom;
 
 /// <summary>
@@ -63,6 +66,87 @@ public class HollowApi
     public virtual void DetachCaches()
     {
         // Nothing cached here.
+    }
+
+    /// <summary>
+    /// The director every type is currently counting under, or <see langword="null"/> until one has
+    /// been set through this API.
+    /// </summary>
+    public HollowSamplingDirector? SamplingDirector { get; private set; }
+
+    /// <summary>Whether any type this API covers has counted a read.</summary>
+    public bool HasSampleResults =>
+        _typeApis.Exists(typeApi => typeApi.TypeDataAccess.Sampler.HasSampleResults);
+
+    /// <summary>Puts every type this API covers under <paramref name="director"/>.</summary>
+    /// <remarks>
+    /// Only the types this API's model declares, which is the useful scope for an application: a
+    /// field of a type its client never mentions is not its problem. Turning sampling on for the
+    /// whole dataset is <see cref="Core.Read.Engine.HollowReadStateEngine.SetSamplingDirector"/>.
+    /// </remarks>
+    public void SetSamplingDirector(HollowSamplingDirector director)
+    {
+        ArgumentNullException.ThrowIfNull(director);
+
+        SamplingDirector = director;
+
+        foreach (HollowTypeApi typeApi in _typeApis)
+        {
+            typeApi.SetSamplingDirector(director);
+        }
+    }
+
+    /// <summary>
+    /// Puts only the counters <paramref name="fieldSpec"/> names under <paramref name="director"/>.
+    /// </summary>
+    public void SetFieldSpecificSamplingDirector(ITypeFilter fieldSpec, HollowSamplingDirector director)
+    {
+        ArgumentNullException.ThrowIfNull(fieldSpec);
+        ArgumentNullException.ThrowIfNull(director);
+
+        foreach (HollowTypeApi typeApi in _typeApis)
+        {
+            typeApi.SetFieldSpecificSamplingDirector(fieldSpec, director);
+        }
+    }
+
+    /// <summary>Tells every director which thread applies transitions.</summary>
+    public void SetSamplerUpdateThread(Thread? thread)
+    {
+        foreach (HollowTypeApi typeApi in _typeApis)
+        {
+            typeApi.TypeDataAccess.Sampler.SetUpdateThread(thread);
+        }
+    }
+
+    /// <summary>Sets every counter back to zero.</summary>
+    public void ResetSampling()
+    {
+        foreach (HollowTypeApi typeApi in _typeApis)
+        {
+            typeApi.TypeDataAccess.Sampler.Reset();
+        }
+    }
+
+    /// <summary>
+    /// What the types this API covers have counted, hottest first.
+    /// </summary>
+    /// <remarks>
+    /// Only types that counted something are included, so that a model of hundreds of types does not
+    /// bury the handful an application reads under a page of zeroes.
+    /// </remarks>
+    public IReadOnlyList<SampleResult> GetSampleResults()
+    {
+        SampleResult[] results =
+        [
+            .. _typeApis
+                .Where(typeApi => typeApi.TypeDataAccess.Sampler.HasSampleResults)
+                .SelectMany(typeApi => typeApi.GetSampleResults()),
+        ];
+
+        Array.Sort(results);
+
+        return results;
     }
 
     /// <summary>

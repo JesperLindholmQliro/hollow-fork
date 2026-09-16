@@ -20,6 +20,9 @@ using Hollow.Core.Read.Iterator;
 using Hollow.Core.Read.Missing;
 using Hollow.Core.Schema;
 
+using Hollow.Api.Sampling;
+using Hollow.Core.Read.Filter;
+
 namespace Hollow.Api.Custom;
 
 /// <summary>
@@ -68,6 +71,19 @@ public abstract class HollowTypeApi
 
     /// <summary>Answers reads of fields this dataset does not have.</summary>
     protected IMissingDataHandler MissingDataHandler => Api.DataAccess.MissingDataHandler;
+
+    /// <summary>Puts this type's counters under <paramref name="director"/>.</summary>
+    public void SetSamplingDirector(HollowSamplingDirector director) =>
+        TypeDataAccess.SetSamplingDirector(director);
+
+    /// <summary>
+    /// Puts only the counters <paramref name="fieldSpec"/> names under <paramref name="director"/>.
+    /// </summary>
+    public void SetFieldSpecificSamplingDirector(ITypeFilter fieldSpec, HollowSamplingDirector director) =>
+        TypeDataAccess.SetFieldSpecificSamplingDirector(fieldSpec, director);
+
+    /// <summary>What this type has counted.</summary>
+    public IReadOnlyList<SampleResult> GetSampleResults() => TypeDataAccess.Sampler.GetSampleResults();
 }
 
 /// <summary>
