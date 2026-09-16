@@ -39,13 +39,18 @@ namespace Hollow.Api.PerfApi;
 public abstract class HollowObjectTypePerfApi : HollowTypePerfApi
 {
     /// <summary>Where each declared field sits in the schema, or -1 where the schema lacks it.</summary>
-    private protected readonly int[] FieldIndexes;
+    /// <remarks>
+    /// Protected rather than private protected because a generated performance API is compiled into
+    /// the caller's assembly, and its accessors index this array directly — that constant index in
+    /// place of a name lookup is most of what makes the performance API fast.
+    /// </remarks>
+    protected readonly int[] FieldIndexes;
 
     /// <summary>
     /// The type half of the reference each reference field yields, indexed as
     /// <see cref="FieldIndexes"/> is.
     /// </summary>
-    private protected readonly long[] ReferenceMaskedTypeIdentifiers;
+    protected readonly long[] ReferenceMaskedTypeIdentifiers;
 
     /// <summary>
     /// Initialises the API for <paramref name="typeName"/>, resolving <paramref name="fieldNames"/>.
