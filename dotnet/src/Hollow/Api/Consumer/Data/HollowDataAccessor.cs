@@ -15,7 +15,6 @@
  *
  */
 
-using System.Collections;
 using Hollow.Core.Index.Key;
 using Hollow.Core.Read.Engine;
 using Hollow.Core.Util;
@@ -109,6 +108,10 @@ public abstract class HollowDataAccessor<T>
     /// <summary>The Hollow type being read.</summary>
     public string Type { get; }
 
+    /// <summary>The dataset the records are read from.</summary>
+    /// <remarks>Java's protected <c>rStateEngine</c> field, which its subclasses read records through.</remarks>
+    protected HollowReadStateEngine StateEngine => _stateEngine;
+
     /// <summary>The key a record is recognised across a transition by.</summary>
     public PrimaryKey PrimaryKey => Changes.PrimaryKey;
 
@@ -126,13 +129,13 @@ public abstract class HollowDataAccessor<T>
 
     /// <summary>Every record the type holds now.</summary>
     /// <remarks>Answerable without working the change out, and it does not.</remarks>
-    public IReadOnlyCollection<T> AllRecords => new OrdinalRecords(PopulatedOrdinals, GetRecord);
+    public IReadOnlyCollection<T> AllRecords => new HollowRecordCollection<T>(PopulatedOrdinals, GetRecord);
 
     /// <summary>The records this transition brought in.</summary>
-    public IReadOnlyCollection<T> AddedRecords => new OrdinalRecords(Changes.Added, GetRecord);
+    public IReadOnlyCollection<T> AddedRecords => new HollowRecordCollection<T>(Changes.Added, GetRecord);
 
     /// <summary>The records this transition took away.</summary>
-    public IReadOnlyCollection<T> RemovedRecords => new OrdinalRecords(Changes.Removed, GetRecord);
+    public IReadOnlyCollection<T> RemovedRecords => new HollowRecordCollection<T>(Changes.Removed, GetRecord);
 
     /// <summary>
     /// The records this transition replaced, each as it was and as it is.
@@ -174,28 +177,4 @@ public abstract class HollowDataAccessor<T>
     /// <summary>The record at <paramref name="ordinal"/>.</summary>
     public abstract T GetRecord(int ordinal);
 
-    /// <summary>
-    /// The records at a set of ordinals, read one at a time as they are asked for.
-    /// </summary>
-    /// <remarks>
-    /// Java's <c>HollowRecordCollection</c>, which is <c>core.util</c> there and has no other caller.
-    /// Nothing is materialised: a change of a million records costs a bit set until someone enumerates
-    /// it.
-    /// </remarks>
-    private sealed class OrdinalRecords(BitSet ordinals, Func<int, T> getRecord) : IReadOnlyCollection<T>
-    {
-        public int Count => ordinals.Cardinality();
-
-        public IEnumerator<T> GetEnumerator()
-        {
-            for (int ordinal = ordinals.NextSetBit(0);
-                ordinal != -1;
-                ordinal = ordinals.NextSetBit(ordinal + 1))
-            {
-                yield return getRecord(ordinal);
-            }
-        }
-
-        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
-    }
 }

@@ -2304,10 +2304,10 @@ reasoning drops it when a refresh stops short of the version it asked for.
 | `core.index.key` | `PrimaryKey`, including its dataset-resolution helpers, and `HollowPrimaryKeyValueDeriver` |
 | `core` | `HollowConstants`, `IHollowDataset`, `HollowHeaderTags` (the header tags `HollowStateEngine` declares) |
 | `core.schema` (text) | `HollowSchemaParser`, which reads schemas back from the form `ToString` writes — see [Schemas as text](#schemas-as-text) |
-| `api.consumer.data` (part) | `HollowDataAccessor<T>`, over `RecordChangeSet` — see [What a transition changed](#what-a-transition-changed). Java's `AbstractHollowOrdinalIterable` and `GenericHollowRecordDataAccessor` are not ported |
+| `api.consumer.data` | `HollowDataAccessor<T>`, over `RecordChangeSet` — see [What a transition changed](#what-a-transition-changed) — and `GenericHollowRecordDataAccessor` over it. Java's `AbstractHollowOrdinalIterable` has nothing to port; see below |
 | `core.type.accessor` | The seven scalar data accessors, over one generic base |
 | `api.codegen.api` (part) | The data accessor generator; Java's type-API and factory generators are covered by this port's own emitters |
-| `core.util` | `BitSet` and `IntList` (port-specific stand-ins for `java.util.BitSet` and Hollow's `IntList`), `InvariantFormatting`, `HollowWriteStateCreator` |
+| `core.util` | `BitSet` and `IntList` (port-specific stand-ins for `java.util.BitSet` and Hollow's `IntList`), `InvariantFormatting`, `HollowWriteStateCreator`, `HollowRecordCollection<T>`, `StateEngineRoundTripper`, `BlobCopy` |
 | `tools.checksum` | `HollowChecksum` and `ApplyToChecksum` on the four read states, which the producer's integrity check compares |
 | `core.write` | The write records (object, list, set, map), `FieldStatistics`, `HollowTypeWriteState` and its four subclasses including the four-way partitioned ordinal map, `HollowWriteStateEngine`, `HollowBlobHeaderWriter`, `HollowBlobWriter`, `HollowBlobOutput` |
 | `core.write.copy` | `HollowRecordCopier` and the object/list/set/map copiers, plus `IOrdinalRemapper`/`IdentityOrdinalRemapper` (Java puts the remapper in `tools.combine`) |
@@ -2483,8 +2483,11 @@ sets of `TypeFilter` exist; the recursive rule DSL is still absent.
 
 - **Optional blob parts**, which split a snapshot across several streams.
 - **Asynchronous snapshot publishing** and the blob storage cleaner.
-- **Part of `api.consumer.data`** — `HollowDataAccessor<T>` is ported over `RecordChangeSet`;
-  `AbstractHollowOrdinalIterable` and `GenericHollowRecordDataAccessor` are not.
+- **`AbstractHollowOrdinalIterable`**, which has nothing to port. It exists so that a generated hash
+  index can turn a one-shot ordinal iterator into an `Iterable<T>`, and Java's own comment on it says
+  its instances misbehave on a second iteration. Here `HollowHashIndexResult` is an
+  `IEnumerable<int>` and `HashIndexSelect<T, TSelect, TQuery>.FindMatches` already returns typed
+  records, both of them repeatable, so the class would be a worse version of what is already there.
 - **The deprecated `api.client.HollowClient`**, superseded by `HollowConsumer`; only the parts of
   `api.client` that `HollowConsumer` uses are ported.
 - **`api.codegen`'s three extras** (the POJO, "performance API" and test-data builder generators; the
