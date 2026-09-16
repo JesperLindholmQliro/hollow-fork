@@ -2475,6 +2475,7 @@ once, so a part left without an output is refused where the caller can still do 
 | `api.codegen.testdata` | `HollowTestDataGenerator` and its options, over `TestDataEmitter` — a fluent builder per type, typed by its parent, with shortcuts for single-field wrapper types |
 | optional blob parts | `HollowBlobOptionalPartHeader` and its reader and writer, `OptionalBlobPartConfig`/`OptionalBlobPartOutputs`, `OptionalBlobPartInput`, the parts overloads on `HollowBlobWriter` and `HollowBlobReader`, and the staging, publishing and retrieval either side — see [Optional blob parts](#optional-blob-parts) |
 | `core.write.objectmapper` (memoization) | `IMemoizedRecord` with `MemoizedList<T>`, `MemoizedSet<T>` and `MemoizedMap<TKey, TValue>` over it, and the remembering write path on the three collection mappers |
+| `api.producer` (publish options) | `BlobStorageCleaner`, and `WithSnapshotPublishScheduler` for publishing the snapshot off the cycle thread |
 | `hollow-ui-tools` | Only `HollowDiffUtil.formatBytes`, as `ByteSize.Format`; the rest is servlet plumbing ASP.NET Core replaces |
 
 Test coverage is carried over from the Java tests where they exist — `VarIntTest`, `HashCodesTest`,
@@ -2588,7 +2589,6 @@ sets of `TypeFilter` exist; the recursive rule DSL is still absent.
 
 ### Not ported
 
-- **Asynchronous snapshot publishing** and the blob storage cleaner.
 - **`AbstractHollowOrdinalIterable`**, which has nothing to port. It exists so that a generated hash
   index can turn a one-shot ordinal iterator into an `Iterable<T>`, and Java's own comment on it says
   its instances misbehave on a second iteration. Here `HollowHashIndexResult` is an
@@ -2643,8 +2643,14 @@ the chain, and a client generated at compile time reads it with types. What is l
 optimisation or a feature on top.
 
 Nothing is outstanding from the original list. What remains unported is listed above, and each item
-there is a feature on top rather than a gap in the loop: asynchronous snapshot publishing, the blob
-storage cleaner, and the POJO generator.
+there is a feature on top rather than a gap in the loop, and the largest of them is the POJO
+generator, which emits the one thing a Hollow client exists to avoid.
+
+Two things about the producer's publish options are worth knowing before touching that code. A
+snapshot published on a scheduler still holds up the end of its cycle: the cycle deletes its staged
+files when it finishes, so `Artifacts.Cleanup` waits for the upload rather than racing it. And the
+blob storage cleaner runs in a `finally` after each publish, so a failed publish still gets the chance
+to tidy up after itself.
 
 All three UIs are ported — the explorer, the diff and the history — and with the history went
 `tools.history` underneath it. `tools` is now ported in full: `combine`, `split` and `patch` went in

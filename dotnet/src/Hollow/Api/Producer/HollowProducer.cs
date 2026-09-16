@@ -72,6 +72,8 @@ public sealed class HollowProducer
     private readonly ProducerListenerSupport _listeners = new();
     private readonly IBlobStager _blobStager;
     private readonly IPublisher _publisher;
+    private readonly TaskScheduler? _snapshotPublishScheduler;
+    private readonly BlobStorageCleaner _blobStorageCleaner;
     private readonly IAnnouncer? _announcer;
     private readonly IVersionMinter _versionMinter;
     private readonly ISingleProducerEnforcer _singleProducerEnforcer;
@@ -96,6 +98,8 @@ public sealed class HollowProducer
 
         _blobStager = builder.BlobStager
             ?? throw new InvalidOperationException("A blob stager is required.");
+        _snapshotPublishScheduler = builder.SnapshotPublishScheduler;
+        _blobStorageCleaner = builder.BlobStorageCleaner;
         _publisher = builder.Publisher
             ?? throw new InvalidOperationException("A publisher is required.");
         _announcer = builder.Announcer;
@@ -662,13 +666,13 @@ public sealed class HollowProducer
 
                 if (--_numStatesUntilNextSnapshot < 0)
                 {
-                    PublishBlob(listeners, artifacts.Snapshot!);
+                    PublishSnapshot(listeners, artifacts);
                     _numStatesUntilNextSnapshot = _numStatesBetweenSnapshots;
                 }
             }
             else
             {
-                PublishBlob(listeners, artifacts.Snapshot!);
+                PublishSnapshot(listeners, artifacts);
                 _numStatesUntilNextSnapshot = _numStatesBetweenSnapshots;
             }
         }
@@ -712,6 +716,32 @@ public sealed class HollowProducer
         }
     }
 
+    /// <summary>
+    /// Publishes the snapshot, on the configured scheduler where there is one.
+    /// </summary>
+    /// <remarks>
+    /// Nothing downstream may touch the blob's bytes until this finishes, because the cycle deletes
+    /// its staged files at the end. <see cref="Artifacts.Cleanup"/> waits for the task for exactly
+    /// that reason.
+    /// </remarks>
+    private void PublishSnapshot(ProducerListenerSupport.Snapshot listeners, Artifacts artifacts)
+    {
+        Blob snapshot = artifacts.Snapshot!;
+
+        if (_snapshotPublishScheduler is null)
+        {
+            PublishBlob(listeners, snapshot);
+
+            return;
+        }
+
+        artifacts.SnapshotPublish = Task.Factory.StartNew(
+            () => PublishBlob(listeners, snapshot),
+            CancellationToken.None,
+            TaskCreationOptions.DenyChildAttach,
+            _snapshotPublishScheduler);
+    }
+
     private void PublishBlob(ProducerListenerSupport.Snapshot listeners, Blob blob)
     {
         long start = Stopwatch.GetTimestamp();
@@ -728,6 +758,9 @@ public sealed class HollowProducer
         }
         finally
         {
+            // After the publish and in a finally, so a failed one still gets to tidy up after itself.
+            _blobStorageCleaner.Clean(blob.BlobType);
+
             Status finalStatus = status;
             TimeSpan elapsed = Stopwatch.GetElapsedTime(start);
 
@@ -985,8 +1018,25 @@ public sealed class HollowProducer
 
         internal HeaderBlob? Header { get; set; }
 
+        /// <summary>The snapshot's publish, where it was handed to a scheduler.</summary>
+        internal Task? SnapshotPublish { get; set; }
+
         internal void Cleanup()
         {
+            // The staged files are about to be deleted, so an upload still reading them has to finish
+            // first. A failure was already reported to the publish listeners; re-throwing it here
+            // would mask whatever ended the cycle.
+            try
+            {
+                SnapshotPublish?.GetAwaiter().GetResult();
+            }
+            catch (Exception) when (SnapshotPublish is { IsFaulted: true })
+            {
+                // Reported already.
+            }
+
+            SnapshotPublish = null;
+
             Snapshot?.Cleanup();
             Delta?.Cleanup();
             ReverseDelta?.Cleanup();

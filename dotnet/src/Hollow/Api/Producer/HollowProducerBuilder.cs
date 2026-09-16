@@ -41,6 +41,10 @@ public sealed class HollowProducerBuilder
 
     internal OptionalBlobPartConfig? OptionalPartConfig { get; private set; }
 
+    internal TaskScheduler? SnapshotPublishScheduler { get; private set; }
+
+    internal BlobStorageCleaner BlobStorageCleaner { get; private set; } = BlobStorageCleaner.None;
+
     /// <summary>Where published blobs go.</summary>
     internal IPublisher? Publisher { get; private set; }
 
@@ -101,6 +105,39 @@ public sealed class HollowProducerBuilder
         ArgumentNullException.ThrowIfNull(optionalPartConfig);
 
         OptionalPartConfig = optionalPartConfig;
+
+        return this;
+    }
+
+    /// <summary>
+    /// Publishes the snapshot on <paramref name="scheduler"/> rather than on the cycle's own thread.
+    /// </summary>
+    /// <remarks>
+    /// A snapshot is the largest artifact a cycle produces and the least urgent: consumers already on
+    /// the chain move by delta, and only a consumer starting fresh needs it. Moving its upload off the
+    /// cycle shortens the time between a version being ready and being announced.
+    /// <para>
+    /// The cycle still waits for the upload before cleaning up its staged files, so a slow scheduler
+    /// delays the cycle's end rather than corrupting what it published.
+    /// </para>
+    /// </remarks>
+    public HollowProducerBuilder WithSnapshotPublishScheduler(TaskScheduler scheduler)
+    {
+        ArgumentNullException.ThrowIfNull(scheduler);
+
+        SnapshotPublishScheduler = scheduler;
+
+        return this;
+    }
+
+    /// <summary>
+    /// Gives <paramref name="blobStorageCleaner"/> the chance to remove old blobs after each publish.
+    /// </summary>
+    public HollowProducerBuilder WithBlobStorageCleaner(BlobStorageCleaner blobStorageCleaner)
+    {
+        ArgumentNullException.ThrowIfNull(blobStorageCleaner);
+
+        BlobStorageCleaner = blobStorageCleaner;
 
         return this;
     }
