@@ -62,6 +62,9 @@ internal static class CodeNames
     /// <remarks>Java emits <c>&lt;Type&gt;PerfAPI</c>; the acronym is spelled <c>Api</c> throughout here.</remarks>
     internal static string PerfApi(string typeName) => Pascal(typeName) + "PerfApi";
 
+    /// <summary>The test data builder class name for a type.</summary>
+    internal static string TestData(string typeName) => Pascal(typeName) + "TestData";
+
     /// <summary>The interface name for the delegate of <paramref name="typeName"/>.</summary>
     internal static string DelegateInterface(string typeName) => "I" + Pascal(typeName) + "Delegate";
 
