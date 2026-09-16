@@ -2054,9 +2054,10 @@ setting for finding the code that holds a reference too long rather than tolerat
 ### Three departures from Java
 
 **Usage detection does not go through `api.sampling`.** Java asks the sampling framework whether a
-stale reference has been read, via `hasSampleResults()`. `api.sampling` is deliberately not ported (see
-[Not ported](#not-ported)) — and it does not need to be, because the proxy is already on every single
-read. `HollowProxyDataAccess.WasRead` is a flag set there and cleared when the detection window opens.
+stale reference has been read, via `hasSampleResults()`. Sampling is ported here — see
+[Sampling](#sampling) — and longevity still does not use it, because the proxy is already on every
+single read and a sampler nobody turned on would answer no.
+`HollowProxyDataAccess.WasRead` is a flag set there and cleared when the detection window opens.
 It is a plain field rather than an interlocked one on purpose: the write is on the read path of every
 record and the only reader is a housekeeping timer, so the cost of the write matters and a lost write
 does not — it delays a drop by one housekeeping interval.
@@ -2289,6 +2290,63 @@ pin, not the consumer's lag, and reporting it as lag would be worse than reporti
 reasoning drops it when a refresh stops short of the version it asked for.
 
 
+## Sampling
+
+Which fields does this application actually read? A dataset accumulates fields nothing has asked for
+in years, and every one costs bytes in every record and every consumer's heap. Sampling answers the
+question from a running process: turn counting on, let it run, read off what was touched.
+
+Counting every read would cost more than the reads. A *director* decides, read by read, whether this
+one counts — always, never, or for a slice of each interval. `TimeSliceSamplingDirector` counts for one
+millisecond in every second by default, which is enough to tell a field nothing reads from one read a
+million times, and cheap enough to leave on.
+
+### What it costs when it is off
+
+A sampler hangs off every type read state, created disabled, and every accessor that reads a field's
+value records into it. With counting off that is one perfectly-predicted branch per read —
+`HollowObjectSampler.RecordFieldAccess` tests a `bool` field before it touches a director. That is the
+price of being able to turn sampling on in a running process rather than redeploying to find out what
+is read, and it is the same trade Java makes.
+
+The sampler is reached through `IHollowTypeDataAccess`, defaulted there to `NullSampler.Instance`, so
+only a data access reading out of a type state has to say anything. That covers the missing, disabled
+and historical accesses at once. The longevity proxy overrides it to answer from whichever state it
+currently points at, so sampling keeps working underneath object longevity.
+
+### Two things Java needs that this does not
+
+**The boxed field access sampler.** Java carries a second sampler per object type, counting the boxed
+getters separately, because it emits `getYear()` and `getYearBoxed()` and only the second allocates an
+`Integer`. This port emits one `int?` accessor, and `Nullable<T>` is a struct: there is no boxing to
+count, so there is no second sampler and no generated code recording into one.
+
+**A thread that sleeps.** Java's time-slice director toggles its flag on a daemon thread that sleeps
+between flips. This uses a `TimeProvider` timer, like the rest of the port's housekeeping, which means
+no thread parked doing nothing and a test that can make an hour pass without waiting. Java's toggler
+also writes its flag and its listener list without synchronisation; here the flag is volatile and the
+list guarded, because the timer callback and the caller of `StartSampling` really are different threads.
+
+### Where the numbers come out
+
+`HollowReadStateEngine.GetSampleResults` reports every type, hottest first, omitting the types that
+counted nothing — a model of hundreds of types would otherwise bury the handful that were read.
+`HollowApi.GetSampleResults` reports only the types the client's own model declares, which is the more
+useful answer for an application. Setting a director through the API likewise reaches only those types,
+so the two seams do not quietly enable each other; `ApiSamplingTests` pins both halves of that.
+
+### One duplication collapsed
+
+Java writes `HollowListSampler` and `HollowSetSampler` out twice, identically, and `HollowMapSampler` a
+third time with one extra counter for bucket reads. The shared part is a `HollowCollectionSampler` base
+here and the three names remain over it, so each read state still names the sampler it holds.
+
+The null samplers — what a type state with no type holds — are marked by a flag rather than by an empty
+type name. That is how Java marks them, and it is why its object null sampler, built from a schema
+named `test`, fails the very test the other three rely on; harmless only because that schema has no
+fields to count.
+
+
 ## Status
 
 ### Ported and tested
@@ -2368,6 +2426,7 @@ reasoning drops it when a refresh stops short of the version it asked for.
 | `tools.diff.specific` | `HollowSpecificDiff`, and the subset-of-paths hash and equality overloads on `HollowIndexerValueTraverser` it needs |
 | `api.producer.metrics` | `CycleMetrics`, `AnnouncementMetrics`, `ProducerMetricsListener` (Java's `AbstractProducerMetricsListener`); see [Metrics](#metrics) |
 | `api.consumer.metrics` | `ConsumerRefreshMetrics`, `UpdatePlanDetails`, `RefreshMetricsListener` (Java's `AbstractRefreshMetricsListener`); see [Metrics](#metrics) |
+| `api.sampling` | `HollowSamplingDirector` and the disabled, enabled and time-sliced directors, `ISamplingStatusListener`, `SampleResult`, `IHollowSampler`, the object, collection and creation samplers, and `NullSampler`; wired through `IHollowTypeDataAccess`, the four read states, `HollowReadStateEngine` and `HollowApi` — see [Sampling](#sampling) |
 | `hollow-ui-tools` | Only `HollowDiffUtil.formatBytes`, as `ByteSize.Format`; the rest is servlet plumbing ASP.NET Core replaces |
 
 Test coverage is carried over from the Java tests where they exist — `VarIntTest`, `HashCodesTest`,
@@ -2492,7 +2551,7 @@ sets of `TypeFilter` exist; the recursive rule DSL is still absent.
   `api.client` that `HollowConsumer` uses are ported.
 - **`api.codegen`'s three extras** (the POJO, "performance API" and test-data builder generators; the
   client API generator itself is ported — see [The code generator](#the-code-generator)),
-  **sampling** (`api.sampling`, deliberately — see below), and the adapter modules —
+  and the adapter modules —
   `hollow-jsonadapter`, `hollow-protoadapter`, `hollow-zenoadapter`, `hollow-test`.
   `hollow-fakedata` is ported as `samples/Hollow.FakeData`
   ([The fake data generator](#the-fake-data-generator)) and `hollow-perf` as
