@@ -668,11 +668,14 @@ share, so it is the only one that can drift.
 
 ### What is not ported
 
-Java's three independent extras — a POJO generator, a "performance API" generator and a test-data
-builder generator, around 1,900 lines between them — are not ported, and nothing else depends on them.
-The runtimes two of them generate against are ported: see [The performance API](#the-performance-api)
-and the `api.testdata` row in [Status](#status). What is missing is the code generation, not the thing
-generated code would call.
+Java ships three independent extras beside the client API generator. Two are ported —
+`HollowPerfApiGenerator`, which emits against [the performance API](#the-performance-api), and
+`HollowTestDataGenerator`, which emits against `api.testdata`. Both return their sources rather than
+writing them, as the client generator does, so `HollowCodeGenerator.WriteTo` can leave unchanged files
+alone.
+
+The third, the POJO generator, is not ported. It emits plain classes that copy a record's fields out of
+the dataset, which is the one thing a Hollow client exists to avoid; nothing else depends on it.
 
 
 ## The samples
@@ -2427,6 +2430,8 @@ fields to count.
 | `api.producer.metrics` | `CycleMetrics`, `AnnouncementMetrics`, `ProducerMetricsListener` (Java's `AbstractProducerMetricsListener`); see [Metrics](#metrics) |
 | `api.consumer.metrics` | `ConsumerRefreshMetrics`, `UpdatePlanDetails`, `RefreshMetricsListener` (Java's `AbstractRefreshMetricsListener`); see [Metrics](#metrics) |
 | `api.sampling` | `HollowSamplingDirector` and the disabled, enabled and time-sliced directors, `ISamplingStatusListener`, `SampleResult`, `IHollowSampler`, the object, collection and creation samplers, and `NullSampler`; wired through `IHollowTypeDataAccess`, the four read states, `HollowReadStateEngine` and `HollowApi` — see [Sampling](#sampling) |
+| `api.codegen.perfapi` | `HollowPerfApiGenerator` and its options, over `PerfApiEmitter` — one class per object type, and the built-in type APIs for the collections |
+| `api.codegen.testdata` | `HollowTestDataGenerator` and its options, over `TestDataEmitter` — a fluent builder per type, typed by its parent, with shortcuts for single-field wrapper types |
 | `hollow-ui-tools` | Only `HollowDiffUtil.formatBytes`, as `ByteSize.Format`; the rest is servlet plumbing ASP.NET Core replaces |
 
 Test coverage is carried over from the Java tests where they exist — `VarIntTest`, `HashCodesTest`,
@@ -2549,9 +2554,9 @@ sets of `TypeFilter` exist; the recursive rule DSL is still absent.
   records, both of them repeatable, so the class would be a worse version of what is already there.
 - **The deprecated `api.client.HollowClient`**, superseded by `HollowConsumer`; only the parts of
   `api.client` that `HollowConsumer` uses are ported.
-- **`api.codegen`'s three extras** (the POJO, "performance API" and test-data builder generators; the
-  client API generator itself is ported — see [The code generator](#the-code-generator)),
-  and the adapter modules —
+- **`api.codegen`'s POJO generator**, which emits classes that copy a record's fields out of the
+  dataset — the one thing a Hollow client exists to avoid. Its performance API and test data
+  generators are ported; see [The code generator](#the-code-generator). Also the adapter modules —
   `hollow-jsonadapter`, `hollow-protoadapter`, `hollow-zenoadapter`, `hollow-test`.
   `hollow-fakedata` is ported as `samples/Hollow.FakeData`
   ([The fake data generator](#the-fake-data-generator)) and `hollow-perf` as
@@ -2562,6 +2567,18 @@ sets of `TypeFilter` exist; the recursive rule DSL is still absent.
   `Hollow.Explorer.History` ([The history UI](#the-history-ui)).
   Of `hollow-ui-tools`, only `HollowDiffUtil`'s `formatBytes` and `HtmlEscapingWriter` had anything
   to port — the rest is Jetty and servlet plumbing that ASP.NET Core replaces outright.
+- **`MemoizedList`, `MemoizedMap` and `MemoizedSet`**, object-mapper collections that carry the
+  ordinal they were assigned, so that meeting the same instance twice in a cycle reuses it rather than
+  serialising it again. Worth having; nothing depends on them.
+- **`HollowObjectHashCodeFinder` and `DefaultHashCodeFinder`**, the deprecated custom-hash-code
+  mechanism. Four ported files already assume its absence in print — `HollowCombiner`,
+  `HollowStateDeltaPatcher`, `HollowSplitter` and `HollowCompactor` — so porting it means revisiting
+  all four.
+- **`StackTraceRecorder`**, which attributes a stale read to the code that made it by capturing a
+  stack trace per read.
+- **`NullablePrimitiveBoolean`**, deprecated in Java itself, which names inlining a nullable boolean
+  as the replacement. `[HollowInline]` on a `bool?` does that here.
+- **`StageStats`**, an empty marker interface.
 - **`GarbageCollectorAwareRecycler`**, which picks a pooling strategy by inspecting the JVM's
   collector through `ManagementFactory`. The decision it encodes does not transfer to .NET; pick
   `RecyclingRecycler` or `WastefulRecycler` explicitly.
@@ -2588,8 +2605,8 @@ optimisation or a feature on top.
 
 Nothing is outstanding from the original list. What remains unported is listed above, and each item
 there is a feature on top rather than a gap in the loop: optional blob parts, asynchronous snapshot
-publishing and the blob storage cleaner, and the three `api.codegen` generators that have no client
-API behind them.
+publishing and the blob storage cleaner, the memoized object-mapper collections, and the POJO
+generator.
 
 All three UIs are ported — the explorer, the diff and the history — and with the history went
 `tools.history` underneath it. `tools` is now ported in full: `combine`, `split` and `patch` went in
