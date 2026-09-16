@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Hollow.Compat</RootNamespace>
+
+    <!-- A tool explains itself in prose and in its own help output, not in XML doc comments. -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Hollow/Hollow.csproj" />
+  </ItemGroup>
+
+</Project>

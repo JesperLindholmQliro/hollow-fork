@@ -14,6 +14,9 @@
   <Folder Name="/benchmarks/">
     <Project Path="benchmarks/Hollow.Benchmarks/Hollow.Benchmarks.csproj" />
   </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/Hollow.Compat/Hollow.Compat.csproj" />
+  </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Hollow.Tests/Hollow.Tests.csproj" />
   </Folder>

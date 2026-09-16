@@ -30,6 +30,7 @@ BenchmarkSuite[] suites = [.. typeof(BenchmarkSuite).Assembly.GetTypes()
     .OrderBy(suite => suite.Name, StringComparer.Ordinal)];
 
 string? only = null;
+string? jsonPath = null;
 double scale = 1.0;
 RunOptions options = new();
 
@@ -47,6 +48,10 @@ for (int i = 0; i < args.Length; i++)
 
         case "--only":
             only = Next();
+            break;
+
+        case "--json":
+            jsonPath = Next();
             break;
 
         case "--scale":
@@ -103,13 +108,25 @@ Console.WriteLine();
 
 BenchmarkRunner.ReportHeader();
 
+List<BenchmarkResult> results = [];
+
 foreach (BenchmarkSuite suite in selected)
 {
     foreach (BenchmarkCase benchmark in suite.Cases(scale))
     {
-        BenchmarkRunner.Report(
-            suite.Name, benchmark.Name, benchmark.Parameters, BenchmarkRunner.Run(benchmark, options));
+        Measurement measurement = BenchmarkRunner.Run(benchmark, options);
+
+        BenchmarkRunner.Report(suite.Name, benchmark.Name, benchmark.Parameters, measurement);
+
+        results.Add(new BenchmarkResult(suite.Name, benchmark.Name, benchmark.Parameters, measurement));
     }
+}
+
+if (jsonPath is not null)
+{
+    JmhJson.Write(jsonPath, results);
+    Console.WriteLine();
+    Console.WriteLine($"# {results.Count} result(s) written to {jsonPath}");
 }
 
 return 0;

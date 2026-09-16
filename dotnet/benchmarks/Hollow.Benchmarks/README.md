@@ -22,6 +22,7 @@ dotnet run -c Release --project benchmarks/Hollow.Benchmarks -- --scale 0.01 --t
 | `--warmup <n>` | `3` | Warmup iterations, thrown away |
 | `--iterations <n>` | `5` | Measured iterations |
 | `--time <seconds>` | `1` | How long each iteration should take |
+| `--json <file>` | | Also write the results as JSON, in the shape JMH's `-rf json` writes |
 
 Always measure a Release build. A Debug build measures the Debug build.
 
