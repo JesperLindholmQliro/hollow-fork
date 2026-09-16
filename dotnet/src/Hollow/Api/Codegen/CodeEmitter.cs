@@ -659,12 +659,17 @@ internal sealed class CodeEmitter(EmitterOptions options)
                 {
                     EmitApiTypeConstruction(writer, type);
                 }
+
+                writer.Blank();
+                writer.Line(
+                    "SetObjectCreationSamplerTypes("
+                    + string.Join(", ", model.Types.Select(type => Quote(type.TypeName))) + ");");
             }
 
-            foreach (GeneratedType type in model.Types)
+            for (int index = 0; index < model.Types.Count; index++)
             {
                 writer.Blank();
-                EmitApiTypeMembers(writer, type);
+                EmitApiTypeMembers(writer, model.Types[index], index);
             }
 
             foreach (GeneratedType type in KeyedTypes(model))
@@ -746,7 +751,7 @@ internal sealed class CodeEmitter(EmitterOptions options)
         writer.Blank();
     }
 
-    private static void EmitApiTypeMembers(CodeWriter writer, GeneratedType type)
+    private static void EmitApiTypeMembers(CodeWriter writer, GeneratedType type, int index)
     {
         string parameter = CodeNames.Camel(type.TypeName);
         string typeApiProperty = TypeApiPropertyName(type);
@@ -759,10 +764,18 @@ internal sealed class CodeEmitter(EmitterOptions options)
         writer.Doc(
             $"The <c>{type.TypeName}</c> record at <paramref name=\"ordinal\"/>, or "
             + "<see langword=\"null\"/> when there is none.");
-        writer.Line(
-            $"public {type.RecordType}? {accessor}(int ordinal) => ordinal == HollowConstants.OrdinalNone");
-        writer.Line("    ? null");
-        writer.Line($"    : _{parameter}Provider.GetHollowObject(ordinal);");
+        using (writer.Open($"public {type.RecordType}? {accessor}(int ordinal)"))
+        {
+            using (writer.Open("if (ordinal == HollowConstants.OrdinalNone)"))
+            {
+                writer.Line("return null;");
+            }
+
+            writer.Blank();
+            writer.Line($"ObjectCreationSampler.RecordCreation({index});");
+            writer.Blank();
+            writer.Line($"return _{parameter}Provider.GetHollowObject(ordinal);");
+        }
         writer.Blank();
 
         writer.Doc($"Every <c>{type.TypeName}</c> record in the dataset.");

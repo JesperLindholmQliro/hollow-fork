@@ -40,6 +40,8 @@ public class HollowApi
 {
     private readonly List<HollowTypeApi> _typeApis = [];
 
+    private HollowObjectCreationSampler _objectCreationSampler = new();
+
     /// <summary>
     /// Initialises an API over <paramref name="dataAccess"/>.
     /// </summary>
@@ -69,6 +71,17 @@ public class HollowApi
     }
 
     /// <summary>
+    /// Counts the record wrappers this API has handed out, per type.
+    /// </summary>
+    /// <remarks>
+    /// Not a read count but an allocation count, which is why it is reported separately from
+    /// <see cref="GetSampleResults"/>: it says which types a caller is materialising, and so whether
+    /// caching them or moving to the performance API would pay. Generated code names the types and
+    /// records into it; an API written by hand counts nothing unless it does the same.
+    /// </remarks>
+    public HollowObjectCreationSampler ObjectCreationSampler => _objectCreationSampler;
+
+    /// <summary>
     /// The director every type is currently counting under, or <see langword="null"/> until one has
     /// been set through this API.
     /// </summary>
@@ -90,6 +103,8 @@ public class HollowApi
 
         SamplingDirector = director;
 
+        _objectCreationSampler.SetSamplingDirector(director);
+
         foreach (HollowTypeApi typeApi in _typeApis)
         {
             typeApi.SetSamplingDirector(director);
@@ -104,6 +119,8 @@ public class HollowApi
         ArgumentNullException.ThrowIfNull(fieldSpec);
         ArgumentNullException.ThrowIfNull(director);
 
+        _objectCreationSampler.SetFieldSpecificSamplingDirector(fieldSpec, director);
+
         foreach (HollowTypeApi typeApi in _typeApis)
         {
             typeApi.SetFieldSpecificSamplingDirector(fieldSpec, director);
@@ -113,6 +130,8 @@ public class HollowApi
     /// <summary>Tells every director which thread applies transitions.</summary>
     public void SetSamplerUpdateThread(Thread? thread)
     {
+        _objectCreationSampler.SetUpdateThread(thread);
+
         foreach (HollowTypeApi typeApi in _typeApis)
         {
             typeApi.TypeDataAccess.Sampler.SetUpdateThread(thread);
@@ -122,6 +141,8 @@ public class HollowApi
     /// <summary>Sets every counter back to zero.</summary>
     public void ResetSampling()
     {
+        _objectCreationSampler.Reset();
+
         foreach (HollowTypeApi typeApi in _typeApis)
         {
             typeApi.TypeDataAccess.Sampler.Reset();
@@ -148,6 +169,16 @@ public class HollowApi
 
         return results;
     }
+
+    /// <summary>
+    /// Names the types whose wrapper creations this API counts, in the order its accessors index them.
+    /// </summary>
+    /// <remarks>
+    /// Called from a generated API's constructor. The order has to match the indexes the generated
+    /// accessors pass to <see cref="HollowObjectCreationSampler.RecordCreation"/>.
+    /// </remarks>
+    protected void SetObjectCreationSamplerTypes(params string[] typeNames) =>
+        _objectCreationSampler = new HollowObjectCreationSampler(typeNames);
 
     /// <summary>
     /// Registers <paramref name="typeApi"/> with this API.
