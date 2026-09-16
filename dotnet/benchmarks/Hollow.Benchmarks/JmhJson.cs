@@ -17,6 +17,7 @@
 
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.Json.Nodes;
 
 namespace Hollow.Benchmarks;
@@ -62,8 +63,17 @@ internal static class JmhJson
             });
         }
 
+        // A single measurement iteration leaves no degrees of freedom, so the error bar is NaN.
+        // System.Text.Json refuses to write that by default and throws; the named literals write it
+        // as the string "NaN", which is what JMH's own reader and every JSON parser expect. Reporting
+        // it as zero instead would claim a precision the run does not have.
         File.WriteAllText(
-            path, entries.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+            path,
+            entries.ToJsonString(new JsonSerializerOptions
+            {
+                WriteIndented = true,
+                NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals,
+            }));
     }
 
     /// <summary>

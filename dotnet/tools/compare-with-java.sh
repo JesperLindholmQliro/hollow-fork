@@ -32,6 +32,7 @@ scale=1.0
 only=""
 phase="all"
 with_decimal=0
+skip_dotnet=0
 out="$dotnet_root/artifacts/compare"
 
 usage() {
@@ -48,6 +49,11 @@ compare-with-java.sh [options]
   --decimal           Include this port's Decimal field type in the blob dataset. Netflix
                       Hollow cannot read such a blob, so this disables the Java side of the
                       blob comparison rather than making it fail.
+  --skip-dotnet       Reuse the .NET results a previous run left in --out instead of
+                      producing them again. TEMPORARY: for iterating on the Java side
+                      without waiting for this port's benchmarks each time. The reused
+                      results are whatever is on disk — nothing checks that they came from
+                      the same parameters, or from the current source.
   --out DIR           Where to put results (default dotnet/artifacts/compare)
   -h, --help          This
 
@@ -67,6 +73,7 @@ while [ $# -gt 0 ]; do
         --benchmarks) phase="benchmarks"; shift ;;
         --blobs) phase="blobs"; shift ;;
         --decimal) with_decimal=1; shift ;;
+        --skip-dotnet) skip_dotnet=1; shift ;;
         --out) out="$2"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "compare-with-java.sh: unknown option $1" >&2; usage >&2; exit 1 ;;
@@ -94,6 +101,22 @@ else
 fi
 
 say() { printf '\n== %s ==\n\n' "$1"; }
+
+# Announces that a previous run's output is being used instead of producing it again, and fails
+# with something actionable when there is nothing to use.
+reuse() {
+    if [ ! -e "$1" ]; then
+        echo
+        echo "--skip-dotnet was given, but $1 is not there." >&2
+        echo "Run once without --skip-dotnet to produce it." >&2
+
+        return 1
+    fi
+
+    say "Reusing $2 from $(dirname "$1")"
+
+    return 0
+}
 
 # The uber-jar JMH needs and the plain Hollow jar HollowCompat compiles against. Built once and
 # reused: Gradle is slow enough that building per phase would dominate a small run.
@@ -123,18 +146,23 @@ java_jars() {
 # ---------------------------------------------------------------- benchmarks
 
 run_benchmarks() {
-    say "This port's benchmarks"
+    if [ "$skip_dotnet" -eq 1 ]; then
+        reuse "$out/dotnet-benchmarks.json" "this port's benchmark results" || return 1
+    else
+        say "This port's benchmarks"
 
-    local args=(
-        --warmup "$warmup" --iterations "$iterations" --time "$time" --scale "$scale"
-        --json "$out/dotnet-benchmarks.json"
-    )
+        local args=(
+            --warmup "$warmup" --iterations "$iterations" --time "$time" --scale "$scale"
+            --json "$out/dotnet-benchmarks.json"
+        )
 
-    if [ -n "$only" ]; then
-        args+=(--only "$only")
+        if [ -n "$only" ]; then
+            args+=(--only "$only")
+        fi
+
+        (cd "$dotnet_root" \
+            && "${dn[@]}" run -c Release --project benchmarks/Hollow.Benchmarks -- "${args[@]}")
     fi
-
-    (cd "$dotnet_root" && "${dn[@]}" run -c Release --project benchmarks/Hollow.Benchmarks -- "${args[@]}")
 
     if [ "$have_java" -eq 0 ]; then
         echo
@@ -170,15 +198,19 @@ run_benchmarks() {
 # --------------------------------------------------------------------- blobs
 
 run_blobs() {
-    say "This port's blobs"
+    if [ "$skip_dotnet" -eq 1 ]; then
+        reuse "$out/dotnet-blobs/snapshot" "this port's blobs" || return 1
+    else
+        say "This port's blobs"
 
-    local args=(write "$out/dotnet-blobs")
+        local args=(write "$out/dotnet-blobs")
 
-    if [ "$with_decimal" -eq 1 ]; then
-        args+=(--decimal)
+        if [ "$with_decimal" -eq 1 ]; then
+            args+=(--decimal)
+        fi
+
+        (cd "$dotnet_root" && "${dn[@]}" run -c Release --project tools/Hollow.Compat -- "${args[@]}")
     fi
-
-    (cd "$dotnet_root" && "${dn[@]}" run -c Release --project tools/Hollow.Compat -- "${args[@]}")
 
     if [ "$with_decimal" -eq 1 ]; then
         echo
@@ -233,15 +265,33 @@ run_blobs() {
 
     java -cp "$hollow_jar:$classes" HollowCompat describe "$out/java-blobs/snapshot" \
         > "$out/java-snapshot.txt"
-    (cd "$dotnet_root" && "${dn[@]}" run -c Release --project tools/Hollow.Compat -- \
-        describe "$out/dotnet-blobs/snapshot") > "$out/dotnet-snapshot.txt"
 
-    if diff -u "$out/java-snapshot.txt" "$out/dotnet-snapshot.txt" > "$out/snapshot.diff"; then
-        echo "The bytes differ but the records do not, so the difference is in the encoding."
-        echo "That is still a format difference, but it is not a disagreement about the data."
+    local describe_dotnet=1
+
+    if [ "$skip_dotnet" -eq 1 ]; then
+        # Reused rather than re-read, so that --skip-dotnet means what it says. The text was written
+        # from the blobs being compared, so it is as good as a fresh read of them.
+        if [ -e "$out/dotnet-snapshot.txt" ]; then
+            echo "Reusing $out/dotnet-snapshot.txt."
+        else
+            echo "--skip-dotnet was given and $out/dotnet-snapshot.txt is not there, so there is"
+            echo "nothing to compare Netflix Hollow's reading against. The cross-read below still"
+            echo "runs, and answers the more important question anyway."
+            describe_dotnet=0
+        fi
     else
-        echo "The records differ too. $out/snapshot.diff has the detail; the first few lines:"
-        head -20 "$out/snapshot.diff"
+        (cd "$dotnet_root" && "${dn[@]}" run -c Release --project tools/Hollow.Compat -- \
+            describe "$out/dotnet-blobs/snapshot") > "$out/dotnet-snapshot.txt"
+    fi
+
+    if [ "$describe_dotnet" -eq 1 ]; then
+        if diff -u "$out/java-snapshot.txt" "$out/dotnet-snapshot.txt" > "$out/snapshot.diff"; then
+            echo "The bytes differ but the records do not, so the difference is in the encoding."
+            echo "That is still a format difference, but it is not a disagreement about the data."
+        else
+            echo "The records differ too. $out/snapshot.diff has the detail; the first few lines:"
+            head -20 "$out/snapshot.diff"
+        fi
     fi
 
     say "Cross-reading"

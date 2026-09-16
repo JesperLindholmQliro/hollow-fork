@@ -79,6 +79,24 @@ suite.
 because there would be nothing to compare against, and says so. Use it to see this end's own bytes
 change, not to compare against anything.
 
+## `--skip-dotnet`, while you are getting the Java side working
+
+Reuses whatever the last run left in `--out` instead of producing it again: the benchmark results
+JSON, the blobs, and the `describe` text. Nothing on the .NET side runs, so a full pass drops from
+minutes to milliseconds and you can iterate on the Java half — the Gradle build, the `javac`, the
+classpath — without waiting for this port's benchmarks each time.
+
+It is a workaround, not a feature, and it does not check anything:
+
+- The reused results are whatever is on disk. Nothing verifies they came from the same `--scale`,
+  `--iterations` or `--only` as the Java run they are about to be compared against, or that they
+  came from the current source.
+- So the ratios a `--skip-dotnet` run prints are only as trustworthy as your memory of how the
+  reused file was produced. **Do not quote them.** Take one clean run without the flag before
+  believing any number.
+
+If the file it wants is not there it says so and exits 1, rather than comparing against nothing.
+
 ## The benchmark comparison
 
 Java's run under JMH, this port's under the harness in `benchmarks/Hollow.Benchmarks`. Both are told
