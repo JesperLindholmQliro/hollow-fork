@@ -70,4 +70,33 @@ public sealed class HollowBlobHeaderWriter
             output.WriteUtf(value);
         }
     }
+
+    /// <summary>
+    /// Writes the header of an optional blob part to <paramref name="output"/>.
+    /// </summary>
+    /// <remarks>
+    /// Shorter than a main blob's header: a part carries no header tags, and its schemas need no
+    /// backwards-compatibility envelope because no reader older than optional parts will ever see one.
+    /// </remarks>
+    public void WritePartHeader(HollowBlobOptionalPartHeader header, HollowBlobOutput output)
+    {
+        ArgumentNullException.ThrowIfNull(header);
+        ArgumentNullException.ThrowIfNull(output);
+
+        output.WriteInt32(HollowBlobOptionalPartHeader.HollowBlobPartVersionHeader);
+        output.WriteUtf(header.PartName);
+
+        // Repeated from the main blob, so that a part cannot be applied against the wrong state.
+        output.WriteInt64(header.OriginRandomizedTag);
+        output.WriteInt64(header.DestinationRandomizedTag);
+
+        VarInt.WriteVInt(output, header.Schemas.Count);
+        foreach (HollowSchema schema in header.Schemas)
+        {
+            schema.WriteTo(output);
+        }
+
+        // Forwards compatibility: new data can be added here behind its own byte count.
+        VarInt.WriteVInt(output, 0);
+    }
 }

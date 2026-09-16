@@ -18,6 +18,8 @@
 using Hollow.Core.Memory.Encoding;
 using Hollow.Core.Schema;
 
+using Hollow.Api.Producer;
+
 namespace Hollow.Core.Write;
 
 /// <summary>
@@ -89,15 +91,27 @@ public sealed class HollowBlobWriter
     /// <summary>
     /// Writes a snapshot of the whole dataset to <paramref name="output"/>.
     /// </summary>
-    public void WriteSnapshot(HollowBlobOutput output)
+    public void WriteSnapshot(HollowBlobOutput output) => WriteSnapshot(output, optionalParts: null);
+
+    /// <summary>
+    /// Writes a snapshot of the whole dataset, sending the types assigned to an optional part to that
+    /// part's output rather than into the blob.
+    /// </summary>
+    /// <param name="output">The main blob.</param>
+    /// <param name="optionalParts">
+    /// Where each part's types go, or <see langword="null"/> to write everything into the blob.
+    /// </param>
+    public void WriteSnapshot(HollowBlobOutput output, OptionalBlobPartOutputs? optionalParts)
     {
         ArgumentNullException.ThrowIfNull(output);
 
         _stateEngine.PrepareForWrite(canReshard: true);
 
+        SchemasByPart split = SplitSchemas(_stateEngine.Schemas, optionalParts);
+
         HollowBlobHeader header = new()
         {
-            Schemas = _stateEngine.Schemas,
+            Schemas = split.Main,
             HeaderTags = new Dictionary<string, string>(_stateEngine.HeaderTags, StringComparer.Ordinal),
             OriginRandomizedTag = 0,
             DestinationRandomizedTag = _stateEngine.RandomizedTag,
@@ -105,18 +119,128 @@ public sealed class HollowBlobWriter
 
         _headerWriter.WriteHeader(header, output);
 
-        VarInt.WriteVInt(output, _stateEngine.OrderedTypeStates.Count);
+        WritePartHeaders(optionalParts, split, originTag: 0, destinationTag: _stateEngine.RandomizedTag);
+
+        // Each output gets its own count, so a part reads as a small blob of its own.
+        WriteStateCounts(output, optionalParts, typeState => true);
 
         foreach (HollowTypeWriteState typeState in _stateEngine.OrderedTypeStates)
         {
             typeState.CalculateSnapshot();
 
-            typeState.Schema.WriteTo(output);
-            WriteNumShards(output, typeState.NumShards);
-            typeState.WriteSnapshot(output);
+            HollowBlobOutput destination = OutputFor(typeState, output, optionalParts);
+
+            typeState.Schema.WriteTo(destination);
+            WriteNumShards(destination, typeState.NumShards);
+            typeState.WriteSnapshot(destination);
         }
 
         output.Flush();
+        optionalParts?.Flush();
+    }
+
+    /// <summary>Where a type's records go: its part's output, or the main blob.</summary>
+    private static HollowBlobOutput OutputFor(
+        HollowTypeWriteState typeState, HollowBlobOutput output, OptionalBlobPartOutputs? optionalParts) =>
+        optionalParts is not null
+        && optionalParts.OutputByType.TryGetValue(typeState.Schema.Name, out HollowBlobOutput? part)
+            ? part
+            : output;
+
+    /// <summary>How many type states each output is about to carry.</summary>
+    private void WriteStateCounts(
+        HollowBlobOutput output,
+        OptionalBlobPartOutputs? optionalParts,
+        Func<HollowTypeWriteState, bool> included)
+    {
+        List<HollowTypeWriteState> states = [.. _stateEngine.OrderedTypeStates.Where(included)];
+
+        if (optionalParts is null)
+        {
+            VarInt.WriteVInt(output, states.Count);
+
+            return;
+        }
+
+        Dictionary<HollowBlobOutput, int> counts = [];
+
+        foreach (HollowTypeWriteState state in states)
+        {
+            HollowBlobOutput destination = OutputFor(state, output, optionalParts);
+
+            counts[destination] = counts.GetValueOrDefault(destination) + 1;
+        }
+
+        VarInt.WriteVInt(output, counts.GetValueOrDefault(output));
+
+        foreach (HollowBlobOutput part in optionalParts.Outputs.Values)
+        {
+            VarInt.WriteVInt(part, counts.GetValueOrDefault(part));
+        }
+    }
+
+    /// <summary>The schemas the main blob declares, and the ones each part declares.</summary>
+    private sealed record SchemasByPart(
+        IReadOnlyList<HollowSchema> Main, IReadOnlyDictionary<string, List<HollowSchema>> ByPart);
+
+    private static SchemasByPart SplitSchemas(
+        IReadOnlyList<HollowSchema> schemas, OptionalBlobPartOutputs? optionalParts)
+    {
+        if (optionalParts is null)
+        {
+            return new SchemasByPart(schemas, new Dictionary<string, List<HollowSchema>>(StringComparer.Ordinal));
+        }
+
+        List<HollowSchema> main = [];
+        Dictionary<string, List<HollowSchema>> byPart = new(StringComparer.Ordinal);
+
+        foreach (HollowSchema schema in schemas)
+        {
+            if (optionalParts.PartNameByType.TryGetValue(schema.Name, out string? part))
+            {
+                if (!byPart.TryGetValue(part, out List<HollowSchema>? partSchemas))
+                {
+                    partSchemas = [];
+                    byPart[part] = partSchemas;
+                }
+
+                partSchemas.Add(schema);
+            }
+            else
+            {
+                main.Add(schema);
+            }
+        }
+
+        return new SchemasByPart(main, byPart);
+    }
+
+    /// <summary>
+    /// Writes each part's own header, repeating the randomized tags so that a part cannot be applied
+    /// against the wrong state.
+    /// </summary>
+    private void WritePartHeaders(
+        OptionalBlobPartOutputs? optionalParts,
+        SchemasByPart split,
+        long originTag,
+        long destinationTag)
+    {
+        if (optionalParts is null)
+        {
+            return;
+        }
+
+        foreach ((string partName, HollowBlobOutput partOutput) in optionalParts.Outputs)
+        {
+            HollowBlobOptionalPartHeader partHeader = new(partName)
+            {
+                OriginRandomizedTag = originTag,
+                DestinationRandomizedTag = destinationTag,
+                Schemas = split.ByPart.GetValueOrDefault(partName, []),
+            };
+
+            _headerWriter.WritePartHeader(partHeader, partOutput);
+        }
     }
 
     /// <summary>
@@ -137,7 +261,17 @@ public sealed class HollowBlobWriter
     /// <remarks>
     /// Only the types whose records changed appear in a delta, so a consumer leaves the rest alone.
     /// </remarks>
-    public void WriteDelta(HollowBlobOutput output)
+    public void WriteDelta(HollowBlobOutput output) => WriteDelta(output, optionalParts: null);
+
+    /// <summary>
+    /// Writes a delta, sending the types assigned to an optional part to that part's output.
+    /// </summary>
+    /// <remarks>
+    /// A part's delta carries only the types of that part that changed, so a part whose types were all
+    /// untouched is an almost-empty file rather than an absent one — the consumer still has to be able
+    /// to apply it to stay on the chain.
+    /// </remarks>
+    public void WriteDelta(HollowBlobOutput output, OptionalBlobPartOutputs? optionalParts)
     {
         ArgumentNullException.ThrowIfNull(output);
 
@@ -147,9 +281,11 @@ public sealed class HollowBlobWriter
         List<HollowTypeWriteState> changedTypes =
             [.. _stateEngine.OrderedTypeStates.Where(state => state.HasChangedSinceLastCycle())];
 
+        SchemasByPart split = SplitSchemas([.. changedTypes.Select(state => state.Schema)], optionalParts);
+
         HollowBlobHeader header = new()
         {
-            Schemas = [.. changedTypes.Select(state => state.Schema)],
+            Schemas = split.Main,
             HeaderTags = new Dictionary<string, string>(_stateEngine.HeaderTags, StringComparer.Ordinal),
             OriginRandomizedTag = _stateEngine.PreviousRandomizedTag,
             DestinationRandomizedTag = _stateEngine.RandomizedTag,
@@ -157,18 +293,27 @@ public sealed class HollowBlobWriter
 
         _headerWriter.WriteHeader(header, output);
 
-        VarInt.WriteVInt(output, changedTypes.Count);
+        WritePartHeaders(
+            optionalParts,
+            split,
+            _stateEngine.PreviousRandomizedTag,
+            _stateEngine.RandomizedTag);
+
+        WriteStateCounts(output, optionalParts, state => state.HasChangedSinceLastCycle());
 
         foreach (HollowTypeWriteState typeState in changedTypes)
         {
             typeState.CalculateDelta();
 
-            typeState.Schema.WriteTo(output);
-            WriteNumShards(output, typeState.NumShards);
-            typeState.WriteDelta(output);
+            HollowBlobOutput destination = OutputFor(typeState, output, optionalParts);
+
+            typeState.Schema.WriteTo(destination);
+            WriteNumShards(destination, typeState.NumShards);
+            typeState.WriteDelta(destination);
         }
 
         output.Flush();
+        optionalParts?.Flush();
     }
 
     /// <summary>

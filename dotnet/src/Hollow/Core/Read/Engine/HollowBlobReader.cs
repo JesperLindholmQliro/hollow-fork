@@ -68,7 +68,25 @@ public sealed class HollowBlobReader
     /// <param name="filter">
     /// The types and fields to retain, or <see langword="null"/> to retain everything.
     /// </param>
-    public void ReadSnapshot(HollowBlobInput input, ITypeFilter? filter = null)
+    public void ReadSnapshot(HollowBlobInput input, ITypeFilter? filter = null) =>
+        ReadSnapshot(input, optionalParts: null, filter);
+
+    /// <summary>
+    /// Reads a snapshot blob, taking the types it does not carry from the optional parts alongside it.
+    /// </summary>
+    /// <param name="input">The main blob.</param>
+    /// <param name="optionalParts">
+    /// The parts fetched alongside it, or <see langword="null"/> where the blob carries everything.
+    /// </param>
+    /// <param name="filter">
+    /// The types and fields to retain, or <see langword="null"/> to retain everything.
+    /// </param>
+    /// <exception cref="ArgumentException">
+    /// A part is named something other than what its own header says, or belongs to a different state
+    /// than the main blob.
+    /// </exception>
+    public void ReadSnapshot(
+        HollowBlobInput input, OptionalBlobPartInput? optionalParts, ITypeFilter? filter = null)
     {
         ArgumentNullException.ThrowIfNull(input);
 
@@ -85,8 +103,13 @@ public sealed class HollowBlobReader
 
         HollowBlobHeader header = _headerReader.ReadHeader(input);
 
+        IReadOnlyDictionary<string, HollowBlobInput> partInputs = OpenParts(optionalParts);
+        IReadOnlyList<HollowBlobOptionalPartHeader> partHeaders = ReadPartHeaders(header, partInputs);
+
+        // A filter has to be resolved against every schema the transition carries, main and parts
+        // alike, or a type that lives in a part reads as one the filter never heard of.
         filter ??= TypeFilter.IncludeAll;
-        filter = filter.Resolve(header.Schemas);
+        filter = filter.Resolve(CombineSchemas(header.Schemas, partHeaders));
 
         _stateEngine.HeaderTags = header.HeaderTags;
         _stateEngine.RandomizedTag = header.DestinationRandomizedTag;
@@ -97,7 +120,70 @@ public sealed class HollowBlobReader
             ReadTypeStateSnapshot(input, filter);
         }
 
+        foreach (HollowBlobInput part in partInputs.Values)
+        {
+            int numPartStates = VarInt.ReadVInt(part);
+
+            for (int i = 0; i < numPartStates; i++)
+            {
+                ReadTypeStateSnapshot(part, filter);
+            }
+        }
+
         _stateEngine.WireSchemaReferences();
+    }
+
+    /// <summary>Opens each part, or nothing where there are none.</summary>
+    private static IReadOnlyDictionary<string, HollowBlobInput> OpenParts(OptionalBlobPartInput? optionalParts) =>
+        optionalParts?.OpenByPartName(MemoryMode.OnHeap)
+        ?? new Dictionary<string, HollowBlobInput>(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Reads each part's header, refusing one that is not what it was asked for or not of this state.
+    /// </summary>
+    private IReadOnlyList<HollowBlobOptionalPartHeader> ReadPartHeaders(
+        HollowBlobHeader header, IReadOnlyDictionary<string, HollowBlobInput> partInputs)
+    {
+        List<HollowBlobOptionalPartHeader> headers = new(partInputs.Count);
+
+        foreach ((string partName, HollowBlobInput part) in partInputs)
+        {
+            HollowBlobOptionalPartHeader partHeader = _headerReader.ReadPartHeader(part);
+
+            if (!string.Equals(partHeader.PartName, partName, StringComparison.Ordinal))
+            {
+                throw new ArgumentException(
+                    $"the optional blob part given as '{partName}' says it is '{partHeader.PartName}'",
+                    nameof(partInputs));
+            }
+
+            // The tags are the only thing that ties a part to a main blob. A part of the wrong state
+            // would read as records at ordinals that mean something else entirely.
+            if (partHeader.OriginRandomizedTag != header.OriginRandomizedTag
+                || partHeader.DestinationRandomizedTag != header.DestinationRandomizedTag)
+            {
+                throw new ArgumentException(
+                    $"the optional blob part '{partName}' belongs to a different state than the blob it "
+                    + "was given with",
+                    nameof(partInputs));
+            }
+
+            headers.Add(partHeader);
+        }
+
+        return headers;
+    }
+
+    /// <summary>Every schema the transition declares, wherever it was declared.</summary>
+    private static IReadOnlyList<HollowSchema> CombineSchemas(
+        IReadOnlyList<HollowSchema> main, IReadOnlyList<HollowBlobOptionalPartHeader> partHeaders)
+    {
+        if (partHeaders.Count == 0)
+        {
+            return main;
+        }
+
+        return [.. main, .. partHeaders.SelectMany(partHeader => partHeader.Schemas)];
     }
 
     /// <summary>
@@ -125,7 +211,12 @@ public sealed class HollowBlobReader
     /// </para>
     /// </remarks>
     /// <exception cref="InvalidDataException">The delta does not apply to this state.</exception>
-    public void ApplyDelta(HollowBlobInput input)
+    public void ApplyDelta(HollowBlobInput input) => ApplyDelta(input, optionalParts: null);
+
+    /// <summary>
+    /// Applies a delta blob together with the optional parts of the same transition.
+    /// </summary>
+    public void ApplyDelta(HollowBlobInput input, OptionalBlobPartInput? optionalParts)
     {
         ArgumentNullException.ThrowIfNull(input);
 
@@ -146,6 +237,10 @@ public sealed class HollowBlobReader
                 + $"but the current state's tag is {_stateEngine.RandomizedTag.Invariant()}.");
         }
 
+        IReadOnlyDictionary<string, HollowBlobInput> partInputs = OpenParts(optionalParts);
+
+        ReadPartHeaders(header, partInputs);
+
         _stateEngine.HeaderTags = header.HeaderTags;
         _stateEngine.RandomizedTag = header.DestinationRandomizedTag;
 
@@ -155,6 +250,16 @@ public sealed class HollowBlobReader
         for (int i = 0; i < numStates; i++)
         {
             ReadTypeStateDelta(input);
+        }
+
+        foreach (HollowBlobInput part in partInputs.Values)
+        {
+            int numPartStates = VarInt.ReadVInt(part);
+
+            for (int i = 0; i < numPartStates; i++)
+            {
+                ReadTypeStateDelta(part);
+            }
         }
 
         _stateEngine.NotifyEndUpdate();

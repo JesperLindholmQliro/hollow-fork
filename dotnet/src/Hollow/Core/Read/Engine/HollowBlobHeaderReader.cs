@@ -62,6 +62,36 @@ public sealed class HollowBlobHeaderReader
         return header;
     }
 
+    /// <summary>
+    /// Reads the header of an optional blob part from <paramref name="input"/>.
+    /// </summary>
+    /// <exception cref="InvalidDataException">The part is of an incompatible format version.</exception>
+    public HollowBlobOptionalPartHeader ReadPartHeader(HollowBlobInput input)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+
+        int headerVersion = input.ReadInt32();
+        if (headerVersion != HollowBlobOptionalPartHeader.HollowBlobPartVersionHeader)
+        {
+            throw new InvalidDataException(
+                "The HollowBlob optional part you are trying to read is incompatible. The expected "
+                + $"version was {HollowBlobOptionalPartHeader.HollowBlobPartVersionHeader.Invariant()} "
+                + $"but the actual version was {headerVersion.Invariant()}.");
+        }
+
+        HollowBlobOptionalPartHeader header = new(input.ReadUtf())
+        {
+            OriginRandomizedTag = input.ReadInt64(),
+            DestinationRandomizedTag = input.ReadInt64(),
+        };
+
+        header.Schemas = ReadSchemas(input);
+
+        SkipForwardCompatibilityBytes(input);
+
+        return header;
+    }
+
     private static IReadOnlyList<HollowSchema> ReadSchemas(HollowBlobInput input)
     {
         int numSchemas = VarInt.ReadVInt(input);
