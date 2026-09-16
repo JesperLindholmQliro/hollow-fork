@@ -21,6 +21,9 @@ using Hollow.Core.Read.Iterator;
 using Hollow.Core.Read.Missing;
 using Hollow.Core.Schema;
 
+using Hollow.Api.Sampling;
+using Hollow.Core.Read.Filter;
+
 namespace Hollow.Core.Read.DataAccess;
 
 /// <summary>
@@ -47,6 +50,25 @@ public interface IHollowTypeDataAccess
 
     /// <summary>The read state backing this data access.</summary>
     HollowTypeReadState TypeState { get; }
+
+    /// <summary>
+    /// Counts the reads of this type, once a director turns counting on.
+    /// </summary>
+    /// <remarks>
+    /// Defaulted rather than declared, because only a data access reading out of a type state has
+    /// reads of its own to count. One answering for a missing type, a disabled one or a historical one
+    /// reports nothing, and saying so once here beats saying it in each of them.
+    /// </remarks>
+    IHollowSampler Sampler => NullSampler.Instance;
+
+    /// <summary>Puts every one of this type's counters under <paramref name="director"/>.</summary>
+    void SetSamplingDirector(HollowSamplingDirector director) => Sampler.SetSamplingDirector(director);
+
+    /// <summary>
+    /// Puts only the counters <paramref name="fieldSpec"/> names under <paramref name="director"/>.
+    /// </summary>
+    void SetFieldSpecificSamplingDirector(ITypeFilter fieldSpec, HollowSamplingDirector director) =>
+        Sampler.SetFieldSpecificSamplingDirector(fieldSpec, director);
 }
 
 /// <summary>

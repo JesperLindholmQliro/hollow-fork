@@ -23,6 +23,8 @@ using Hollow.Core.Read.DataAccess;
 using Hollow.Core.Read.Iterator;
 using Hollow.Core.Schema;
 
+using Hollow.Api.Sampling;
+
 namespace Hollow.Core.Read.Engine.Map;
 
 /// <summary>
@@ -217,6 +219,9 @@ public sealed partial class HollowMapTypeReadState : HollowTypeReadState, IHollo
     /// <summary>The schema of this type.</summary>
     public new HollowMapSchema Schema => (HollowMapSchema)base.Schema;
 
+    /// <summary>Counts this type's reads, typed so the hot path does not cast.</summary>
+    private HollowMapSampler TypedSampler => (HollowMapSampler)Sampler;
+
     /// <inheritdoc />
     public override int MaxOrdinal => _maxOrdinal;
 
@@ -301,6 +306,8 @@ public sealed partial class HollowMapTypeReadState : HollowTypeReadState, IHollo
     /// <inheritdoc />
     public int Size(int ordinal)
     {
+        TypedSampler.RecordSize();
+
         Shard shard = ShardFor(ordinal);
         return shard.DataElements.GetSize(ordinal >> shard.ShardOrdinalShift);
     }
@@ -311,6 +318,8 @@ public sealed partial class HollowMapTypeReadState : HollowTypeReadState, IHollo
     /// <inheritdoc />
     public int Get(int ordinal, int keyOrdinal, int hashCode)
     {
+        TypedSampler.RecordGet();
+
         Shard shard = ShardFor(ordinal);
         int shardOrdinal = ordinal >> shard.ShardOrdinalShift;
 
@@ -347,6 +356,8 @@ public sealed partial class HollowMapTypeReadState : HollowTypeReadState, IHollo
     /// <inheritdoc />
     public long RelativeBucket(int ordinal, int bucketIndex)
     {
+        TypedSampler.RecordBucketRetrieval();
+
         Shard shard = ShardFor(ordinal);
         int shardOrdinal = ordinal >> shard.ShardOrdinalShift;
 
@@ -362,12 +373,20 @@ public sealed partial class HollowMapTypeReadState : HollowTypeReadState, IHollo
     }
 
     /// <inheritdoc />
-    public IEnumerable<HollowMapEntry> Entries(int ordinal) =>
-        OrdinalEnumerables.MapEntries(this, ordinal);
+    public IEnumerable<HollowMapEntry> Entries(int ordinal)
+    {
+        TypedSampler.RecordIterator();
+
+        return OrdinalEnumerables.MapEntries(this, ordinal);
+    }
 
     /// <inheritdoc />
-    public IEnumerable<HollowMapEntry> PotentialMatchEntries(int ordinal, int hashCode) =>
-        OrdinalEnumerables.PotentialMatchMapEntries(this, ordinal, hashCode);
+    public IEnumerable<HollowMapEntry> PotentialMatchEntries(int ordinal, int hashCode)
+    {
+        TypedSampler.RecordGet();
+
+        return OrdinalEnumerables.PotentialMatchMapEntries(this, ordinal, hashCode);
+    }
 
     /// <summary>
     /// The shard holding <paramref name="ordinal"/>, read through one load of the shards holder so

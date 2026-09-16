@@ -431,3 +431,47 @@ public sealed class HollowObjectCreationSampler : IHollowSampler
     /// <inheritdoc />
     public void Reset() => Array.Clear(_creationSamples);
 }
+
+/// <summary>
+/// A sampler for something that has no reads to count.
+/// </summary>
+/// <remarks>
+/// What a data access that answers from somewhere other than a type state reports — a missing type, a
+/// disabled one, a historical one. Java gives each of those the null sampler of its own record kind;
+/// one kind-agnostic instance says the same thing once.
+/// </remarks>
+public sealed class NullSampler : IHollowSampler
+{
+    private NullSampler()
+    {
+    }
+
+    /// <summary>The one instance.</summary>
+    public static NullSampler Instance { get; } = new();
+
+    /// <inheritdoc />
+    public bool HasSampleResults => false;
+
+    /// <inheritdoc />
+    public void SetSamplingDirector(HollowSamplingDirector director)
+    {
+    }
+
+    /// <inheritdoc />
+    public void SetFieldSpecificSamplingDirector(ITypeFilter fieldSpec, HollowSamplingDirector director)
+    {
+    }
+
+    /// <inheritdoc />
+    public void SetUpdateThread(Thread? thread)
+    {
+    }
+
+    /// <inheritdoc />
+    public IReadOnlyList<SampleResult> GetSampleResults() => [];
+
+    /// <inheritdoc />
+    public void Reset()
+    {
+    }
+}

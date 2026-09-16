@@ -22,6 +22,9 @@ using Hollow.Core.Schema;
 using Hollow.Core.Tools.Checksum;
 using Hollow.Core.Util;
 
+using Hollow.Api.Sampling;
+using Hollow.Core.Read.Filter;
+
 namespace Hollow.Core.Read.Engine;
 
 /// <summary>
@@ -40,13 +43,41 @@ public abstract class HollowTypeReadState : IHollowTypeDataAccess
         StateEngine = stateEngine;
         MemoryMode = memoryMode;
         Schema = schema;
+        Sampler = CreateSampler(schema);
     }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Created disabled. A sampler nobody has turned on costs one predictable branch per read, which
+    /// is the price of being able to turn it on in a running process rather than redeploying to find
+    /// out which fields are read.
+    /// </remarks>
+    public IHollowSampler Sampler { get; }
 
     /// <summary>The state engine this type belongs to.</summary>
     public HollowReadStateEngine StateEngine { get; }
 
     /// <summary>The memory mode this type's data is held in.</summary>
     public MemoryMode MemoryMode { get; }
+
+    /// <inheritdoc />
+    public void SetSamplingDirector(HollowSamplingDirector director) =>
+        Sampler.SetSamplingDirector(director);
+
+    /// <inheritdoc />
+    public void SetFieldSpecificSamplingDirector(ITypeFilter fieldSpec, HollowSamplingDirector director) =>
+        Sampler.SetFieldSpecificSamplingDirector(fieldSpec, director);
+
+    /// <summary>The sampler a type of this schema's kind counts with.</summary>
+    private static IHollowSampler CreateSampler(HollowSchema schema) => schema switch
+    {
+        HollowObjectSchema objectSchema =>
+            new HollowObjectSampler(objectSchema, DisabledSamplingDirector.Instance),
+        HollowListSchema => new HollowListSampler(schema.Name, DisabledSamplingDirector.Instance),
+        HollowSetSchema => new HollowSetSampler(schema.Name, DisabledSamplingDirector.Instance),
+        HollowMapSchema => new HollowMapSampler(schema.Name, DisabledSamplingDirector.Instance),
+        _ => NullSampler.Instance,
+    };
 
     /// <summary>The schema of this type.</summary>
     public HollowSchema Schema { get; }

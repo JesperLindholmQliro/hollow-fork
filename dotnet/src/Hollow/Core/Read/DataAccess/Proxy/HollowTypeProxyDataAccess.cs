@@ -21,6 +21,8 @@ using Hollow.Core.Read.Engine;
 using Hollow.Core.Read.Iterator;
 using Hollow.Core.Schema;
 
+using Hollow.Api.Sampling;
+
 namespace Hollow.Core.Read.DataAccess.Proxy;
 
 /// <summary>
@@ -56,6 +58,13 @@ public abstract class HollowTypeProxyDataAccess : IHollowTypeDataAccess
 
     /// <summary>What this type is pointed at now.</summary>
     public IHollowTypeDataAccess CurrentDataAccess => _currentDataAccess;
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// The proxy has no counters of its own; reads through it land on whichever state it currently
+    /// points at, so that is whose sampler answers.
+    /// </remarks>
+    public IHollowSampler Sampler => CurrentDataAccess.Sampler;
 
     /// <summary>What to point this type at when the data is dropped.</summary>
     internal IHollowTypeDataAccess DisabledDataAccess { get; }

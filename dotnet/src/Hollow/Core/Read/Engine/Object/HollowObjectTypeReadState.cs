@@ -25,6 +25,8 @@ using Hollow.Core.Schema;
 using Hollow.Core.Util;
 using Hollow.Core.Write;
 
+using Hollow.Api.Sampling;
+
 namespace Hollow.Core.Read.Engine.Object;
 
 /// <summary>
@@ -81,6 +83,9 @@ public sealed partial class HollowObjectTypeReadState : HollowTypeReadState, IHo
 
     /// <summary>The schema reads are served against.</summary>
     public new HollowObjectSchema Schema => (HollowObjectSchema)base.Schema;
+
+    /// <summary>Counts this type's reads, typed so the hot path does not cast.</summary>
+    private HollowObjectSampler TypedSampler => (HollowObjectSampler)Sampler;
 
     /// <inheritdoc />
     public override int MaxOrdinal => _maxOrdinal;
@@ -199,6 +204,8 @@ public sealed partial class HollowObjectTypeReadState : HollowTypeReadState, IHo
     /// <inheritdoc />
     public int ReadOrdinal(int ordinal, int fieldIndex)
     {
+        TypedSampler.RecordFieldAccess(fieldIndex);
+
         Shard shard = ShardFor(ordinal);
         long value = shard.ReadValue(ShardOrdinal(ordinal, shard), fieldIndex);
 
@@ -210,6 +217,8 @@ public sealed partial class HollowObjectTypeReadState : HollowTypeReadState, IHo
     /// <inheritdoc />
     public int ReadInt(int ordinal, int fieldIndex)
     {
+        TypedSampler.RecordFieldAccess(fieldIndex);
+
         Shard shard = ShardFor(ordinal);
         long value = shard.ReadValue(ShardOrdinal(ordinal, shard), fieldIndex);
 
@@ -221,6 +230,8 @@ public sealed partial class HollowObjectTypeReadState : HollowTypeReadState, IHo
     /// <inheritdoc />
     public long ReadLong(int ordinal, int fieldIndex)
     {
+        TypedSampler.RecordFieldAccess(fieldIndex);
+
         Shard shard = ShardFor(ordinal);
         long value = shard.ReadValue(ShardOrdinal(ordinal, shard), fieldIndex);
 
@@ -232,6 +243,8 @@ public sealed partial class HollowObjectTypeReadState : HollowTypeReadState, IHo
     /// <inheritdoc />
     public float ReadFloat(int ordinal, int fieldIndex)
     {
+        TypedSampler.RecordFieldAccess(fieldIndex);
+
         Shard shard = ShardFor(ordinal);
         int value = (int)shard.ReadValue(ShardOrdinal(ordinal, shard), fieldIndex);
 
@@ -243,6 +256,8 @@ public sealed partial class HollowObjectTypeReadState : HollowTypeReadState, IHo
     /// <inheritdoc />
     public double ReadDouble(int ordinal, int fieldIndex)
     {
+        TypedSampler.RecordFieldAccess(fieldIndex);
+
         Shard shard = ShardFor(ordinal);
         int shardOrdinal = ShardOrdinal(ordinal, shard);
         long value = shard.DataElements.FixedLengthData!.GetLargeElementValue(
@@ -256,6 +271,8 @@ public sealed partial class HollowObjectTypeReadState : HollowTypeReadState, IHo
     /// <inheritdoc />
     public decimal? ReadDecimal(int ordinal, int fieldIndex)
     {
+        TypedSampler.RecordFieldAccess(fieldIndex);
+
         Shard shard = ShardFor(ordinal);
         (long low, long high) = shard.ReadWideValue(ShardOrdinal(ordinal, shard), fieldIndex);
 
@@ -265,6 +282,8 @@ public sealed partial class HollowObjectTypeReadState : HollowTypeReadState, IHo
     /// <inheritdoc />
     public bool? ReadBoolean(int ordinal, int fieldIndex)
     {
+        TypedSampler.RecordFieldAccess(fieldIndex);
+
         Shard shard = ShardFor(ordinal);
         long value = shard.ReadValue(ShardOrdinal(ordinal, shard), fieldIndex);
 
@@ -274,6 +293,8 @@ public sealed partial class HollowObjectTypeReadState : HollowTypeReadState, IHo
     /// <inheritdoc />
     public byte[]? ReadBytes(int ordinal, int fieldIndex)
     {
+        TypedSampler.RecordFieldAccess(fieldIndex);
+
         Shard shard = ShardFor(ordinal);
         (long startByte, long endByte, int numBits) = shard.VarLengthRange(ShardOrdinal(ordinal, shard), fieldIndex);
 
@@ -298,6 +319,8 @@ public sealed partial class HollowObjectTypeReadState : HollowTypeReadState, IHo
     /// <inheritdoc />
     public string? ReadString(int ordinal, int fieldIndex)
     {
+        TypedSampler.RecordFieldAccess(fieldIndex);
+
         Shard shard = ShardFor(ordinal);
         (long startByte, long endByte, int numBits) = shard.VarLengthRange(ShardOrdinal(ordinal, shard), fieldIndex);
 
@@ -315,6 +338,8 @@ public sealed partial class HollowObjectTypeReadState : HollowTypeReadState, IHo
     /// <inheritdoc />
     public int VarLengthFieldByteLength(int ordinal, int fieldIndex)
     {
+        TypedSampler.RecordFieldAccess(fieldIndex);
+
         Shard shard = ShardFor(ordinal);
         (long startByte, long endByte, int numBits) = shard.VarLengthRange(ShardOrdinal(ordinal, shard), fieldIndex);
 
@@ -331,6 +356,8 @@ public sealed partial class HollowObjectTypeReadState : HollowTypeReadState, IHo
     /// <inheritdoc />
     public int ReadStringInto(int ordinal, int fieldIndex, Span<char> destination)
     {
+        TypedSampler.RecordFieldAccess(fieldIndex);
+
         Shard shard = ShardFor(ordinal);
         (long startByte, long endByte, int numBits) = shard.VarLengthRange(ShardOrdinal(ordinal, shard), fieldIndex);
 
@@ -369,6 +396,8 @@ public sealed partial class HollowObjectTypeReadState : HollowTypeReadState, IHo
     /// <inheritdoc />
     public int ReadBytesInto(int ordinal, int fieldIndex, Span<byte> destination)
     {
+        TypedSampler.RecordFieldAccess(fieldIndex);
+
         Shard shard = ShardFor(ordinal);
         (long startByte, long endByte, int numBits) = shard.VarLengthRange(ShardOrdinal(ordinal, shard), fieldIndex);
 
@@ -399,6 +428,8 @@ public sealed partial class HollowObjectTypeReadState : HollowTypeReadState, IHo
     /// <inheritdoc />
     public bool TryGetBytesSpan(int ordinal, int fieldIndex, out ReadOnlySpan<byte> value)
     {
+        TypedSampler.RecordFieldAccess(fieldIndex);
+
         Shard shard = ShardFor(ordinal);
         (long startByte, long endByte, int numBits) = shard.VarLengthRange(ShardOrdinal(ordinal, shard), fieldIndex);
 
@@ -424,6 +455,8 @@ public sealed partial class HollowObjectTypeReadState : HollowTypeReadState, IHo
     /// <inheritdoc />
     public ReadOnlySequence<byte> GetVarLengthSequence(int ordinal, int fieldIndex)
     {
+        TypedSampler.RecordFieldAccess(fieldIndex);
+
         Shard shard = ShardFor(ordinal);
         (long startByte, long endByte, int numBits) = shard.VarLengthRange(ShardOrdinal(ordinal, shard), fieldIndex);
 
@@ -443,6 +476,8 @@ public sealed partial class HollowObjectTypeReadState : HollowTypeReadState, IHo
     /// <inheritdoc />
     public bool IsStringFieldEqual(int ordinal, int fieldIndex, string? testValue)
     {
+        TypedSampler.RecordFieldAccess(fieldIndex);
+
         Shard shard = ShardFor(ordinal);
         (long startByte, long endByte, int numBits) = shard.VarLengthRange(ShardOrdinal(ordinal, shard), fieldIndex);
 
@@ -465,6 +500,8 @@ public sealed partial class HollowObjectTypeReadState : HollowTypeReadState, IHo
     /// <inheritdoc />
     public int FindVarLengthFieldHashCode(int ordinal, int fieldIndex)
     {
+        TypedSampler.RecordFieldAccess(fieldIndex);
+
         Shard shard = ShardFor(ordinal);
         (long startByte, long endByte, int numBits) = shard.VarLengthRange(ShardOrdinal(ordinal, shard), fieldIndex);
 

@@ -23,6 +23,8 @@ using Hollow.Core.Read.DataAccess;
 using Hollow.Core.Read.Iterator;
 using Hollow.Core.Schema;
 
+using Hollow.Api.Sampling;
+
 namespace Hollow.Core.Read.Engine.Set;
 
 /// <summary>
@@ -203,6 +205,9 @@ public sealed partial class HollowSetTypeReadState : HollowTypeReadState, IHollo
     /// <summary>The schema of this type.</summary>
     public new HollowSetSchema Schema => (HollowSetSchema)base.Schema;
 
+    /// <summary>Counts this type's reads, typed so the hot path does not cast.</summary>
+    private HollowSetSampler TypedSampler => (HollowSetSampler)Sampler;
+
     /// <inheritdoc />
     HollowCollectionSchema IHollowCollectionTypeDataAccess.Schema => Schema;
 
@@ -290,6 +295,8 @@ public sealed partial class HollowSetTypeReadState : HollowTypeReadState, IHollo
     /// <inheritdoc />
     public int Size(int ordinal)
     {
+        TypedSampler.RecordSize();
+
         Shard shard = ShardFor(ordinal);
         return shard.DataElements.GetSize(ordinal >> shard.ShardOrdinalShift);
     }
@@ -300,6 +307,8 @@ public sealed partial class HollowSetTypeReadState : HollowTypeReadState, IHollo
     /// <inheritdoc />
     public bool Contains(int ordinal, int value, int hashCode)
     {
+        TypedSampler.RecordGet();
+
         Shard shard = ShardFor(ordinal);
         int shardOrdinal = ordinal >> shard.ShardOrdinalShift;
 
@@ -346,11 +355,20 @@ public sealed partial class HollowSetTypeReadState : HollowTypeReadState, IHollo
     }
 
     /// <inheritdoc />
-    public IEnumerable<int> ElementOrdinals(int ordinal) => OrdinalEnumerables.SetElements(this, ordinal);
+    public IEnumerable<int> ElementOrdinals(int ordinal)
+    {
+        TypedSampler.RecordIterator();
+
+        return OrdinalEnumerables.SetElements(this, ordinal);
+    }
 
     /// <inheritdoc />
-    public IEnumerable<int> PotentialMatchElementOrdinals(int ordinal, int hashCode) =>
-        OrdinalEnumerables.PotentialMatchSetElements(this, ordinal, hashCode);
+    public IEnumerable<int> PotentialMatchElementOrdinals(int ordinal, int hashCode)
+    {
+        TypedSampler.RecordGet();
+
+        return OrdinalEnumerables.PotentialMatchSetElements(this, ordinal, hashCode);
+    }
 
     /// <summary>
     /// The shard holding <paramref name="ordinal"/>, read through one load of the shards holder so

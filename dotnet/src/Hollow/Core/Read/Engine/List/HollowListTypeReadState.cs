@@ -24,6 +24,8 @@ using Hollow.Core.Read.DataAccess;
 using Hollow.Core.Read.Iterator;
 using Hollow.Core.Schema;
 
+using Hollow.Api.Sampling;
+
 namespace Hollow.Core.Read.Engine.List;
 
 /// <summary>
@@ -168,6 +170,9 @@ public sealed partial class HollowListTypeReadState : HollowTypeReadState, IHoll
     /// <summary>The schema of this type.</summary>
     public new HollowListSchema Schema => (HollowListSchema)base.Schema;
 
+    /// <summary>Counts this type's reads, typed so the hot path does not cast.</summary>
+    private HollowListSampler TypedSampler => (HollowListSampler)Sampler;
+
     /// <inheritdoc />
     HollowCollectionSchema IHollowCollectionTypeDataAccess.Schema => Schema;
 
@@ -255,6 +260,8 @@ public sealed partial class HollowListTypeReadState : HollowTypeReadState, IHoll
     /// <inheritdoc />
     public int Size(int ordinal)
     {
+        TypedSampler.RecordSize();
+
         Shard shard = ShardFor(ordinal);
         int shardOrdinal = ordinal >> shard.ShardOrdinalShift;
 
@@ -265,6 +272,8 @@ public sealed partial class HollowListTypeReadState : HollowTypeReadState, IHoll
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="listIndex"/> is past the end.</exception>
     public int GetElementOrdinal(int ordinal, int listIndex)
     {
+        TypedSampler.RecordGet();
+
         Shard shard = ShardFor(ordinal);
         int shardOrdinal = ordinal >> shard.ShardOrdinalShift;
 
@@ -282,7 +291,12 @@ public sealed partial class HollowListTypeReadState : HollowTypeReadState, IHoll
     }
 
     /// <inheritdoc />
-    public IEnumerable<int> ElementOrdinals(int ordinal) => OrdinalEnumerables.ListElements(this, ordinal);
+    public IEnumerable<int> ElementOrdinals(int ordinal)
+    {
+        TypedSampler.RecordIterator();
+
+        return OrdinalEnumerables.ListElements(this, ordinal);
+    }
 
     /// <summary>
     /// The shard holding <paramref name="ordinal"/>, read through one load of the shards holder so

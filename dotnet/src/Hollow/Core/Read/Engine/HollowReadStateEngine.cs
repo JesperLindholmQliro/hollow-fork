@@ -24,6 +24,9 @@ using Hollow.Core.Read.Engine.Map;
 using Hollow.Core.Read.Engine.Set;
 using Hollow.Core.Schema;
 
+using Hollow.Api.Sampling;
+using Hollow.Core.Read.Filter;
+
 namespace Hollow.Core.Read.Engine;
 
 /// <summary>
@@ -82,6 +85,68 @@ public sealed class HollowReadStateEngine : IHollowDataAccess
     /// because each type already knows its own footprint.
     /// </remarks>
     public long ApproxDataSize => _typeStates.Values.Sum(state => state.ApproxHeapFootprintInBytes);
+
+    /// <summary>Whether any type has counted a read since the last <see cref="ResetSampling"/>.</summary>
+    public bool HasSampleResults => _typeStates.Values.Any(state => state.Sampler.HasSampleResults);
+
+    /// <summary>Puts every type's counters under <paramref name="director"/>.</summary>
+    public void SetSamplingDirector(HollowSamplingDirector director)
+    {
+        foreach (HollowTypeReadState state in _typeStates.Values)
+        {
+            state.SetSamplingDirector(director);
+        }
+    }
+
+    /// <summary>
+    /// Puts only the counters <paramref name="fieldSpec"/> names under <paramref name="director"/>.
+    /// </summary>
+    public void SetFieldSpecificSamplingDirector(ITypeFilter fieldSpec, HollowSamplingDirector director)
+    {
+        foreach (HollowTypeReadState state in _typeStates.Values)
+        {
+            state.SetFieldSpecificSamplingDirector(fieldSpec, director);
+        }
+    }
+
+    /// <summary>Tells every director which thread applies transitions to this dataset.</summary>
+    public void SetSamplerUpdateThread(Thread? thread)
+    {
+        foreach (HollowTypeReadState state in _typeStates.Values)
+        {
+            state.Sampler.SetUpdateThread(thread);
+        }
+    }
+
+    /// <summary>Sets every type's counters back to zero.</summary>
+    public void ResetSampling()
+    {
+        foreach (HollowTypeReadState state in _typeStates.Values)
+        {
+            state.Sampler.Reset();
+        }
+    }
+
+    /// <summary>
+    /// What every type has counted, hottest first.
+    /// </summary>
+    /// <remarks>
+    /// Only types that counted something are included. A dataset of five hundred types would otherwise
+    /// bury the handful that were read under thousands of zeroes.
+    /// </remarks>
+    public IReadOnlyList<SampleResult> GetSampleResults()
+    {
+        SampleResult[] results =
+        [
+            .. _typeStates.Values
+                .Where(state => state.Sampler.HasSampleResults)
+                .SelectMany(state => state.Sampler.GetSampleResults()),
+        ];
+
+        Array.Sort(results);
+
+        return results;
+    }
 
     /// <summary>How many shards each type is split into.</summary>
     /// <remarks>Named <c>numShardsPerType</c> in Java.</remarks>
