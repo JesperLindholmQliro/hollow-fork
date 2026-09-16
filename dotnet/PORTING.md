@@ -2350,6 +2350,47 @@ named `test`, fails the very test the other three rely on; harmless only because
 fields to count.
 
 
+## Optional blob parts
+
+Most of a dataset's bytes usually sit in a few of its types, and most consumers do not read them. An
+optional part is how a producer splits those types out: they are written to their own artifact,
+published beside the blob, and fetched only by the consumers that want them. A consumer that names no
+parts reads the main blob alone, gets a working dataset without those types, and never pays for the
+bytes.
+
+A producer assigns types to named parts with `OptionalBlobPartConfig`. Anything unassigned goes into
+the blob, and a type belongs to at most one part — Java allows a type in two parts, which writes its
+records twice and leaves a consumer holding whichever part it read last.
+
+### The tags are what make a part safe
+
+A part repeats the main blob's origin and destination randomized tags in its own header, and the
+reader refuses a part whose tags disagree with the blob it was handed alongside. Without that, a part
+from another state reads as records at ordinals that mean something else entirely — not an error, just
+wrong answers. A part given under a name its own header contradicts is refused for the same reason.
+
+That is the one check worth knowing about. The file names are a convention; the tags are the contract.
+
+### A filter has to see every schema
+
+Each part declares the schemas of the types it carries, and the main header declares the rest. A type
+filter is resolved against all of them together, or a type that lives in a part reads as one the filter
+never heard of and is silently dropped.
+
+### The names in the blob store
+
+`snapshot_<part>-<toVersion>`, `delta_<part>-<fromVersion>-<toVersion>`, and the same for
+`reversedelta`. Those are the names a Java blob store writes, and the port matches them exactly — the
+producer's publisher and the consumer's retriever agree on nothing else. A part file that is not in the
+store is left out rather than refused, so a store missing one behaves like a store that never had it.
+
+### One departure in shape
+
+Java adds an output per part one at a time and then checks, at the point of writing, that every
+configured part got one. `OptionalBlobPartConfig.NewOutputs` takes a function and binds them all at
+once, so a part left without an output is refused where the caller can still do something about it.
+
+
 ## Status
 
 ### Ported and tested
@@ -2432,6 +2473,7 @@ fields to count.
 | `api.sampling` | `HollowSamplingDirector` and the disabled, enabled and time-sliced directors, `ISamplingStatusListener`, `SampleResult`, `IHollowSampler`, the object, collection and creation samplers, and `NullSampler`; wired through `IHollowTypeDataAccess`, the four read states, `HollowReadStateEngine` and `HollowApi` — see [Sampling](#sampling) |
 | `api.codegen.perfapi` | `HollowPerfApiGenerator` and its options, over `PerfApiEmitter` — one class per object type, and the built-in type APIs for the collections |
 | `api.codegen.testdata` | `HollowTestDataGenerator` and its options, over `TestDataEmitter` — a fluent builder per type, typed by its parent, with shortcuts for single-field wrapper types |
+| optional blob parts | `HollowBlobOptionalPartHeader` and its reader and writer, `OptionalBlobPartConfig`/`OptionalBlobPartOutputs`, `OptionalBlobPartInput`, the parts overloads on `HollowBlobWriter` and `HollowBlobReader`, and the staging, publishing and retrieval either side — see [Optional blob parts](#optional-blob-parts) |
 | `hollow-ui-tools` | Only `HollowDiffUtil.formatBytes`, as `ByteSize.Format`; the rest is servlet plumbing ASP.NET Core replaces |
 
 Test coverage is carried over from the Java tests where they exist — `VarIntTest`, `HashCodesTest`,
@@ -2545,7 +2587,6 @@ sets of `TypeFilter` exist; the recursive rule DSL is still absent.
 
 ### Not ported
 
-- **Optional blob parts**, which split a snapshot across several streams.
 - **Asynchronous snapshot publishing** and the blob storage cleaner.
 - **`AbstractHollowOrdinalIterable`**, which has nothing to port. It exists so that a generated hash
   index can turn a one-shot ordinal iterator into an `Iterable<T>`, and Java's own comment on it says
@@ -2604,9 +2645,8 @@ the chain, and a client generated at compile time reads it with types. What is l
 optimisation or a feature on top.
 
 Nothing is outstanding from the original list. What remains unported is listed above, and each item
-there is a feature on top rather than a gap in the loop: optional blob parts, asynchronous snapshot
-publishing and the blob storage cleaner, the memoized object-mapper collections, and the POJO
-generator.
+there is a feature on top rather than a gap in the loop: asynchronous snapshot publishing and the blob
+storage cleaner, the memoized object-mapper collections, and the POJO generator.
 
 All three UIs are ported — the explorer, the diff and the history — and with the history went
 `tools.history` underneath it. `tools` is now ported in full: `combine`, `split` and `patch` went in
