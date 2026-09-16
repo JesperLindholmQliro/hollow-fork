@@ -1737,6 +1737,115 @@ a delta releases the storage it replaced the moment the new storage is published
 alike — so a read part way through the old elements faults. That is what object longevity is for, and
 it is not what the benchmark is pricing.
 
+## Flat records
+
+A flat record is one record plus everything it references, serialised standalone — a movie, its title,
+its cast list and every actor in it, as one array of bytes that means something without the dataset it
+came from. It is what a producer hands to a service that wants a single record now rather than the
+whole feed.
+
+```csharp
+// Out of a read state engine, as bytes.
+FlatRecordExtractor extractor = new(readEngine, new HollowDatasetSchemaIdentifierMapper(readEngine));
+byte[] wire = extractor.Extract("Movie", ordinal).ToArray();
+
+// Into a write state engine at the far end.
+FlatRecord received = new(new ArrayByteData(wire), new HollowDatasetSchemaIdentifierMapper(writeEngine));
+int arrived = new FlatRecordDumper(writeEngine).Dump(received);
+```
+
+A CLR object can skip the engines entirely:
+
+```csharp
+FlatRecord record = mapper.WriteFlat(movie, schemaIdMapper);
+Movie again = mapper.ReadFlat<Movie>(record)!;
+```
+
+### The layout
+
+All varints: `[top record location] [records length] [record]* [primary key field locations]*`. Each
+record is a schema identifier followed by that schema's ordinary blob encoding, so the encoders are
+the ones the blob writer already uses.
+
+Two things about it are worth knowing before reading the code. **A reference field holds an index into
+the flat record**, not a dataset ordinal — which is the whole point, and is why the extractor needs an
+`IOrdinalRemapper` rather than copying records straight. **The top record is last**, because a record
+may only reference one already written, so the writer appends and the reader starts at the end. The
+trailing key field locations let a receiver key the record without a model class.
+
+Set elements and map keys are gap-encoded — what is stored is the step from the previous one — while
+map values are not. A collection's hashes are left out of what is written: a set's bucket layout is a
+property of the dataset it came from, not of the record, so two sets of the same elements have to
+flatten identically.
+
+Records deduplicate as they are written, by content hash, exactly as they would share an ordinal in a
+dataset.
+
+### A schema identifier names the schema the record was written against
+
+This is the one thing to get right, and it is easy to get backwards. The identifier says how the
+*writer* laid the record out. It has to: the reader walks the bytes field by field, so if it resolved
+the identifier to its own idea of the schema it would lose its place at the first field the two ends
+disagree about and then read a length, a field type or a pointer out of the middle of a value. Every
+symptom after that is a lie.
+
+What the *destination* declares decides only what is kept. A field it does not have is dropped, which
+is what lets a record written against a newer model land in an older consumer. A *reference* with
+nothing to point at is refused instead: a silently null reference is a worse answer than a failure.
+
+Because a disagreement here is otherwise undiagnosable, `FlatRecordDumper` wraps any failure in a dump
+of the record as this end decoded it — the schema layout it read, where it stopped, and the bytes in
+hex. Java has the same diagnostic and for the same reason.
+
+### `IHollowSchemaIdentifierMapper` has an implementation here
+
+Java ships none outside its own tests: numbering the schemas is left to the caller, and the caller is
+expected to have a registry. This port adds `HollowDatasetSchemaIdentifierMapper`, which numbers a
+dataset's schemas in declaration order.
+
+The cost is worth stating plainly, because it decides what the class is good for: **the numbers move
+when the model changes.** Add a type and everything after it renumbers. That makes it right for
+process-to-process transfer where both ends run the same model, and wrong for storage — a record
+written today and read after a model change would decode as something else. For storage, write a
+mapper that assigns stable identifiers and keeps them.
+
+### Reading one back is a conversion, not an assignment
+
+`ParseFlatRecord` on the four type mappers is the inverse of `WriteFlat`. Java's version reflects the
+value it read straight back onto the field and lets the JVM's widening rules make it fit. .NET will
+not assign an `int` to a `short`, so `MappedValues` puts back the type information the write threw
+away: a `short`, a `uint` and an `int` are all an int field, a `char[]` and a `string` are both a
+string field, and an enum is its member name.
+
+Construction prefers a constructor whose parameters all name mapped members, which is what makes a
+`record` type or a primary constructor work; failing that the type is built empty and its members
+assigned. An init-only property is settable through reflection — `init` is a rule the compiler
+enforces, and reflection is not the compiler — but a get-only auto-property is not, and falls to the
+constructor path. A member reachable by neither is an error rather than a silent null.
+
+### Two defects in the write path that round-tripping found
+
+Neither is reachable from Java, which has no unsigned types and no `char`-to-string mapping.
+
+**A `uint` or `ulong` overflowed the conversion to the signed field it is stored in.** Converting *by
+value* refused half of each range instead of storing it. They travel by their bits now, both ways. The
+one value that cannot survive is the bit pattern the format spends on null — `2147483648` for a
+`uint`, whose bits are `int.MinValue` — and that is refused with a message saying so rather than read
+back as null.
+
+**A lone `char` maps to a string field** per `ScalarFieldType`, but the write path only handled
+`char[]` and `string` and cast anything else, so a `char` member threw.
+
+### The stringifier
+
+`FlatRecordStringifier` prints a record as indented text. A one-field object prints as its value
+rather than as a record with a field — the wrapper types the object mapper generates around a string
+or an int are an artefact of the model, and printing them as records buries the data three lines deep
+in nothing. `ExcludeObjectTypes` leaves named types out wherever they appear.
+
+Numbers are formatted invariantly, where Java's version uses the default locale. A dump whose meaning
+changes with the machine that produced it is no use for comparing two of them.
+
 ## Combining, splitting and patching
 
 `Hollow.Core.Tools.Combine`, `.Split` and `.Patch` are the ports of `tools.combine`, `tools.split` and
@@ -2084,6 +2193,7 @@ which is released when nothing refers to it any more.
 | `core.write` | The write records (object, list, set, map), `FieldStatistics`, `HollowTypeWriteState` and its four subclasses including the four-way partitioned ordinal map, `HollowWriteStateEngine`, `HollowBlobHeaderWriter`, `HollowBlobWriter`, `HollowBlobOutput` |
 | `core.write.copy` | `HollowRecordCopier` and the object/list/set/map copiers, plus `IOrdinalRemapper`/`IdentityOrdinalRemapper` (Java puts the remapper in `tools.combine`) |
 | `core.write.objectmapper` | `HollowObjectMapper`, the four type mappers, and the `HollowTypeName`/`HollowInline`/`HollowTransient`/`HollowPrimaryKey`/`HollowHashKey`/`HollowShardLargeType`/`HollowCollectionTypeName`/`HollowMapTypeName` attributes, including Java's default hash-key derivation |
+| `core.write.objectmapper.flatrecords` | `FlatRecord`, `FlatRecordWriter`, `FlatRecordReader`, `FlatRecordOrdinalReader`, `FlatRecordExtractor`, `FlatRecordDumper`, `FlatRecordStringifier`, the traversal nodes, and `IHollowSchemaIdentifierMapper` with a dataset implementation Java does not ship — see [Flat records](#flat-records) |
 | `core.read` | `HollowBlobInput`, `HollowBlobHeaderReader`, `HollowBlobReader`, `HollowReadStateEngine`, `HollowTypeReadState`, `PopulatedOrdinalListener`, `SnapshotPopulatedOrdinalsReader`, the data-access interfaces, `ITypeFilter` |
 | `core.read.engine.*` | Data elements and read states for object, list, set and map |
 | `core.read.iterator` | `OrdinalEnumerables`, which walks a collection record's elements — including the potential-match walks used for key lookups |
