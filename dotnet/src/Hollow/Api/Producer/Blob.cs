@@ -123,6 +123,17 @@ public abstract class Blob : IPublishArtifact
     /// <summary>What this blob does to a consumer's state.</summary>
     public BlobType BlobType { get; }
 
+    /// <summary>
+    /// The optional parts written alongside this blob, by name, or nothing where it carries
+    /// everything.
+    /// </summary>
+    public virtual IReadOnlyCollection<string> OptionalPartNames => [];
+
+    /// <summary>Opens a stream over one of this blob's optional parts.</summary>
+    /// <exception cref="ArgumentException">This blob has no such part.</exception>
+    public virtual Stream OpenOptionalPartStream(string partName) =>
+        throw new ArgumentException($"this blob has no optional part named '{partName}'", nameof(partName));
+
     /// <inheritdoc />
     public abstract void Write(HollowBlobWriter blobWriter);
 

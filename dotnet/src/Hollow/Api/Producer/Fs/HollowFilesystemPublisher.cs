@@ -73,13 +73,40 @@ public sealed class HollowFilesystemPublisher : IPublisher
 
         string destination = Path.Combine(_blobStoreDirectory, fileName);
 
+        PublishTo(publishArtifact.OpenStream, destination);
+
+        if (publishArtifact is Blob { OptionalPartNames.Count: > 0 } blobWithParts)
+        {
+            foreach (string partName in blobWithParts.OptionalPartNames)
+            {
+                // The name a consumer will look for: the blob's own name with the part spliced in
+                // after the prefix, which is the layout a Java blob store uses.
+                string partFileName = blobWithParts.BlobType == BlobType.Snapshot
+                    ? $"snapshot_{partName}-{blobWithParts.ToVersion.Invariant()}"
+                    : $"{blobWithParts.BlobType.GetPrefix()}_{partName}-"
+                        + $"{blobWithParts.FromVersion.Invariant()}-{blobWithParts.ToVersion.Invariant()}";
+
+                PublishTo(
+                    () => blobWithParts.OpenOptionalPartStream(partName),
+                    Path.Combine(_blobStoreDirectory, partFileName));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Copies one artifact into place, through a temporary name so that a reader never sees a partial
+    /// file under the name it is looking for.
+    /// </summary>
+    private static void PublishTo(Func<Stream> openSource, string destination)
+    {
+
         // A ".tmp" suffix rather than a temporary directory, so that the move is within one filesystem
         // and therefore atomic. The retriever ignores a name whose trailing segment is not a number.
         string temporary = $"{destination}.{Random.Shared.Next(int.MaxValue).ToString(CultureInfo.InvariantCulture)}.tmp";
 
         try
         {
-            using (Stream source = publishArtifact.OpenStream())
+            using (Stream source = openSource())
             using (FileStream target = File.Create(temporary))
             {
                 source.CopyTo(target);

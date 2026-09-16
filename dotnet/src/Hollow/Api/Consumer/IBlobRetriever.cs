@@ -53,4 +53,13 @@ public interface IBlobRetriever
     /// having to know which stores support it.
     /// </remarks>
     HeaderBlob? RetrieveHeaderBlob(long currentVersion) => null;
+
+    /// <summary>
+    /// The optional blob parts this store carries, or <see langword="null"/> where it carries none.
+    /// </summary>
+    /// <remarks>
+    /// A consumer that names no parts reads only the main blob, and simply does not have the types
+    /// that live in them — which is the point of splitting a blob in the first place.
+    /// </remarks>
+    IReadOnlyCollection<string>? ConfiguredOptionalBlobParts => null;
 }

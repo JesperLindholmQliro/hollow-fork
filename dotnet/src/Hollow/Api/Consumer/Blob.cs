@@ -18,6 +18,8 @@
 using Hollow.Core;
 using Hollow.Core.Util;
 
+using Hollow.Core.Read;
+
 namespace Hollow.Api.Consumer;
 
 /// <summary>
@@ -75,6 +77,16 @@ public interface IVersionedBlob
     /// disk, say — before returning a stream over it.
     /// </remarks>
     Stream OpenStream();
+
+    /// <summary>
+    /// Opens the optional parts of this transition, or <see langword="null"/> where it has none.
+    /// </summary>
+    /// <remarks>
+    /// Defaulted, because most blob stores carry no parts. As with <see cref="OpenStream"/>, reading
+    /// must not be interrupted, so an implementation backed by a remote store fetches each part whole
+    /// before returning it.
+    /// </remarks>
+    OptionalBlobPartInput? OpenOptionalPartInputs() => null;
 }
 
 /// <summary>
@@ -150,6 +162,14 @@ public abstract class Blob : IVersionedBlob
 
     /// <inheritdoc />
     public abstract Stream OpenStream();
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Declared here as well as defaulted on the interface, because a caller holding a
+    /// <see cref="Blob"/> rather than an <see cref="IVersionedBlob"/> cannot reach a default
+    /// interface member.
+    /// </remarks>
+    public virtual OptionalBlobPartInput? OpenOptionalPartInputs() => null;
 
     /// <inheritdoc />
     public override string ToString() =>

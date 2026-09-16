@@ -53,6 +53,7 @@ public sealed class HollowFilesystemBlobStager : IBlobStager
 {
     private readonly string _stagingDirectory;
     private readonly IBlobCompressor _compressor;
+    private readonly OptionalBlobPartConfig? _optionalPartConfig;
 
     /// <summary>
     /// Stages blobs in <paramref name="stagingDirectory"/>, creating it if it does not exist.
@@ -62,7 +63,13 @@ public sealed class HollowFilesystemBlobStager : IBlobStager
     /// Wraps the staged bytes, or <see langword="null"/> for no compression. A publisher that reads a
     /// staged blob gets the compressed bytes, so whatever consumers read has to match.
     /// </param>
-    public HollowFilesystemBlobStager(string stagingDirectory, IBlobCompressor? compressor = null)
+    /// <param name="optionalPartConfig">
+    /// Which types go into optional parts, or <see langword="null"/> to write everything into the blob.
+    /// </param>
+    public HollowFilesystemBlobStager(
+        string stagingDirectory,
+        IBlobCompressor? compressor = null,
+        OptionalBlobPartConfig? optionalPartConfig = null)
     {
         ArgumentNullException.ThrowIfNull(stagingDirectory);
 
@@ -70,6 +77,7 @@ public sealed class HollowFilesystemBlobStager : IBlobStager
 
         _stagingDirectory = stagingDirectory;
         _compressor = compressor ?? NoBlobCompressor.Instance;
+        _optionalPartConfig = optionalPartConfig;
     }
 
     /// <inheritdoc />
@@ -79,7 +87,8 @@ public sealed class HollowFilesystemBlobStager : IBlobStager
             HollowConstants.VersionNone,
             version,
             BlobType.Snapshot,
-            _compressor);
+            _compressor,
+            _optionalPartConfig);
 
     /// <inheritdoc />
     public HeaderBlob OpenHeader(long version) =>
@@ -89,7 +98,12 @@ public sealed class HollowFilesystemBlobStager : IBlobStager
     /// <inheritdoc />
     public Blob OpenDelta(long fromVersion, long toVersion) =>
         new FilesystemBlob(
-            StagingPath("delta", fromVersion, toVersion), fromVersion, toVersion, BlobType.Delta, _compressor);
+            StagingPath("delta", fromVersion, toVersion),
+            fromVersion,
+            toVersion,
+            BlobType.Delta,
+            _compressor,
+            _optionalPartConfig);
 
     /// <inheritdoc />
     public Blob OpenReverseDelta(long fromVersion, long toVersion) =>
@@ -98,7 +112,8 @@ public sealed class HollowFilesystemBlobStager : IBlobStager
             fromVersion,
             toVersion,
             BlobType.ReverseDelta,
-            _compressor);
+            _compressor,
+            _optionalPartConfig);
 
     /// <summary>
     /// Where a blob is staged. The name carries a random suffix so that two producers sharing a staging
@@ -115,10 +130,19 @@ public sealed class HollowFilesystemBlobStager : IBlobStager
     }
 
     private sealed class FilesystemBlob(
-        string path, long fromVersion, long toVersion, BlobType blobType, IBlobCompressor compressor)
+        string path,
+        long fromVersion,
+        long toVersion,
+        BlobType blobType,
+        IBlobCompressor compressor,
+        OptionalBlobPartConfig? optionalPartConfig)
         : Blob(fromVersion, toVersion, blobType)
     {
+        private readonly Dictionary<string, string> _partPaths = new(StringComparer.Ordinal);
+
         public override string Path => path;
+
+        public override IReadOnlyCollection<string> OptionalPartNames => _partPaths.Keys;
 
         public override void Write(HollowBlobWriter blobWriter)
         {
@@ -126,30 +150,56 @@ public sealed class HollowFilesystemBlobStager : IBlobStager
 
             using FileStream file = File.Create(path);
             using Stream stream = compressor.Compress(file);
+            using HollowBlobOutput output = HollowBlobOutput.Serial(stream, leaveOpen: true);
 
-            switch (BlobType)
+            List<IDisposable> partFiles = [];
+
+            try
             {
-                case BlobType.Snapshot:
-                    blobWriter.WriteSnapshot(stream);
-                    break;
+                OptionalBlobPartOutputs? parts = optionalPartConfig?.NewOutputs(partName =>
+                {
+                    string partPath = path + "_" + partName;
+                    _partPaths[partName] = partPath;
 
-                case BlobType.Delta:
-                    blobWriter.WriteDelta(stream);
-                    break;
+                    FileStream partFile = File.Create(partPath);
+                    Stream partStream = compressor.Compress(partFile);
 
-                case BlobType.ReverseDelta:
-                    blobWriter.WriteReverseDelta(stream);
-                    break;
+                    partFiles.Add(partFile);
+                    partFiles.Add(partStream);
 
-                default:
-                    throw new ArgumentOutOfRangeException(nameof(blobWriter), BlobType, "unknown blob type");
+                    return HollowBlobOutput.Serial(partStream, leaveOpen: true);
+                });
+
+                StagedBlobs.WriteTo(blobWriter, output, parts, BlobType);
+            }
+            finally
+            {
+                // Innermost first, so a compressing stream flushes its trailer into the file below it.
+                for (int i = partFiles.Count - 1; i >= 0; i--)
+                {
+                    partFiles[i].Dispose();
+                }
             }
         }
 
         public override Stream OpenStream() => compressor.Decompress(File.OpenRead(path));
 
-        public override void Cleanup() => File.Delete(path);
+        public override Stream OpenOptionalPartStream(string partName) =>
+            _partPaths.TryGetValue(partName, out string? partPath)
+                ? compressor.Decompress(File.OpenRead(partPath))
+                : base.OpenOptionalPartStream(partName);
+
+        public override void Cleanup()
+        {
+            File.Delete(path);
+
+            foreach (string partPath in _partPaths.Values)
+            {
+                File.Delete(partPath);
+            }
+        }
     }
+
 
     private sealed class FilesystemHeaderBlob(string path, long version, IBlobCompressor compressor)
         : HeaderBlob(version)
@@ -179,27 +229,32 @@ public sealed class HollowFilesystemBlobStager : IBlobStager
 /// Convenient for a test or a small dataset. A production producer should stage to disk instead — see
 /// <see cref="HollowFilesystemBlobStager"/> for why.
 /// </remarks>
-public sealed class HollowInMemoryBlobStager : IBlobStager
+public sealed class HollowInMemoryBlobStager(OptionalBlobPartConfig? optionalPartConfig = null) : IBlobStager
 {
     /// <inheritdoc />
     public Blob OpenSnapshot(long version) =>
-        new InMemoryBlob(HollowConstants.VersionNone, version, BlobType.Snapshot);
+        new InMemoryBlob(HollowConstants.VersionNone, version, BlobType.Snapshot, optionalPartConfig);
 
     /// <inheritdoc />
     public HeaderBlob OpenHeader(long version) => new InMemoryHeaderBlob(version);
 
     /// <inheritdoc />
     public Blob OpenDelta(long fromVersion, long toVersion) =>
-        new InMemoryBlob(fromVersion, toVersion, BlobType.Delta);
+        new InMemoryBlob(fromVersion, toVersion, BlobType.Delta, optionalPartConfig);
 
     /// <inheritdoc />
     public Blob OpenReverseDelta(long fromVersion, long toVersion) =>
-        new InMemoryBlob(fromVersion, toVersion, BlobType.ReverseDelta);
+        new InMemoryBlob(fromVersion, toVersion, BlobType.ReverseDelta, optionalPartConfig);
 
-    private sealed class InMemoryBlob(long fromVersion, long toVersion, BlobType blobType)
+    private sealed class InMemoryBlob(
+        long fromVersion, long toVersion, BlobType blobType, OptionalBlobPartConfig? optionalPartConfig)
         : Blob(fromVersion, toVersion, blobType)
     {
+        private readonly Dictionary<string, byte[]> _parts = new(StringComparer.Ordinal);
+
         private byte[] _bytes = [];
+
+        public override IReadOnlyCollection<string> OptionalPartNames => _parts.Keys;
 
         public override void Write(HollowBlobWriter blobWriter)
         {
@@ -207,22 +262,34 @@ public sealed class HollowInMemoryBlobStager : IBlobStager
 
             using MemoryStream stream = new();
 
-            switch (BlobType)
+            Dictionary<string, MemoryStream> partStreams = new(StringComparer.Ordinal);
+            List<HollowBlobOutput> partOutputs = [];
+
+            using (HollowBlobOutput output = HollowBlobOutput.Serial(stream, leaveOpen: true))
             {
-                case BlobType.Snapshot:
-                    blobWriter.WriteSnapshot(stream);
-                    break;
+                OptionalBlobPartOutputs? parts = optionalPartConfig?.NewOutputs(partName =>
+                {
+                    MemoryStream partStream = new();
+                    partStreams[partName] = partStream;
 
-                case BlobType.Delta:
-                    blobWriter.WriteDelta(stream);
-                    break;
+                    HollowBlobOutput partOutput = HollowBlobOutput.Serial(partStream, leaveOpen: true);
+                    partOutputs.Add(partOutput);
 
-                case BlobType.ReverseDelta:
-                    blobWriter.WriteReverseDelta(stream);
-                    break;
+                    return partOutput;
+                });
 
-                default:
-                    throw new ArgumentOutOfRangeException(nameof(blobWriter), BlobType, "unknown blob type");
+                StagedBlobs.WriteTo(blobWriter, output, parts, BlobType);
+            }
+
+            foreach (HollowBlobOutput partOutput in partOutputs)
+            {
+                partOutput.Dispose();
+            }
+
+            foreach ((string partName, MemoryStream partStream) in partStreams)
+            {
+                _parts[partName] = partStream.ToArray();
+                partStream.Dispose();
             }
 
             _bytes = stream.ToArray();
@@ -230,7 +297,16 @@ public sealed class HollowInMemoryBlobStager : IBlobStager
 
         public override Stream OpenStream() => new MemoryStream(_bytes, writable: false);
 
-        public override void Cleanup() => _bytes = [];
+        public override Stream OpenOptionalPartStream(string partName) =>
+            _parts.TryGetValue(partName, out byte[]? part)
+                ? new MemoryStream(part, writable: false)
+                : base.OpenOptionalPartStream(partName);
+
+        public override void Cleanup()
+        {
+            _bytes = [];
+            _parts.Clear();
+        }
     }
 
     private sealed class InMemoryHeaderBlob(long version) : HeaderBlob(version)
@@ -250,5 +326,37 @@ public sealed class HollowInMemoryBlobStager : IBlobStager
         public override Stream OpenStream() => new MemoryStream(_bytes, writable: false);
 
         public override void Cleanup() => _bytes = [];
+    }
+}
+
+/// <summary>
+/// What both stagers do with a blob writer, which differs only in where the bytes land.
+/// </summary>
+internal static class StagedBlobs
+{
+    /// <summary>Writes the transition a blob covers, and its optional parts.</summary>
+    internal static void WriteTo(
+        HollowBlobWriter blobWriter,
+        HollowBlobOutput output,
+        OptionalBlobPartOutputs? parts,
+        BlobType blobType)
+    {
+        switch (blobType)
+        {
+            case BlobType.Snapshot:
+                blobWriter.WriteSnapshot(output, parts);
+                break;
+
+            case BlobType.Delta:
+                blobWriter.WriteDelta(output, parts);
+                break;
+
+            case BlobType.ReverseDelta:
+                blobWriter.WriteReverseDelta(output, parts);
+                break;
+
+            default:
+                throw new ArgumentOutOfRangeException(nameof(blobType), blobType, "unknown blob type");
+        }
     }
 }

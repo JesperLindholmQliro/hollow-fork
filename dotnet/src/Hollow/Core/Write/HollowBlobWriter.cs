@@ -343,7 +343,13 @@ public sealed class HollowBlobWriter
     /// written before the next <see cref="HollowWriteStateEngine.PrepareForNextCycle"/>.
     /// </para>
     /// </remarks>
-    public void WriteReverseDelta(HollowBlobOutput output)
+    public void WriteReverseDelta(HollowBlobOutput output) =>
+        WriteReverseDelta(output, optionalParts: null);
+
+    /// <summary>
+    /// Writes a reverse delta, sending the types assigned to an optional part to that part's output.
+    /// </summary>
+    public void WriteReverseDelta(HollowBlobOutput output, OptionalBlobPartOutputs? optionalParts)
     {
         ArgumentNullException.ThrowIfNull(output);
 
@@ -353,9 +359,11 @@ public sealed class HollowBlobWriter
         List<HollowTypeWriteState> changedTypes =
             [.. _stateEngine.OrderedTypeStates.Where(state => state.HasChangedSinceLastCycle())];
 
+        SchemasByPart split = SplitSchemas([.. changedTypes.Select(state => state.Schema)], optionalParts);
+
         HollowBlobHeader header = new()
         {
-            Schemas = [.. changedTypes.Select(state => state.Schema)],
+            Schemas = split.Main,
             HeaderTags = new Dictionary<string, string>(_stateEngine.PreviousHeaderTags, StringComparer.Ordinal),
             OriginRandomizedTag = _stateEngine.RandomizedTag,
             DestinationRandomizedTag = _stateEngine.PreviousRandomizedTag,
@@ -363,21 +371,30 @@ public sealed class HollowBlobWriter
 
         _headerWriter.WriteHeader(header, output);
 
-        VarInt.WriteVInt(output, changedTypes.Count);
+        WritePartHeaders(
+            optionalParts,
+            split,
+            _stateEngine.RandomizedTag,
+            _stateEngine.PreviousRandomizedTag);
+
+        WriteStateCounts(output, optionalParts, state => state.HasChangedSinceLastCycle());
 
         foreach (HollowTypeWriteState typeState in changedTypes)
         {
             typeState.CalculateReverseDelta();
 
-            typeState.Schema.WriteTo(output);
+            HollowBlobOutput destination = OutputFor(typeState, output, optionalParts);
+
+            typeState.Schema.WriteTo(destination);
 
             // A reverse delta declares the previous cycle's shard count, because that is the
             // arrangement the consumer it takes back has to end up in.
-            WriteNumShards(output, typeState.RevNumShards);
-            typeState.WriteReverseDelta(output);
+            WriteNumShards(destination, typeState.RevNumShards);
+            typeState.WriteReverseDelta(destination);
         }
 
         output.Flush();
+        optionalParts?.Flush();
     }
 
     /// <summary>

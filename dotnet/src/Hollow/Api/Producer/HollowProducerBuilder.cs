@@ -39,6 +39,8 @@ public sealed class HollowProducerBuilder
     /// <summary>Where blobs are written before publishing.</summary>
     internal IBlobStager? BlobStager { get; private set; }
 
+    internal OptionalBlobPartConfig? OptionalPartConfig { get; private set; }
+
     /// <summary>Where published blobs go.</summary>
     internal IPublisher? Publisher { get; private set; }
 
@@ -87,6 +89,23 @@ public sealed class HollowProducerBuilder
     }
 
     /// <summary>
+    /// Writes the types <paramref name="optionalPartConfig"/> assigns into optional blob parts.
+    /// </summary>
+    /// <remarks>
+    /// Takes effect only where the stager is one this builder creates. A stager supplied through
+    /// <see cref="WithBlobStager"/> was already given its own configuration, and this does not reach
+    /// back into it.
+    /// </remarks>
+    public HollowProducerBuilder WithOptionalPartConfig(OptionalBlobPartConfig optionalPartConfig)
+    {
+        ArgumentNullException.ThrowIfNull(optionalPartConfig);
+
+        OptionalPartConfig = optionalPartConfig;
+
+        return this;
+    }
+
+    /// <summary>
     /// Stages blobs to <paramref name="stagingDirectory"/>, which keeps a large cycle's blobs off the
     /// heap.
     /// </summary>
@@ -94,7 +113,7 @@ public sealed class HollowProducerBuilder
     {
         ArgumentNullException.ThrowIfNull(stagingDirectory);
 
-        BlobStager = new HollowFilesystemBlobStager(stagingDirectory);
+        BlobStager = new HollowFilesystemBlobStager(stagingDirectory, optionalPartConfig: OptionalPartConfig);
 
         return this;
     }
@@ -284,7 +303,7 @@ public sealed class HollowProducerBuilder
     /// <exception cref="InvalidOperationException">No publisher was configured.</exception>
     public HollowProducer Build()
     {
-        BlobStager ??= new HollowInMemoryBlobStager();
+        BlobStager ??= new HollowInMemoryBlobStager(OptionalPartConfig);
 
         return new HollowProducer(this);
     }

@@ -19,6 +19,8 @@ using System.Globalization;
 using Hollow.Core;
 using Hollow.Core.Util;
 
+using Hollow.Core.Read;
+
 namespace Hollow.Api.Consumer.Fs;
 
 /// <summary>
@@ -39,14 +41,22 @@ namespace Hollow.Api.Consumer.Fs;
 public sealed class HollowFilesystemBlobRetriever : IBlobRetriever
 {
     private readonly string _blobStoreDirectory;
+    private readonly string[] _optionalPartNames;
 
     /// <summary>
     /// Reads blobs from <paramref name="blobStoreDirectory"/>.
     /// </summary>
     /// <exception cref="DirectoryNotFoundException">The directory does not exist.</exception>
-    public HollowFilesystemBlobRetriever(string blobStoreDirectory)
+    /// <param name="blobStoreDirectory">Where the blobs are.</param>
+    /// <param name="optionalBlobParts">
+    /// The optional parts to fetch alongside each blob, or nothing to read only the main blob — in
+    /// which case this consumer simply does not have the types that live in them.
+    /// </param>
+    public HollowFilesystemBlobRetriever(
+        string blobStoreDirectory, params string[] optionalBlobParts)
     {
         ArgumentNullException.ThrowIfNull(blobStoreDirectory);
+        ArgumentNullException.ThrowIfNull(optionalBlobParts);
 
         if (!Directory.Exists(blobStoreDirectory))
         {
@@ -54,6 +64,39 @@ public sealed class HollowFilesystemBlobRetriever : IBlobRetriever
         }
 
         _blobStoreDirectory = blobStoreDirectory;
+        _optionalPartNames = optionalBlobParts;
+    }
+
+    /// <inheritdoc />
+    public IReadOnlyCollection<string>? ConfiguredOptionalBlobParts =>
+        _optionalPartNames.Length == 0 ? null : _optionalPartNames;
+
+    /// <summary>
+    /// Where each configured part of one transition sits, by name.
+    /// </summary>
+    /// <remarks>
+    /// The layout a Java blob store writes: the blob's own prefix, an underscore, the part name, then
+    /// the versions. A part file that is not there is left out rather than refused, so that a store
+    /// missing one behaves like a store that never had it.
+    /// </remarks>
+    private Dictionary<string, string> PartPaths(string prefix, params long[] versions)
+    {
+        Dictionary<string, string> paths = new(StringComparer.Ordinal);
+
+        foreach (string partName in _optionalPartNames)
+        {
+            string fileName = $"{prefix}_{partName}-"
+                + string.Join("-", versions.Select(version => version.Invariant()));
+
+            string path = PathFor(fileName);
+
+            if (File.Exists(path))
+            {
+                paths[partName] = path;
+            }
+        }
+
+        return paths;
     }
 
     /// <inheritdoc />
@@ -63,7 +106,7 @@ public sealed class HollowFilesystemBlobRetriever : IBlobRetriever
 
         if (File.Exists(exactPath))
         {
-            return new FilesystemBlob(exactPath, desiredVersion);
+            return new FilesystemBlob(exactPath, desiredVersion, PartPaths("snapshot", desiredVersion));
         }
 
         long nearest = HollowConstants.VersionNone;
@@ -78,7 +121,8 @@ public sealed class HollowFilesystemBlobRetriever : IBlobRetriever
 
         return nearest == HollowConstants.VersionNone
             ? null
-            : new FilesystemBlob(PathFor($"snapshot-{nearest.Invariant()}"), nearest);
+            : new FilesystemBlob(
+                PathFor($"snapshot-{nearest.Invariant()}"), nearest, PartPaths("snapshot", nearest));
     }
 
     /// <inheritdoc />
@@ -105,7 +149,8 @@ public sealed class HollowFilesystemBlobRetriever : IBlobRetriever
 
         foreach ((long toVersion, string path) in EnumerateBlobs(transitionPrefix))
         {
-            return new FilesystemBlob(path, fromVersion, toVersion);
+            return new FilesystemBlob(
+                path, fromVersion, toVersion, PartPaths(prefix.TrimEnd('-'), fromVersion, toVersion));
         }
 
         return null;
@@ -134,14 +179,41 @@ public sealed class HollowFilesystemBlobRetriever : IBlobRetriever
     private sealed class FilesystemBlob : Blob
     {
         private readonly string _path;
+        private readonly IReadOnlyDictionary<string, string> _partPaths;
 
-        internal FilesystemBlob(string path, long toVersion)
-            : base(toVersion) => _path = path;
+        internal FilesystemBlob(string path, long toVersion, IReadOnlyDictionary<string, string> partPaths)
+            : base(toVersion)
+        {
+            _path = path;
+            _partPaths = partPaths;
+        }
 
-        internal FilesystemBlob(string path, long fromVersion, long toVersion)
-            : base(fromVersion, toVersion) => _path = path;
+        internal FilesystemBlob(
+            string path, long fromVersion, long toVersion, IReadOnlyDictionary<string, string> partPaths)
+            : base(fromVersion, toVersion)
+        {
+            _path = path;
+            _partPaths = partPaths;
+        }
 
         public override Stream OpenStream() => File.OpenRead(_path);
+
+        public override OptionalBlobPartInput? OpenOptionalPartInputs()
+        {
+            if (_partPaths.Count == 0)
+            {
+                return null;
+            }
+
+            OptionalBlobPartInput inputs = new();
+
+            foreach ((string partName, string path) in _partPaths)
+            {
+                inputs.AddInput(partName, path);
+            }
+
+            return inputs;
+        }
     }
 
     private sealed class FilesystemHeaderBlob(string path, long version) : HeaderBlob(version)

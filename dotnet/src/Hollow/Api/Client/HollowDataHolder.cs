@@ -156,8 +156,9 @@ internal sealed class HollowDataHolder
         {
             using (Stream stream = snapshotBlob.OpenStream())
             using (HollowBlobInput input = HollowBlobInput.Serial(stream, leaveOpen: true))
+            using (OptionalBlobPartInput? parts = snapshotBlob.OpenOptionalPartInputs())
             {
-                _reader.ReadSnapshot(input, _filter);
+                _reader.ReadSnapshot(input, parts, _filter);
             }
 
             CurrentVersion = snapshotBlob.ToVersion;
@@ -201,8 +202,9 @@ internal sealed class HollowDataHolder
         {
             using (Stream stream = blob.OpenStream())
             using (HollowBlobInput input = HollowBlobInput.Serial(stream, leaveOpen: true))
+            using (OptionalBlobPartInput? parts = blob.OpenOptionalPartInputs())
             {
-                _reader.ApplyDelta(input);
+                _reader.ApplyDelta(input, parts);
             }
 
             long previousVersion = CurrentVersion;
