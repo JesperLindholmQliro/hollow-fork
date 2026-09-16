@@ -670,6 +670,9 @@ share, so it is the only one that can drift.
 
 Java's three independent extras — a POJO generator, a "performance API" generator and a test-data
 builder generator, around 1,900 lines between them — are not ported, and nothing else depends on them.
+The runtimes two of them generate against are ported: see [The performance API](#the-performance-api)
+and the `api.testdata` row in [Status](#status). What is missing is the code generation, not the thing
+generated code would call.
 
 
 ## The samples
@@ -2170,6 +2173,122 @@ The mapping outlives the `HollowBlobInput` that opened it: the data elements rea
 long as the state engine is alive. Disposing the input closes the stream and leaves the mapping be,
 which is released when nothing refers to it any more.
 
+## The performance API
+
+A generated client API hands out record objects. That is the right trade almost always, and the wrong
+one when a process walks millions of records in a tight loop: every hop allocates a wrapper whose only
+content is an ordinal. The performance API is the same dataset without the wrappers — a type API per
+type, and a reference that is nothing but a number.
+
+### A reference is a struct, so the type system can hold the type name
+
+`HollowRef` is a `readonly struct` over a single `long`, packing the type identifier above the ordinal.
+Java cannot do that: a long is a long, so it ships a `Ref` class of static helpers that pack and unpack
+those longs and relies on the caller not to hand a `Movie` reference to an `Actor` API. A struct carries
+the same one word and still refuses that call at compile time.
+
+That leaves Java's two names for one thing, so both moved:
+
+- Java's `Ref` — the static packer — is this port's `HollowRef`, because here it is the reference
+  itself rather than a bag of helpers for manipulating one.
+- Java's `HollowRef` — the base class for a record wrapper that holds one — is `HollowRefObject`,
+  since a reference and an object holding a reference should not share a name.
+
+Java's ordinal iterators are `IEnumerable<int>` here, and a map's entry cursor is
+`IEnumerable<HollowRefEntry>`. A cursor with `next()` and `getKey()`/`getValue()` on the side is how
+Java avoids allocating per entry; `foreach` over a sequence of `readonly record struct` costs the same
+and reads as a sequence.
+
+### The cache keeps what the last transition removed, on purpose
+
+`HollowPerfApiCache<T>` holds one wrapper per ordinal and swaps its backing array on each transition,
+keeping the previous state's entry for an ordinal the new state does not populate. That looks like a
+leak and is not: Java's comment says it plainly — *"This is required if removed ordinals are queried in
+the cache"* — because code holding a reference across a transition would otherwise get nothing back for
+a record that has just gone.
+
+It survives one transition, not two. `PerfApiTests` pins both halves of that, which is the useful
+thing to know: a record removed in the last transition is still readable, and one removed two
+transitions ago is not.
+
+
+## Compaction
+
+A record keeps its ordinal for as long as it exists, so a dataset that churns leaves gaps. A type whose
+highest ordinal is a hundred but which holds twenty records still costs every consumer the full hundred
+slots, because the fixed-length storage is one flat run indexed by ordinal. `HollowCompactor` closes the
+gaps by producing a delta consisting of nothing but removals and re-additions of identical records at
+lower ordinals.
+
+It takes several deltas to finish. Relocating one type's records changes the ordinals its referencing
+types point at, which churns those in turn, so a single cycle only compacts types that do not reference
+one another. `CompactionConfig.ApproximateDeltaBytesPerCycle` bounds it further: a budgeted cycle
+compacts only the type whose holes cost the most, and only as many of its records as the budget affords
+once the referencing closure is counted.
+
+### A budget too small is an answer, not a log line
+
+A budget that cannot afford one record together with everything referencing it will never compact that
+type, however many cycles run. Java logs a warning and returns zero, which is a decision a producer
+cannot act on without reading logs. Here it is `HollowCompactor.SkippedTypes`: the type name mapped to
+what went wrong and what budget would fix it. Everything else about the cost model is Java's.
+
+Two small departures beyond that:
+
+- `PreserveHashPositions` is a constant `false`. Java asks the read engine which types have a defined
+  hash code, which only ever answers yes when a `HollowObjectHashCodeFinder` has been installed, and
+  that hook is [not ported](#not-ported). The question has one answer here, so it is written as one.
+- A type with no ordinals at all is refused as a candidate outright. Java divides by zero, compares the
+  resulting `NaN` against the threshold, and arrives at the right answer by accident.
+
+
+## Metrics
+
+Two listener layers sit on the producer's and the consumer's events and turn them into numbers:
+`ProducerMetricsListener` for cycles and announcements, `RefreshMetricsListener` for refreshes. Both are
+abstract, because where the numbers go is a deployment's business.
+
+Java names them `AbstractProducerMetricsListener` and `AbstractRefreshMetricsListener`; the `abstract`
+keyword says that here. Two things Java needs and this does not:
+
+- **The builders.** Each metric is built through a nested `Builder`, which is what a class with a dozen
+  fields, half of them optional, requires in Java. An init-only record needs none.
+- **The reporting interfaces.** `ProducerMetricsReporting` and `RefreshMetricsReporting` exist so that a
+  subclass can implement one reporting method and ignore the other. `protected virtual` and
+  `protected abstract` say the same thing without a second type, so neither interface is ported.
+
+### The unit is in the type
+
+Java reports every instant as a `long` and leaves the reader to work out what it means. Two different
+things are hiding in there, and they are not interchangeable:
+
+- The last cycle success, the last announcement success and the refresh end are monotonic readings with
+  no relation to the wall clock. They are `Stopwatch.GetTimestamp` readings here, named
+  `...Timestamp`, and `Stopwatch.GetElapsedTime` turns one into an age.
+- The producer's cycle start and the announcement time are wall-clock Unix milliseconds out of a blob
+  header or announcement metadata. They are `DateTimeOffset` here, named `...Time`.
+
+Durations are `TimeSpan` rather than a `long` of milliseconds, and an absent optional is `null` rather
+than an `OptionalLong`.
+
+### A metric never fails a refresh
+
+A reporter that throws inside `RefreshMetricsListener` would otherwise fail the consumer's refresh over
+a metric. Java catches it and logs at severe; this port takes no logging dependency, so it
+raises `ReportingFailed` instead — the same pattern the producer's listener support already uses for a
+listener that throws.
+
+A header tag that is absent or unparseable leaves its metric absent rather than wrong, on both sides.
+
+### When an announcement time means anything
+
+`RefreshMetricsListener` records the announcement timestamp for a version only when the namespace was
+unpinned both before and now. A pinned namespace holds a consumer at a version announced long ago, and
+the refresh that unpins it moves off one; in either case the gap between announcement and load is the
+pin, not the consumer's lag, and reporting it as lag would be worse than reporting nothing. The same
+reasoning drops it when a refresh stops short of the version it asked for.
+
+
 ## Status
 
 ### Ported and tested
@@ -2240,6 +2359,15 @@ which is released when nothing refers to it any more.
 | `tools.combine` | `HollowCombiner` and its five copy directors, `HollowCombinerOrdinalRemapper` and `HollowCombinerPrimaryKeyOrdinalRemapper`; see [Combining, splitting and patching](#combining-splitting-and-patching) |
 | `tools.split` | `HollowSplitter`, `HollowSplitterShardCopier`, `HollowSplitterOrdinalRemapper` and the ordinal and primary-key copy directors; see [The splitter](#the-splitter) |
 | `tools.patch` | `HollowStateEngineRecordPatcher` with `TypeMatchSpec` and `HollowPatcherCombinerCopyDirector`, and `HollowStateDeltaPatcher` with `PartialOrdinalRemapper`; see [The patchers](#the-patchers) |
+| `api.perfapi` | `HollowRef`, `HollowPerformanceApi`, the four type performance APIs, the collection views and `HollowPerfApiCache<T>`; see [The performance API](#the-performance-api) |
+| `api.metrics` | `HollowMetrics`, `HollowConsumerMetrics`, `HollowProducerMetrics`, `IHollowMetricsCollector<T>` |
+| `api.producer` (minter) | `VersionMinterWithLookahead`, which reserves the next version before publishing this one |
+| `tools.filter` | `FilteredHollowBlobWriter`, which drops types and fields from a blob by walking its bytes, and `BlobCopy` (Java's `IOUtils`) under it |
+| `api.testdata` | `HollowTestRecord` and the four record kinds, `HollowTestDataset`; `StateEngineRoundTripper` moved out of the test project into `core.util` to support it |
+| `tools.compact` | `HollowCompactor` and `CompactionConfig`; see [Compaction](#compaction) |
+| `tools.diff.specific` | `HollowSpecificDiff`, and the subset-of-paths hash and equality overloads on `HollowIndexerValueTraverser` it needs |
+| `api.producer.metrics` | `CycleMetrics`, `AnnouncementMetrics`, `ProducerMetricsListener` (Java's `AbstractProducerMetricsListener`); see [Metrics](#metrics) |
+| `api.consumer.metrics` | `ConsumerRefreshMetrics`, `UpdatePlanDetails`, `RefreshMetricsListener` (Java's `AbstractRefreshMetricsListener`); see [Metrics](#metrics) |
 | `hollow-ui-tools` | Only `HollowDiffUtil.formatBytes`, as `ByteSize.Format`; the rest is servlet plumbing ASP.NET Core replaces |
 
 Test coverage is carried over from the Java tests where they exist — `VarIntTest`, `HashCodesTest`,
@@ -2354,10 +2482,9 @@ sets of `TypeFilter` exist; the recursive rule DSL is still absent.
 ### Not ported
 
 - **Optional blob parts**, which split a snapshot across several streams.
-- **Producer metrics** (`api.producer.metrics`), asynchronous snapshot publishing, and the blob
-  storage cleaner.
-- **The consumer's optional layers.** Metrics collection (`api.consumer.metrics`) and
-  `api.consumer.data`.
+- **Asynchronous snapshot publishing** and the blob storage cleaner.
+- **Part of `api.consumer.data`** — `HollowDataAccessor<T>` is ported over `RecordChangeSet`;
+  `AbstractHollowOrdinalIterable` and `GenericHollowRecordDataAccessor` are not.
 - **The deprecated `api.client.HollowClient`**, superseded by `HollowConsumer`; only the parts of
   `api.client` that `HollowConsumer` uses are ported.
 - **`api.codegen`'s three extras** (the POJO, "performance API" and test-data builder generators; the
@@ -2398,8 +2525,9 @@ the chain, and a client generated at compile time reads it with types. What is l
 optimisation or a feature on top.
 
 Nothing is outstanding from the original list. What remains unported is listed above, and each item
-there is a feature on top rather than a gap in the loop: optional blob parts, producer metrics, and the
-consumer's optional layers.
+there is a feature on top rather than a gap in the loop: optional blob parts, asynchronous snapshot
+publishing and the blob storage cleaner, and the three `api.codegen` generators that have no client
+API behind them.
 
 All three UIs are ported — the explorer, the diff and the history — and with the history went
 `tools.history` underneath it. `tools` is now ported in full: `combine`, `split` and `patch` went in
