@@ -2474,6 +2474,7 @@ once, so a part left without an output is refused where the caller can still do 
 | `api.codegen.perfapi` | `HollowPerfApiGenerator` and its options, over `PerfApiEmitter` — one class per object type, and the built-in type APIs for the collections |
 | `api.codegen.testdata` | `HollowTestDataGenerator` and its options, over `TestDataEmitter` — a fluent builder per type, typed by its parent, with shortcuts for single-field wrapper types |
 | optional blob parts | `HollowBlobOptionalPartHeader` and its reader and writer, `OptionalBlobPartConfig`/`OptionalBlobPartOutputs`, `OptionalBlobPartInput`, the parts overloads on `HollowBlobWriter` and `HollowBlobReader`, and the staging, publishing and retrieval either side — see [Optional blob parts](#optional-blob-parts) |
+| `core.write.objectmapper` (memoization) | `IMemoizedRecord` with `MemoizedList<T>`, `MemoizedSet<T>` and `MemoizedMap<TKey, TValue>` over it, and the remembering write path on the three collection mappers |
 | `hollow-ui-tools` | Only `HollowDiffUtil.formatBytes`, as `ByteSize.Format`; the rest is servlet plumbing ASP.NET Core replaces |
 
 Test coverage is carried over from the Java tests where they exist — `VarIntTest`, `HashCodesTest`,
@@ -2608,9 +2609,6 @@ sets of `TypeFilter` exist; the recursive rule DSL is still absent.
   `Hollow.Explorer.History` ([The history UI](#the-history-ui)).
   Of `hollow-ui-tools`, only `HollowDiffUtil`'s `formatBytes` and `HtmlEscapingWriter` had anything
   to port — the rest is Jetty and servlet plumbing that ASP.NET Core replaces outright.
-- **`MemoizedList`, `MemoizedMap` and `MemoizedSet`**, object-mapper collections that carry the
-  ordinal they were assigned, so that meeting the same instance twice in a cycle reuses it rather than
-  serialising it again. Worth having; nothing depends on them.
 - **`HollowObjectHashCodeFinder` and `DefaultHashCodeFinder`**, the deprecated custom-hash-code
   mechanism. Four ported files already assume its absence in print — `HollowCombiner`,
   `HollowStateDeltaPatcher`, `HollowSplitter` and `HollowCompactor` — so porting it means revisiting
@@ -2645,8 +2643,8 @@ the chain, and a client generated at compile time reads it with types. What is l
 optimisation or a feature on top.
 
 Nothing is outstanding from the original list. What remains unported is listed above, and each item
-there is a feature on top rather than a gap in the loop: asynchronous snapshot publishing and the blob
-storage cleaner, the memoized object-mapper collections, and the POJO generator.
+there is a feature on top rather than a gap in the loop: asynchronous snapshot publishing, the blob
+storage cleaner, and the POJO generator.
 
 All three UIs are ported — the explorer, the diff and the history — and with the history went
 `tools.history` underneath it. `tools` is now ported in full: `combine`, `split` and `patch` went in

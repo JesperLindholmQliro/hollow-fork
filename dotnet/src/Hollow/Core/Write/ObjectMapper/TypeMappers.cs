@@ -677,7 +677,21 @@ public sealed class HollowListTypeMapper : HollowTypeMapper
     {
         ArgumentNullException.ThrowIfNull(value);
 
-        return _parentMapper.StateEngine.Add(TypeName, ToWriteRecord(value, null));
+        // A model that hands the same collection instance to many records would otherwise serialise it
+        // once per record, and find out they were identical only when the write engine deduplicates.
+        long cycleBits = _parentMapper.StateEngine.RandomizedTag & MemoizedRecord.AssignedOrdinalCycleMask;
+        int remembered = MemoizedRecord.RememberedOrdinal(value, cycleBits);
+
+        if (remembered != -1)
+        {
+            return remembered;
+        }
+
+        int ordinal = _parentMapper.StateEngine.Add(TypeName, ToWriteRecord(value, null));
+
+        MemoizedRecord.Remember(value, ordinal, cycleBits);
+
+        return ordinal;
     }
 
     /// <inheritdoc />
@@ -782,7 +796,21 @@ public sealed class HollowSetTypeMapper : HollowTypeMapper
     {
         ArgumentNullException.ThrowIfNull(value);
 
-        return _parentMapper.StateEngine.Add(TypeName, ToWriteRecord(value, null));
+        // A model that hands the same collection instance to many records would otherwise serialise it
+        // once per record, and find out they were identical only when the write engine deduplicates.
+        long cycleBits = _parentMapper.StateEngine.RandomizedTag & MemoizedRecord.AssignedOrdinalCycleMask;
+        int remembered = MemoizedRecord.RememberedOrdinal(value, cycleBits);
+
+        if (remembered != -1)
+        {
+            return remembered;
+        }
+
+        int ordinal = _parentMapper.StateEngine.Add(TypeName, ToWriteRecord(value, null));
+
+        MemoizedRecord.Remember(value, ordinal, cycleBits);
+
+        return ordinal;
     }
 
     /// <inheritdoc />
@@ -892,7 +920,21 @@ public sealed class HollowMapTypeMapper : HollowTypeMapper
     {
         ArgumentNullException.ThrowIfNull(value);
 
-        return _parentMapper.StateEngine.Add(TypeName, ToWriteRecord(value, null));
+        // A model that hands the same collection instance to many records would otherwise serialise it
+        // once per record, and find out they were identical only when the write engine deduplicates.
+        long cycleBits = _parentMapper.StateEngine.RandomizedTag & MemoizedRecord.AssignedOrdinalCycleMask;
+        int remembered = MemoizedRecord.RememberedOrdinal(value, cycleBits);
+
+        if (remembered != -1)
+        {
+            return remembered;
+        }
+
+        int ordinal = _parentMapper.StateEngine.Add(TypeName, ToWriteRecord(value, null));
+
+        MemoizedRecord.Remember(value, ordinal, cycleBits);
+
+        return ordinal;
     }
 
     /// <inheritdoc />
