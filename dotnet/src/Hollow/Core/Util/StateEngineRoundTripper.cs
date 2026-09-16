@@ -19,22 +19,24 @@ using Hollow.Core.Read.Engine;
 using Hollow.Core.Read.Filter;
 using Hollow.Core.Write;
 
-namespace Hollow.Tests;
+namespace Hollow.Core.Util;
 
 /// <summary>
 /// Moves a dataset from a write state engine into a read state engine the way a producer and consumer
 /// would, so that a test can assert against what a consumer actually sees.
 /// </summary>
 /// <remarks>
-/// Java ships this as <c>core.util.StateEngineRoundTripper</c> in the main artifact. It is only ever
-/// used by tests, so this port keeps it in the test project.
+/// Java ships this as <c>core.util.StateEngineRoundTripper</c>, and so does this — it started life in
+/// this port's test project, and moved here when <see cref="Api.TestData.HollowTestDataset"/> needed
+/// it. A test fixture in the shipped artifact is odd, but a dataset described in code and handed to a
+/// consumer is exactly what it is for.
 /// </remarks>
-internal static class StateEngineRoundTripper
+public static class StateEngineRoundTripper
 {
     /// <summary>
     /// Writes a snapshot of <paramref name="writeEngine"/> and reads it into a fresh read state.
     /// </summary>
-    internal static HollowReadStateEngine RoundTripSnapshot(
+    public static HollowReadStateEngine RoundTripSnapshot(
         HollowWriteStateEngine writeEngine, ITypeFilter? filter = null)
     {
         HollowReadStateEngine readEngine = new();
@@ -47,7 +49,7 @@ internal static class StateEngineRoundTripper
     /// Writes a snapshot of <paramref name="writeEngine"/> and reads it into
     /// <paramref name="readEngine"/>, rolling the write engine on to the next cycle.
     /// </summary>
-    internal static void RoundTripSnapshot(
+    public static void RoundTripSnapshot(
         HollowWriteStateEngine writeEngine, HollowReadStateEngine readEngine, ITypeFilter? filter = null)
     {
         using MemoryStream stream = new();
@@ -62,7 +64,7 @@ internal static class StateEngineRoundTripper
     /// Writes a delta from <paramref name="writeEngine"/>'s previous cycle to its current one and
     /// applies it to <paramref name="readEngine"/>, rolling the write engine on to the next cycle.
     /// </summary>
-    internal static void RoundTripDelta(HollowWriteStateEngine writeEngine, HollowReadStateEngine readEngine)
+    public static void RoundTripDelta(HollowWriteStateEngine writeEngine, HollowReadStateEngine readEngine)
     {
         using MemoryStream stream = new();
         new HollowBlobWriter(writeEngine).WriteDelta(stream);
