@@ -111,6 +111,52 @@ internal sealed class HollowIndexerValueTraverser
         return hashCode;
     }
 
+    /// <summary>A hash of one match's values along only the given field paths.</summary>
+    /// <remarks>
+    /// Hashing a subset is what lets a caller pair matches on a key and then ask whether the pair
+    /// agrees about everything else: the key paths decide which matches meet, the rest decide whether
+    /// meeting them counts as unchanged.
+    /// </remarks>
+    internal int GetMatchHash(int matchIndex, BitSet fields)
+    {
+        int hashCode = 0;
+
+        for (int i = fields.NextSetBit(0); i != -1; i = fields.NextSetBit(i + 1))
+        {
+            hashCode ^= HashCodes.HashInt(HollowReadFieldUtils.FieldHashCode(
+                (IHollowObjectTypeDataAccess)_fieldTypeDataAccess[i],
+                _fieldMatchLists[i].Get(matchIndex),
+                _fieldSchemaPosition[i]));
+
+            hashCode ^= HashCodes.HashInt(hashCode);
+        }
+
+        return hashCode;
+    }
+
+    /// <summary>
+    /// Whether two matches hold the same values along only the given field paths.
+    /// </summary>
+    internal bool IsMatchEqual(
+        int matchIndex, HollowIndexerValueTraverser other, int otherMatchIndex, BitSet fields)
+    {
+        for (int i = fields.NextSetBit(0); i != -1; i = fields.NextSetBit(i + 1))
+        {
+            if (!HollowReadFieldUtils.FieldsAreEqual(
+                (IHollowObjectTypeDataAccess)_fieldTypeDataAccess[i],
+                _fieldMatchLists[i].Get(matchIndex),
+                _fieldSchemaPosition[i],
+                (IHollowObjectTypeDataAccess)other._fieldTypeDataAccess[i],
+                other._fieldMatchLists[i].Get(otherMatchIndex),
+                other._fieldSchemaPosition[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     /// <summary>
     /// Whether two matches, of this traverser and another over the same paths, hold the same values.
     /// </summary>
