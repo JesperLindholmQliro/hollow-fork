@@ -79,9 +79,6 @@ public interface IHollowSampler
     /// </remarks>
     void SetFieldSpecificSamplingDirector(ITypeFilter fieldSpec, HollowSamplingDirector director);
 
-    /// <summary>Tells every director which thread applies transitions.</summary>
-    void SetUpdateThread(Thread? thread);
-
     /// <summary>What has been counted, one result per field or operation.</summary>
     IReadOnlyList<SampleResult> GetSampleResults();
 

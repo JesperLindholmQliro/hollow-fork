@@ -133,15 +133,6 @@ public sealed class HollowObjectSampler : IHollowSampler
     }
 
     /// <inheritdoc />
-    public void SetUpdateThread(Thread? thread)
-    {
-        foreach (HollowSamplingDirector director in _directors)
-        {
-            director.SetUpdateThread(thread);
-        }
-    }
-
-    /// <inheritdoc />
     public IReadOnlyList<SampleResult> GetSampleResults() =>
         [.. _fieldNames.Select((name, i) => new SampleResult($"{_typeName}.{name}", _sampleCounts[i]))];
 
@@ -244,9 +235,6 @@ public abstract class HollowCollectionSampler : IHollowSampler
             _director = director;
         }
     }
-
-    /// <inheritdoc />
-    public void SetUpdateThread(Thread? thread) => _director.SetUpdateThread(thread);
 
     /// <inheritdoc />
     public virtual IReadOnlyList<SampleResult> GetSampleResults() =>
@@ -408,15 +396,6 @@ public sealed class HollowObjectCreationSampler : IHollowSampler
     }
 
     /// <inheritdoc />
-    public void SetUpdateThread(Thread? thread)
-    {
-        foreach (HollowSamplingDirector director in _directors)
-        {
-            director.SetUpdateThread(thread);
-        }
-    }
-
-    /// <inheritdoc />
     /// <remarks>Sorted, so that the type being materialised most comes first.</remarks>
     public IReadOnlyList<SampleResult> GetSampleResults()
     {
@@ -459,11 +438,6 @@ public sealed class NullSampler : IHollowSampler
 
     /// <inheritdoc />
     public void SetFieldSpecificSamplingDirector(ITypeFilter fieldSpec, HollowSamplingDirector director)
-    {
-    }
-
-    /// <inheritdoc />
-    public void SetUpdateThread(Thread? thread)
     {
     }
 

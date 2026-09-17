@@ -127,17 +127,6 @@ public class HollowApi
         }
     }
 
-    /// <summary>Tells every director which thread applies transitions.</summary>
-    public void SetSamplerUpdateThread(Thread? thread)
-    {
-        _objectCreationSampler.SetUpdateThread(thread);
-
-        foreach (HollowTypeApi typeApi in _typeApis)
-        {
-            typeApi.TypeDataAccess.Sampler.SetUpdateThread(thread);
-        }
-    }
-
     /// <summary>Sets every counter back to zero.</summary>
     public void ResetSampling()
     {

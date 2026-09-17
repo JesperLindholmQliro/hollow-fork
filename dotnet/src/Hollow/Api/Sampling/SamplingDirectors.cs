@@ -27,22 +27,20 @@ namespace Hollow.Api.Sampling;
 /// </remarks>
 public abstract class HollowSamplingDirector
 {
-    private Thread? _updateThread;
-
     /// <summary>Whether the read about to happen should be counted.</summary>
     public abstract bool ShouldRecord();
 
     /// <summary>
-    /// Names the thread that applies transitions, whose reads are not the application's.
+    /// Whether the calling work is the dataset applying a transition, whose reads are not the
+    /// application's.
     /// </summary>
     /// <remarks>
     /// A refresh reads records to build indexes and checksums. Counting those would report fields as
-    /// hot that no caller ever asked for, so the thread doing the update is excluded.
+    /// hot that no caller ever asked for, so the work doing it marks itself with
+    /// <see cref="HollowSamplingScope.EnterUpdate"/> — which is where Java's
+    /// <c>setUpdateThread(Thread)</c> went, and why.
     /// </remarks>
-    public virtual void SetUpdateThread(Thread? thread) => _updateThread = thread;
-
-    /// <summary>Whether the calling thread is the one applying transitions.</summary>
-    protected bool IsUpdateThread => _updateThread is not null && _updateThread == Thread.CurrentThread;
+    protected static bool IsUpdate => HollowSamplingScope.IsUpdate;
 }
 
 /// <summary>A director that counts nothing, which is what every sampler starts with.</summary>
@@ -57,19 +55,13 @@ public sealed class DisabledSamplingDirector : HollowSamplingDirector
 
     /// <inheritdoc />
     public override bool ShouldRecord() => false;
-
-    /// <inheritdoc />
-    /// <remarks>There is nothing to exclude from a director that records nothing.</remarks>
-    public override void SetUpdateThread(Thread? thread)
-    {
-    }
 }
 
-/// <summary>A director that counts every read but the update thread's.</summary>
+/// <summary>A director that counts every read but the dataset's own.</summary>
 public sealed class EnabledSamplingDirector : HollowSamplingDirector
 {
     /// <inheritdoc />
-    public override bool ShouldRecord() => !IsUpdateThread;
+    public override bool ShouldRecord() => !IsUpdate;
 }
 
 /// <summary>Notified when a time-sliced director turns counting on or off.</summary>
@@ -130,7 +122,7 @@ public sealed class TimeSliceSamplingDirector : HollowSamplingDirector, IDisposa
     }
 
     /// <inheritdoc />
-    public override bool ShouldRecord() => _record && !IsUpdateThread;
+    public override bool ShouldRecord() => _record && !IsUpdate;
 
     /// <summary>Changes the timing, taking effect at the next flip.</summary>
     public void SetTiming(TimeSpan off, TimeSpan on)

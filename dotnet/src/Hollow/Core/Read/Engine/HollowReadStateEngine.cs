@@ -109,15 +109,6 @@ public sealed class HollowReadStateEngine : IHollowDataAccess
         }
     }
 
-    /// <summary>Tells every director which thread applies transitions to this dataset.</summary>
-    public void SetSamplerUpdateThread(Thread? thread)
-    {
-        foreach (HollowTypeReadState state in _typeStates.Values)
-        {
-            state.Sampler.SetUpdateThread(thread);
-        }
-    }
-
     /// <summary>Sets every type's counters back to zero.</summary>
     public void ResetSampling()
     {

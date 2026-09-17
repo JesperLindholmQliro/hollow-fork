@@ -37,23 +37,30 @@ public class SamplingTests
 
         Assert.False(director.ShouldRecord());
 
-        // Naming an update thread is meaningless for a director that admits nothing.
-        director.SetUpdateThread(new Thread(() => { }));
+        // An update scope is meaningless for a director that admits nothing.
+        using (HollowSamplingScope.EnterUpdate())
+        {
+            Assert.False(director.ShouldRecord());
+        }
 
         Assert.False(director.ShouldRecord());
     }
 
     [Fact]
-    public void TheUpdateThreadsOwnReadsDoNotCount()
+    public void TheDatasetsOwnReadsDoNotCount()
     {
         EnabledSamplingDirector director = new();
 
         Assert.True(director.ShouldRecord());
 
         // A refresh reads records to build indexes and checksums; those are not the application's.
-        director.SetUpdateThread(Thread.CurrentThread);
+        using (HollowSamplingScope.EnterUpdate())
+        {
+            Assert.False(director.ShouldRecord());
+        }
 
-        Assert.False(director.ShouldRecord());
+        // The scope restores what surrounded it, so the application counts again.
+        Assert.True(director.ShouldRecord());
     }
 
     [Fact]

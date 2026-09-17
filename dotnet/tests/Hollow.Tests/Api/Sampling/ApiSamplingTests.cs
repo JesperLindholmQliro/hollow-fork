@@ -159,14 +159,16 @@ public class ApiSamplingTests
     }
 
     [Fact]
-    public void TheUpdateThreadIsExcludedThroughTheApiToo()
+    public void TheDatasetsOwnReadsAreExcludedThroughTheApiToo()
     {
         MovieApi api = Api();
 
         api.SetSamplingDirector(new EnabledSamplingDirector());
-        api.SetSamplerUpdateThread(Thread.CurrentThread);
 
-        api.ReadTitles();
+        using (HollowSamplingScope.EnterUpdate())
+        {
+            api.ReadTitles();
+        }
 
         Assert.False(api.HasSampleResults);
     }

@@ -197,18 +197,71 @@ public class ReadPathSamplingTests
     }
 
     [Fact]
-    public void TheUpdateThreadsOwnReadsAreLeftOut()
+    public void TheDatasetsOwnReadsAreLeftOut()
     {
         HollowReadStateEngine engine = Dataset();
 
         engine.SetSamplingDirector(new EnabledSamplingDirector());
 
         // A refresh reads records to build indexes and checksums; those are not the application's.
-        engine.SetSamplerUpdateThread(Thread.CurrentThread);
+        using (HollowSamplingScope.EnterUpdate())
+        {
+            ReadTitles(engine);
+        }
+
+        Assert.False(engine.HasSampleResults);
+    }
+
+    [Fact]
+    public async Task TheExclusionSurvivesAnAwaitAndAFanOut()
+    {
+        HollowReadStateEngine engine = Dataset();
+
+        engine.SetSamplingDirector(new EnabledSamplingDirector());
+
+        bool heldAfterAwait;
+        bool heldOnEveryWorker = true;
+
+        using (HollowSamplingScope.EnterUpdate())
+        {
+            await Task.Yield();
+            heldAfterAwait = HollowSamplingScope.IsUpdate;
+
+            Parallel.For(0, 4, _ =>
+            {
+                if (!HollowSamplingScope.IsUpdate)
+                {
+                    heldOnEveryWorker = false;
+                }
+
+                ReadTitles(engine);
+            });
+        }
+
+        // Java registers a Thread, which would have matched neither: the continuation resumes
+        // elsewhere, and the workers never ran on the registering thread at all.
+        Assert.True(heldAfterAwait);
+        Assert.True(heldOnEveryWorker);
+        Assert.False(engine.HasSampleResults);
+    }
+
+    [Fact]
+    public void TheApplicationIsCountedAgainOnceTheScopeCloses()
+    {
+        HollowReadStateEngine engine = Dataset();
+
+        engine.SetSamplingDirector(new EnabledSamplingDirector());
+
+        using (HollowSamplingScope.EnterUpdate())
+        {
+            ReadTitles(engine);
+        }
+
+        Assert.False(engine.HasSampleResults);
 
         ReadTitles(engine);
 
-        Assert.False(engine.HasSampleResults);
+        Assert.True(engine.HasSampleResults);
     }
 
     private static long Count(HollowReadStateEngine engine, string identifier) =>
