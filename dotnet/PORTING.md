@@ -2349,6 +2349,46 @@ no thread parked doing nothing and a test that can make an hour pass without wai
 also writes its flag and its listener list without synchronisation; here the flag is volatile and the
 list guarded, because the timer callback and the caller of `StartSampling` really are different threads.
 
+### Excluding the dataset's own reads
+
+A refresh reads records to build indexes and checksums. Those are not the application asking for a
+field, and counting them would report fields as hot that no caller ever wanted, so the work that does
+it opts out:
+
+```csharp
+using (HollowSamplingScope.EnterNonSamplingUpdate())
+{
+    // Every read from here is excluded, on whatever thread the work reaches.
+}
+```
+
+**This is a deliberate divergence.** Java registers a thread —
+`HollowSamplingDirector.setUpdateThread(Thread)` — and compares the reading thread against it. That
+holds only while the update stays on the thread that registered itself, which on .NET it does not: an
+`await` resumes the continuation on another pool thread, and a fan-out never ran on the registering
+thread at all, so those reads get counted as the application's. The reverse is worse. The registered
+thread is usually a pool thread, which goes back to the pool and later serves application work, whose
+reads are then silently excluded — so the sampler under-reports the very fields it exists to find.
+Java gets away with it because its updater owns a dedicated refresh thread.
+
+The scope lives in an `AsyncLocal<bool>`, so it follows the work rather than the thread: across
+`await`, `Task.Run`, `Parallel.For` and `Thread.Start` alike, and only an explicit
+`ExecutionContext.SuppressFlow` severs it. `ReadPathSamplingTests` pins the two cases thread identity
+got wrong — the scope surviving an await and a fan-out, and the application being counted again once
+the scope closes.
+
+Measured, reading the flag costs a few nanoseconds more than comparing two thread references, and less
+than that until a scope is first entered, when the execution context is still null. Neither matters:
+every director tests its own state first and `&&` short-circuits, so a time-sliced director asks the
+question only during the slice it counts in.
+
+Making it ambient also removed a broadcast. `setUpdateThread` had to be pushed to every director of
+every sampler of every type, through forwarders on `IHollowSampler`, `HollowReadStateEngine` and
+`HollowApi`. A scope needs none of them, and all of them are gone.
+
+**The method is named for the opt-out it is.** `EnterNonSamplingUpdate`, not `EnterUpdate`, so that a
+reader at the call site cannot mistake it for switching sampling on.
+
 ### Where the numbers come out
 
 `HollowReadStateEngine.GetSampleResults` reports every type, hottest first, omitting the types that
@@ -2489,7 +2529,7 @@ once, so a part left without an output is refused where the caller can still do 
 | `tools.diff.specific` | `HollowSpecificDiff`, and the subset-of-paths hash and equality overloads on `HollowIndexerValueTraverser` it needs |
 | `api.producer.metrics` | `CycleMetrics`, `AnnouncementMetrics`, `ProducerMetricsListener` (Java's `AbstractProducerMetricsListener`); see [Metrics](#metrics) |
 | `api.consumer.metrics` | `ConsumerRefreshMetrics`, `UpdatePlanDetails`, `RefreshMetricsListener` (Java's `AbstractRefreshMetricsListener`); see [Metrics](#metrics) |
-| `api.sampling` | `HollowSamplingDirector` and the disabled, enabled and time-sliced directors, `ISamplingStatusListener`, `SampleResult`, `IHollowSampler`, the object, collection and creation samplers, and `NullSampler`; wired through `IHollowTypeDataAccess`, the four read states, `HollowReadStateEngine` and `HollowApi` — see [Sampling](#sampling) |
+| `api.sampling` | `HollowSamplingDirector` and the disabled, enabled and time-sliced directors, `HollowSamplingScope` (port-specific; replaces Java's `setUpdateThread`), `ISamplingStatusListener`, `SampleResult`, `IHollowSampler`, the object, collection and creation samplers, and `NullSampler`; wired through `IHollowTypeDataAccess`, the four read states, `HollowReadStateEngine` and `HollowApi` — see [Sampling](#sampling) |
 | `api.codegen.perfapi` | `HollowPerfApiGenerator` and its options, over `PerfApiEmitter` — one class per object type, and the built-in type APIs for the collections |
 | `api.codegen.testdata` | `HollowTestDataGenerator` and its options, over `TestDataEmitter` — a fluent builder per type, typed by its parent, with shortcuts for single-field wrapper types |
 | optional blob parts | `HollowBlobOptionalPartHeader` and its reader and writer, `OptionalBlobPartConfig`/`OptionalBlobPartOutputs`, `OptionalBlobPartInput`, the parts overloads on `HollowBlobWriter` and `HollowBlobReader`, and the staging, publishing and retrieval either side — see [Optional blob parts](#optional-blob-parts) |
