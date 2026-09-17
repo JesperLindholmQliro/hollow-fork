@@ -376,7 +376,12 @@ public sealed class ThreadSafeBitSet : IEquatable<ThreadSafeBitSet>
     }
 
     /// <inheritdoc />
-    /// <exception cref="ArgumentException">The two bit sets have different segment sizes.</exception>
+    /// <remarks>
+    /// Two bit sets built with different segment sizes are unequal rather than incomparable. Java throws
+    /// <c>IllegalArgumentException</c> here; .NET cannot, because <see cref="object.Equals(object)"/> is
+    /// contractually forbidden from throwing, and a set that threw would take <c>Contains</c>,
+    /// <c>Distinct</c> and every dictionary lookup down with it.
+    /// </remarks>
     public bool Equals(ThreadSafeBitSet? other)
     {
         if (other is null)
@@ -386,7 +391,7 @@ public sealed class ThreadSafeBitSet : IEquatable<ThreadSafeBitSet>
 
         if (other._log2SegmentSize != _log2SegmentSize)
         {
-            throw new ArgumentException("Segment sizes must be the same", nameof(other));
+            return false;
         }
 
         Segments theseSegments = Volatile.Read(ref _segments);

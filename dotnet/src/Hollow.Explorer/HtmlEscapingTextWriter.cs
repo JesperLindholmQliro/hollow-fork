@@ -104,9 +104,11 @@ public sealed class HtmlEscapingTextWriter(TextWriter writer) : TextWriter
     public override void Flush() => _writer.Flush();
 
     /// <summary>
-    /// Does nothing, because the writer being wrapped is the page's and outlives this one.
+    /// Leaves the wrapped writer alone, because it is the page's and outlives this one.
     /// </summary>
-    protected override void Dispose(bool disposing)
-    {
-    }
+    /// <remarks>
+    /// The base call is still made. <see cref="TextWriter"/> holds nothing that needs releasing today,
+    /// but skipping the chain is the kind of omission that becomes a leak the moment it does.
+    /// </remarks>
+    protected override void Dispose(bool disposing) => base.Dispose(disposing);
 }
