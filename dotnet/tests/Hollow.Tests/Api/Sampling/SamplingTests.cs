@@ -38,7 +38,7 @@ public class SamplingTests
         Assert.False(director.ShouldRecord());
 
         // An update scope is meaningless for a director that admits nothing.
-        using (HollowSamplingScope.EnterUpdate())
+        using (HollowSamplingScope.EnterNonSamplingUpdate())
         {
             Assert.False(director.ShouldRecord());
         }
@@ -54,7 +54,7 @@ public class SamplingTests
         Assert.True(director.ShouldRecord());
 
         // A refresh reads records to build indexes and checksums; those are not the application's.
-        using (HollowSamplingScope.EnterUpdate())
+        using (HollowSamplingScope.EnterNonSamplingUpdate())
         {
             Assert.False(director.ShouldRecord());
         }

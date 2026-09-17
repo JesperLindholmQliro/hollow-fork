@@ -18,16 +18,16 @@
 namespace Hollow.Api.Sampling;
 
 /// <summary>
-/// Marks a region of work as the dataset's own, so that the reads it makes are not counted as the
+/// Opts a region of work out of sampling, so that the reads it makes are not counted as the
 /// application's.
 /// </summary>
 /// <remarks>
 /// <para>
 /// Applying a transition reads records to build indexes and checksums. Counting those would report
-/// fields as hot that no caller ever asked for, so the work that does it says so:
+/// fields as hot that no caller ever asked for, so the work that does it opts itself out:
 /// </para>
 /// <code>
-/// using (HollowSamplingScope.EnterUpdate())
+/// using (HollowSamplingScope.EnterNonSamplingUpdate())
 /// {
 ///     // Every read from here is excluded, on whatever thread the work reaches.
 /// }
@@ -59,28 +59,27 @@ public static class HollowSamplingScope
     private static readonly AsyncLocal<bool> Updating = new();
 
     /// <summary>
-    /// Whether the calling work is the dataset applying a transition rather than the application
-    /// reading.
+    /// Whether the calling work has opted out — it is the dataset applying a transition rather than the
+    /// application reading.
     /// </summary>
     public static bool IsUpdate => Updating.Value;
 
     /// <summary>
-    /// Marks everything the calling work reaches as the dataset's own, until the returned scope is
-    /// disposed.
+    /// Opts everything the calling work reaches out of sampling, until the returned scope is disposed.
     /// </summary>
     /// <remarks>Scopes nest: disposing one restores whatever was in force around it.</remarks>
-    public static UpdateScope EnterUpdate() => new();
+    public static UpdateScope EnterNonSamplingUpdate() => new();
 
-    /// <summary>The region <see cref="EnterUpdate"/> opened.</summary>
+    /// <summary>The region <see cref="EnterNonSamplingUpdate"/> opened.</summary>
     /// <remarks>
-    /// A struct, so entering a scope allocates nothing. Disposing it twice is harmless: the second
-    /// restores the same value the first did.
+    /// A struct, so opting out allocates nothing. Disposing it twice is harmless: the second restores
+    /// the same value the first did.
     /// </remarks>
     public readonly struct UpdateScope : IDisposable
     {
         private readonly bool _previous;
 
-        /// <summary>Enters the scope, remembering what was in force around it.</summary>
+        /// <summary>Opts out, remembering what was in force around the scope.</summary>
         public UpdateScope()
         {
             _previous = Updating.Value;

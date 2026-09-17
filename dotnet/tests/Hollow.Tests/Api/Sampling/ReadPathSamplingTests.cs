@@ -204,7 +204,7 @@ public class ReadPathSamplingTests
         engine.SetSamplingDirector(new EnabledSamplingDirector());
 
         // A refresh reads records to build indexes and checksums; those are not the application's.
-        using (HollowSamplingScope.EnterUpdate())
+        using (HollowSamplingScope.EnterNonSamplingUpdate())
         {
             ReadTitles(engine);
         }
@@ -222,7 +222,7 @@ public class ReadPathSamplingTests
         bool heldAfterAwait;
         bool heldOnEveryWorker = true;
 
-        using (HollowSamplingScope.EnterUpdate())
+        using (HollowSamplingScope.EnterNonSamplingUpdate())
         {
             await Task.Yield();
             heldAfterAwait = HollowSamplingScope.IsUpdate;
@@ -252,7 +252,7 @@ public class ReadPathSamplingTests
 
         engine.SetSamplingDirector(new EnabledSamplingDirector());
 
-        using (HollowSamplingScope.EnterUpdate())
+        using (HollowSamplingScope.EnterNonSamplingUpdate())
         {
             ReadTitles(engine);
         }

@@ -165,7 +165,7 @@ public class ApiSamplingTests
 
         api.SetSamplingDirector(new EnabledSamplingDirector());
 
-        using (HollowSamplingScope.EnterUpdate())
+        using (HollowSamplingScope.EnterNonSamplingUpdate())
         {
             api.ReadTitles();
         }

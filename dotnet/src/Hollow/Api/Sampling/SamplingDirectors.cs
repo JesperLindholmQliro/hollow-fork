@@ -31,13 +31,13 @@ public abstract class HollowSamplingDirector
     public abstract bool ShouldRecord();
 
     /// <summary>
-    /// Whether the calling work is the dataset applying a transition, whose reads are not the
-    /// application's.
+    /// Whether the calling work has opted out of sampling, being the dataset applying a transition
+    /// rather than the application reading.
     /// </summary>
     /// <remarks>
     /// A refresh reads records to build indexes and checksums. Counting those would report fields as
-    /// hot that no caller ever asked for, so the work doing it marks itself with
-    /// <see cref="HollowSamplingScope.EnterUpdate"/> — which is where Java's
+    /// hot that no caller ever asked for, so the work doing it opts out with
+    /// <see cref="HollowSamplingScope.EnterNonSamplingUpdate"/> — which is where Java's
     /// <c>setUpdateThread(Thread)</c> went, and why.
     /// </remarks>
     protected static bool IsUpdate => HollowSamplingScope.IsUpdate;
@@ -57,7 +57,7 @@ public sealed class DisabledSamplingDirector : HollowSamplingDirector
     public override bool ShouldRecord() => false;
 }
 
-/// <summary>A director that counts every read but the dataset's own.</summary>
+/// <summary>A director that counts every read but those that opted out.</summary>
 public sealed class EnabledSamplingDirector : HollowSamplingDirector
 {
     /// <inheritdoc />
