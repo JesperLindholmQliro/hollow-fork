@@ -2331,6 +2331,11 @@ value records into it. With counting off that is one perfectly-predicted branch 
 price of being able to turn sampling on in a running process rather than redeploying to find out what
 is read, and it is the same trade Java makes.
 
+The counters are plain array increments rather than interlocked ones, as Java's are, so concurrent
+readers lose the occasional count. That is deliberate: sampling answers *is this field read at all*,
+which a handful of lost increments out of millions cannot change, and an interlocked increment on a
+cache line every reader is touching would cost more than the precision is worth.
+
 The sampler is reached through `IHollowTypeDataAccess`, defaulted there to `NullSampler.Instance`, so
 only a data access reading out of a type state has to say anything. That covers the missing, disabled
 and historical accesses at once. The longevity proxy overrides it to answer from whichever state it
