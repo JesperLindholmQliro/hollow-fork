@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Hollow.Reference.Tests</RootNamespace>
+    <IsPackable>false</IsPackable>
+
+    <!-- The test platform packages ship satellite assemblies whose locale names the SDK does not
+         recognise. Nothing here can be done about it, and the warning is one line per locale per
+         package. -->
+    <NoWarn>$(NoWarn);NETSDK1188</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- To read the shipped appsettings.json the way the applications do. -->
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The settings file both applications link, so that the tests can hold the shipped configuration
+         to what it claims: local out of the box, and the other two branches filled in enough to switch
+         to with one word. -->
+    <Content Include="../../appsettings.json" Link="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Hollow.Reference.Infrastructure/Hollow.Reference.Infrastructure.csproj" />
+    <ProjectReference Include="../../src/Hollow.Reference.Model/Hollow.Reference.Model.csproj" />
+  </ItemGroup>
+
+</Project>

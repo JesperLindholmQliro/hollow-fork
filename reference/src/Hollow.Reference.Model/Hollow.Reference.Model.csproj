@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Hollow.Reference.Model</RootNamespace>
+
+    <!-- Writes the generated client to obj/generated so it can be read like any other source. -->
+    <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+    <CompilerGeneratedFilesOutputPath>$(BaseIntermediateOutputPath)generated</CompilerGeneratedFilesOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../../dotnet/src/Hollow/Hollow.csproj" />
+
+    <!-- The generator runs inside the compiler, so it is referenced as an analyzer rather than as
+         something this project links against. It replaces the Java original's APIGenerator, its
+         `generateHollowConsumerApi` Gradle task, and the generated sources checked in beside them. -->
+    <ProjectReference Include="../../../dotnet/src/Hollow.SourceGenerator/Hollow.SourceGenerator.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+</Project>

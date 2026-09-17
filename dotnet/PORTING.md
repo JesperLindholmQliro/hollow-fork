@@ -49,6 +49,10 @@ one machine share the pages. See [Shared-memory mode](#shared-memory-mode).
 
 The status section says exactly what is and is not ported.
 
+A worked example of all of it together lives in [`../reference`](../reference): a producer and a
+consumer built on this port, ported from Netflix's own reference implementation, running against a
+local directory, AWS or Azure depending on one setting.
+
 ## Building and testing
 
 ```

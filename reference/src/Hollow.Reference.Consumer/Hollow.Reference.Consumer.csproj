@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <RootNamespace>Hollow.Reference.Consumer</RootNamespace>
+    <UserSecretsId>hollow-reference-consumer</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Hollow.Reference.Infrastructure/Hollow.Reference.Infrastructure.csproj" />
+    <ProjectReference Include="../Hollow.Reference.Model/Hollow.Reference.Model.csproj" />
+
+    <!-- The explorer and the history UI share one assembly, since the three UIs share their MVC
+         plumbing and the history's record page is the diff's. -->
+    <ProjectReference Include="../../../dotnet/src/Hollow.Explorer/Hollow.Explorer.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The same settings file the producer reads, linked rather than copied. -->
+    <Content Include="../../appsettings.json" Link="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

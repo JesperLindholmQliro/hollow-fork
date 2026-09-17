@@ -1,0 +1,18 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Hollow.Reference.Model/Hollow.Reference.Model.csproj" />
+    <Project Path="src/Hollow.Reference.Infrastructure/Hollow.Reference.Infrastructure.csproj" />
+    <Project Path="src/Hollow.Reference.Producer/Hollow.Reference.Producer.csproj" />
+    <Project Path="src/Hollow.Reference.Consumer/Hollow.Reference.Consumer.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Hollow.Reference.Tests/Hollow.Reference.Tests.csproj" />
+  </Folder>
+  <Folder Name="/hollow/">
+    <!-- The fork itself, referenced by path rather than by package so that a change to the port and
+         the reference implementation that exercises it build together. -->
+    <Project Path="../dotnet/src/Hollow/Hollow.csproj" />
+    <Project Path="../dotnet/src/Hollow.Explorer/Hollow.Explorer.csproj" />
+    <Project Path="../dotnet/src/Hollow.SourceGenerator/Hollow.SourceGenerator.csproj" />
+  </Folder>
+</Solution>
