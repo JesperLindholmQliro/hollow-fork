@@ -235,17 +235,14 @@ public sealed class FlatRecordOrdinalReader
     {
         int offset = SkipToField(ordinal, FieldType.Decimal, field);
 
-        if (offset == -1)
+        if (offset == -1 || VarInt.ReadVNull(_record.Data, offset))
         {
             return null;
         }
 
-        long low = _record.Data.ReadInt64Bits(offset);
-        long high = _record.Data.ReadInt64Bits(offset + sizeof(long));
+        int length = VarInt.ReadVInt(_record.Data, offset);
 
-        return low == DecimalBits.NullLow && high == DecimalBits.NullHigh
-            ? null
-            : DecimalBits.Unpack(low, high);
+        return DecimalEncoding.Decode(_record.Data, offset + VarInt.SizeOfVInt(length), length);
     }
 
     /// <summary>A string field, or null where it is null or absent.</summary>
@@ -315,8 +312,6 @@ public sealed class FlatRecordOrdinalReader
         {
             FieldType.Float => _record.Data.ReadInt32Bits(offset) == HollowObjectWriteRecord.NullFloatBits,
             FieldType.Double => _record.Data.ReadInt64Bits(offset) == HollowObjectWriteRecord.NullDoubleBits,
-            FieldType.Decimal => _record.Data.ReadInt64Bits(offset) == DecimalBits.NullLow
-                && _record.Data.ReadInt64Bits(offset + sizeof(long)) == DecimalBits.NullHigh,
             _ => VarInt.ReadVNull(_record.Data, offset),
         };
     }

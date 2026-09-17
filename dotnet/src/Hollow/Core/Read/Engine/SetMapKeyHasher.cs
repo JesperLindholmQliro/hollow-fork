@@ -67,7 +67,7 @@ public static class SetMapKeyHasher
             FieldType.Float => HashCodes.HashInt(
                 BitConverter.SingleToInt32Bits(Unbox<float>(key, fieldType))),
             FieldType.Decimal => HashCodes.HashInt(
-                DecimalBits.CanonicalHashCode(Unbox<decimal>(key, fieldType))),
+                DecimalEncoding.CanonicalHashCode(Unbox<decimal>(key, fieldType))),
             _ => throw new ArgumentException($"cannot hash a {fieldType} field", nameof(fieldType)),
         };
 

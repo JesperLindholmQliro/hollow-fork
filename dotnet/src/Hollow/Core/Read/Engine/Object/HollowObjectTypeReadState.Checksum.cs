@@ -90,25 +90,6 @@ public sealed partial class HollowObjectTypeReadState
             return;
         }
 
-        // A decimal is the one fixed-length field wider than 64 bits, so it contributes both halves.
-        // See "Format extension: the Decimal field type" in PORTING.md.
-        if (Schema.GetFieldType(fieldIndex) == FieldType.Decimal)
-        {
-            (long low, long high) = shard.ReadWideValue(shardOrdinal, fieldIndex);
-
-            if (DecimalBits.IsNull(low, high))
-            {
-                checksum.ApplyInt(int.MaxValue);
-            }
-            else
-            {
-                checksum.ApplyLong(low);
-                checksum.ApplyLong(high);
-            }
-
-            return;
-        }
-
         long value = shard.ReadValue(shardOrdinal, fieldIndex);
 
         if (value == shard.DataElements.NullValueForField[fieldIndex])

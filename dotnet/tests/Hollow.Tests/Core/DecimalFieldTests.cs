@@ -152,7 +152,7 @@ public class DecimalFieldTests
     /// through a double would not manage this, which is the reason the field type exists.
     /// </summary>
     [Fact]
-    public void ScaleSurvivesTheRoundTrip()
+    public void ScaleIsNormalisedOnTheRoundTrip()
     {
         HollowObjectSchema schema = PriceSchema();
         HollowWriteStateEngine engine = Engine(schema);
@@ -165,9 +165,11 @@ public class DecimalFieldTests
             Assert.IsType<HollowObjectTypeReadState>(ReadSnapshot(engine).GetTypeState("Price"));
         int amount = state.Schema.GetPosition("amount");
 
-        Assert.Equal("1.50", Format(state.ReadDecimal(0, amount)));
+        // The encoding preserves the value, not the scale it arrived with: all three spellings of 1.5
+        // are written as one byte and read back identically.
+        Assert.Equal("1.5", Format(state.ReadDecimal(0, amount)));
         Assert.Equal("1.5", Format(state.ReadDecimal(1, amount)));
-        Assert.Equal("1.500000", Format(state.ReadDecimal(2, amount)));
+        Assert.Equal("1.5", Format(state.ReadDecimal(2, amount)));
     }
 
     /// <summary>
@@ -236,7 +238,8 @@ public class DecimalFieldTests
         record.SetString("label", "a");
         int duplicate = engine.Add("Price", record);
 
-        // A different scale is a different stored form, so it is a different record.
+        // A value is normalised before it is written, so a different scale is the same stored form
+        // and therefore the same record.
         record.Reset();
         record.SetInt("id", 1);
         record.SetDecimal("amount", 12.340m);
@@ -244,7 +247,7 @@ public class DecimalFieldTests
         int rescaled = engine.Add("Price", record);
 
         Assert.Equal(first, duplicate);
-        Assert.NotEqual(first, rescaled);
+        Assert.Equal(first, rescaled);
     }
 
     /// <summary>
@@ -478,7 +481,7 @@ public class DecimalFieldTests
         Assert.False(HollowReadFieldUtils.FieldValueEquals(state, 0, amount, 2m));
         Assert.True(HollowReadFieldUtils.FieldValueEquals(state, 3, amount, null));
 
-        Assert.Equal("1.50", HollowReadFieldUtils.DisplayString(state, 0, amount));
+        Assert.Equal("1.5", HollowReadFieldUtils.DisplayString(state, 0, amount));
         Assert.Equal(
             HollowReadFieldUtils.FieldHashCode(state, 0, amount),
             HollowReadFieldUtils.HashObject(1.5m));
@@ -520,7 +523,7 @@ public class DecimalFieldTests
     /// likely to be assumed away by code that handles fields generically.
     /// </summary>
     [Fact]
-    public void ADecimalFieldIsOneHundredAndTwentyEightBitsWide()
+    public void ADecimalFieldIsVariableLength()
     {
         HollowObjectSchema schema = PriceSchema();
         HollowWriteStateEngine engine = Engine(schema);
@@ -530,10 +533,18 @@ public class DecimalFieldTests
 
         HollowObjectTypeReadState state =
             Assert.IsType<HollowObjectTypeReadState>(ReadSnapshot(engine).GetTypeState("Price"));
+        int amount = state.Schema.GetPosition("amount");
 
-        Assert.Equal(128, state.BitsRequiredForField("amount"));
-        Assert.Equal(16, FieldType.Decimal.GetFixedLength());
-        Assert.False(FieldType.Decimal.IsVariableLength());
+        Assert.Equal(-1, FieldType.Decimal.GetFixedLength());
+        Assert.True(FieldType.Decimal.IsVariableLength());
+
+        // The record holds a pointer into the byte store rather than the value, so the field is only as
+        // wide as that store is long -- nothing like the 128 bits a decimal used to cost every record.
+        Assert.True(state.BitsRequiredForField("amount") <= 64);
+
+        // 1m is the single byte of form A; decimal.MaxValue needs all seventeen of form D.
+        Assert.Equal(1, state.VarLengthFieldByteLength(0, amount));
+        Assert.Equal(17, state.VarLengthFieldByteLength(1, amount));
     }
 
     private sealed class Money

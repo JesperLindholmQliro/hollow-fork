@@ -187,15 +187,13 @@ public sealed partial class HollowObjectTypeReadState : HollowTypeReadState, IHo
         {
             case FieldType.Bytes:
             case FieldType.String:
+            case FieldType.Decimal:
                 int numBits = shard.DataElements.BitsPerField[fieldIndex];
                 return (fixedLengthValue & (1L << (numBits - 1))) != 0;
             case FieldType.Float:
                 return (int)fixedLengthValue == HollowObjectWriteRecord.NullFloatBits;
             case FieldType.Double:
                 return fixedLengthValue == HollowObjectWriteRecord.NullDoubleBits;
-            case FieldType.Decimal:
-                (long low, long high) = shard.ReadWideValue(ShardOrdinal(ordinal, shard), fieldIndex);
-                return DecimalBits.IsNull(low, high);
             default:
                 return fixedLengthValue == shard.DataElements.NullValueForField[fieldIndex];
         }
@@ -274,9 +272,17 @@ public sealed partial class HollowObjectTypeReadState : HollowTypeReadState, IHo
         TypedSampler.RecordFieldAccess(fieldIndex);
 
         Shard shard = ShardFor(ordinal);
-        (long low, long high) = shard.ReadWideValue(ShardOrdinal(ordinal, shard), fieldIndex);
+        (long startByte, long endByte, int numBits) = shard.VarLengthRange(ShardOrdinal(ordinal, shard), fieldIndex);
 
-        return DecimalBits.IsNull(low, high) ? null : DecimalBits.Unpack(low, high);
+        if (IsVarLengthNull(endByte, numBits))
+        {
+            return null;
+        }
+
+        startByte &= (1L << (numBits - 1)) - 1;
+
+        return DecimalEncoding.Decode(
+            shard.DataElements.VarLengthData[fieldIndex]!, startByte, (int)(endByte - startByte));
     }
 
     /// <inheritdoc />
@@ -616,13 +622,6 @@ public sealed partial class HollowObjectTypeReadState : HollowTypeReadState, IHo
 
         internal long ReadValue(int shardOrdinal, int fieldIndex) =>
             DataElements.FixedLengthData!.GetLargeElementValue(
-                FieldOffset(shardOrdinal, fieldIndex), DataElements.BitsPerField[fieldIndex]);
-
-        /// <summary>
-        /// Reads a field that may be wider than one element, which only a decimal is.
-        /// </summary>
-        internal (long Low, long High) ReadWideValue(int shardOrdinal, int fieldIndex) =>
-            DataElements.FixedLengthData!.GetWideElementValue(
                 FieldOffset(shardOrdinal, fieldIndex), DataElements.BitsPerField[fieldIndex]);
 
         /// <summary>

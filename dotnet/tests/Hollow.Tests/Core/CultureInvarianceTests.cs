@@ -109,7 +109,7 @@ public class CultureInvarianceTests
         Assert.Equal("-9876543210", HollowReadFieldUtils.DisplayString(state, 0, schema.GetPosition("l")));
         Assert.Equal("-1.5", HollowReadFieldUtils.DisplayString(state, 0, schema.GetPosition("f")));
         Assert.Equal("-2.25", HollowReadFieldUtils.DisplayString(state, 0, schema.GetPosition("d")));
-        Assert.Equal("-3.750", HollowReadFieldUtils.DisplayString(state, 0, schema.GetPosition("m")));
+        Assert.Equal("-3.75", HollowReadFieldUtils.DisplayString(state, 0, schema.GetPosition("m")));
     }
 
     /// <summary>

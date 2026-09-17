@@ -173,13 +173,20 @@ public sealed class FlatRecordReader
     /// </remarks>
     public decimal? ReadDecimal()
     {
-        long low = _record.Data.ReadInt64Bits(Pointer);
-        long high = _record.Data.ReadInt64Bits(Pointer + sizeof(long));
-        Pointer += sizeof(long) * 2;
+        if (VarInt.ReadVNull(_record.Data, Pointer))
+        {
+            Pointer++;
 
-        return low == DecimalBits.NullLow && high == DecimalBits.NullHigh
-            ? null
-            : DecimalBits.Unpack(low, high);
+            return null;
+        }
+
+        int length = VarInt.ReadVInt(_record.Data, Pointer);
+        Pointer += VarInt.SizeOfVInt(length);
+
+        decimal value = DecimalEncoding.Decode(_record.Data, Pointer, length);
+        Pointer += length;
+
+        return value;
     }
 
     /// <summary>Reads a string field.</summary>

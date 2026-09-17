@@ -170,9 +170,12 @@ public sealed class FlatRecord
                 return BitConverter.Int32BitsToSingle(Data.ReadInt32Bits(location));
 
             case FieldType.Decimal:
-                // This port's own field type, stored as the two longs the blob stores.
-                return DecimalBits.Unpack(
-                    Data.ReadInt64Bits(location), Data.ReadInt64Bits(location + sizeof(long)));
+            {
+                // This port's own field type, encoded as the bytes the blob stores.
+                int length = VarInt.ReadVInt(Data, location);
+
+                return DecimalEncoding.Decode(Data, location + VarInt.SizeOfVInt(length), length);
+            }
 
             case FieldType.String:
             {
@@ -278,6 +281,7 @@ internal static class Sizing
 
             case FieldType.Bytes:
             case FieldType.String:
+            case FieldType.Decimal:
             {
                 if (VarInt.ReadVNull(record.Data, offset))
                 {
@@ -297,10 +301,6 @@ internal static class Sizing
 
             case FieldType.Float:
                 return sizeof(int);
-
-            case FieldType.Decimal:
-                // Two longs: the unscaled value and the scale. See the format extension in PORTING.md.
-                return sizeof(long) * 2;
 
             default:
                 throw new InvalidOperationException($"unknown field type {fieldType}");

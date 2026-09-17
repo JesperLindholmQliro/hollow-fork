@@ -311,11 +311,11 @@ public static class HollowReadFieldUtils
     /// <summary>Hashes a decimal as <see cref="FieldHashCode"/> would hash the stored field.</summary>
     /// <remarks>
     /// <strong>Format extension.</strong> The hash ignores a decimal's scale, because .NET's own
-    /// equality does — see <see cref="DecimalBits.CanonicalHashCode"/> and <c>PORTING.md</c>. A null
+    /// equality does — see <see cref="DecimalEncoding.CanonicalHashCode"/> and <c>PORTING.md</c>. A null
     /// decimal hashes to zero, matching what the producer's key hasher computes for one.
     /// </remarks>
     public static int DecimalHashCode(decimal? value) =>
-        value is null ? 0 : DecimalBits.CanonicalHashCode(value.Value);
+        value is null ? 0 : DecimalEncoding.CanonicalHashCode(value.Value);
 
     /// <summary>
     /// Orders two records of the same type by what they hold in the same field.

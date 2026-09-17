@@ -82,8 +82,9 @@ public enum FieldType
     /// field type" section of <c>PORTING.md</c> before changing anything about it.
     /// </para>
     /// <para>
-    /// It is the only field type wider than 64 bits, so its value is read and written as two 64-bit
-    /// halves rather than as a single element.
+    /// It is variable-length, like <see cref="String"/> and <see cref="Bytes"/>: a value is encoded as
+    /// the fewest bytes that can carry it, between one and seventeen. See
+    /// <see cref="Memory.Encoding.DecimalEncoding"/> for the encoding.
     /// </para>
     /// </remarks>
     Decimal,
@@ -103,7 +104,6 @@ public static class FieldTypeExtensions
         FieldType.Boolean => 1,
         FieldType.Float => 4,
         FieldType.Double => 8,
-        FieldType.Decimal => 16,
         _ => -1,
     };
 
@@ -112,7 +112,7 @@ public static class FieldTypeExtensions
     /// variable-length integer encoding their length.
     /// </summary>
     public static bool IsVariableLength(this FieldType fieldType) =>
-        fieldType is FieldType.String or FieldType.Bytes;
+        fieldType is FieldType.String or FieldType.Bytes or FieldType.Decimal;
 
     /// <summary>
     /// The name used for this field type in serialised schemas.

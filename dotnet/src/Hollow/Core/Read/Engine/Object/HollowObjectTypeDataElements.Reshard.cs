@@ -87,11 +87,6 @@ public sealed partial class HollowObjectTypeDataElements
             {
                 CopyVarLengthField(from, fromOrdinal, fieldIndex, fieldBitOffset, varLengthWritePointers);
             }
-            else if (Schema.GetFieldType(fieldIndex) == FieldType.Decimal)
-            {
-                (long low, long high) = from.GetWideFixedFieldValue(fromOrdinal, fieldIndex);
-                FixedLengthData!.SetWideElementValue(fieldBitOffset, BitsPerField[fieldIndex], low, high);
-            }
             else
             {
                 long value = from.GetFixedFieldValue(fromOrdinal, fieldIndex);
@@ -124,11 +119,6 @@ public sealed partial class HollowObjectTypeDataElements
                 int numBits = BitsPerField[fieldIndex];
                 FixedLengthData!.SetElementValue(
                     fieldBitOffset, numBits, varLengthWritePointers[fieldIndex] | (1L << (numBits - 1)));
-            }
-            else if (Schema.GetFieldType(fieldIndex) == FieldType.Decimal)
-            {
-                FixedLengthData!.SetWideElementValue(
-                    fieldBitOffset, BitsPerField[fieldIndex], DecimalBits.NullLow, DecimalBits.NullHigh);
             }
             else
             {

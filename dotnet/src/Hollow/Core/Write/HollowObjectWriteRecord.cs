@@ -184,9 +184,13 @@ public sealed class HollowObjectWriteRecord : IHollowWriteRecord
     {
         ByteDataArray buffer = GetFieldBuffer(fieldName, FieldType.Decimal);
 
-        (long low, long high) = DecimalBits.Pack(value);
-        WriteFixedLengthLong(buffer, low);
-        WriteFixedLengthLong(buffer, high);
+        Span<byte> encoded = stackalloc byte[DecimalEncoding.MaxEncodedLength];
+        int length = DecimalEncoding.Encode(value, encoded);
+
+        for (int i = 0; i < length; i++)
+        {
+            buffer.Write(encoded[i]);
+        }
     }
 
     /// <summary>Sets a <see cref="FieldType.Boolean"/> field.</summary>
@@ -256,10 +260,6 @@ public sealed class HollowObjectWriteRecord : IHollowWriteRecord
                 break;
             case FieldType.Double:
                 WriteFixedLengthLong(buffer, NullDoubleBits);
-                break;
-            case FieldType.Decimal:
-                WriteFixedLengthLong(buffer, DecimalBits.NullLow);
-                WriteFixedLengthLong(buffer, DecimalBits.NullHigh);
                 break;
             default:
                 VarInt.WriteVNull(buffer);

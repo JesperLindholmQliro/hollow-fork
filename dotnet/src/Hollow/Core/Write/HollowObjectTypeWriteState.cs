@@ -200,10 +200,6 @@ public sealed partial class HollowObjectTypeWriteState : HollowTypeWriteState
                 fieldStats.AddFixedLengthFieldRequiredBits(fieldIndex, 64);
                 return pointer + 8;
 
-            case FieldType.Decimal:
-                fieldStats.AddFixedLengthFieldRequiredBits(fieldIndex, DecimalBits.BitsPerDecimal);
-                return pointer + DecimalBits.BytesPerDecimal;
-
             case FieldType.Long:
             case FieldType.Int:
             case FieldType.Reference:
@@ -225,6 +221,7 @@ public sealed partial class HollowObjectTypeWriteState : HollowTypeWriteState
 
             case FieldType.Bytes:
             case FieldType.String:
+            case FieldType.Decimal:
                 if (VarInt.ReadVNull(data, pointer))
                 {
                     fieldStats.AddFixedLengthFieldRequiredBits(fieldIndex, 1);
@@ -351,15 +348,6 @@ public sealed partial class HollowObjectTypeWriteState : HollowTypeWriteState
                 fixedLengthLongArray.SetElementValue(fieldBitOffset, 64, data.ReadInt64Bits(readPointer));
                 return readPointer + 8;
 
-            case FieldType.Decimal:
-                // Two elements rather than one: no single element can be wider than 64 bits.
-                fixedLengthLongArray.SetWideElementValue(
-                    fieldBitOffset,
-                    DecimalBits.BitsPerDecimal,
-                    data.ReadInt64Bits(readPointer),
-                    data.ReadInt64Bits(readPointer + 8));
-                return readPointer + DecimalBits.BytesPerDecimal;
-
             case FieldType.Long:
             case FieldType.Int:
             case FieldType.Reference:
@@ -378,6 +366,7 @@ public sealed partial class HollowObjectTypeWriteState : HollowTypeWriteState
 
             case FieldType.Bytes:
             case FieldType.String:
+            case FieldType.Decimal:
                 ByteDataArray varLengthBuffer =
                     varLengthByteArrays[fieldIndex] ??= new ByteDataArray(WastefulRecycler.DefaultInstance);
 

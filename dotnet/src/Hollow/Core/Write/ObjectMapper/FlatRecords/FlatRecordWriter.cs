@@ -262,6 +262,7 @@ public sealed class FlatRecordWriter
 
                 case FieldType.Bytes:
                 case FieldType.String:
+                case FieldType.Decimal:
                 {
                     int length = VarInt.ReadVInt(_buffer.UnderlyingArray, offset);
                     offset += VarInt.SizeOfVInt(length) + length;
@@ -278,10 +279,6 @@ public sealed class FlatRecordWriter
 
                 case FieldType.Float:
                     offset += sizeof(int);
-                    break;
-
-                case FieldType.Decimal:
-                    offset += sizeof(long) * 2;
                     break;
 
                 default:

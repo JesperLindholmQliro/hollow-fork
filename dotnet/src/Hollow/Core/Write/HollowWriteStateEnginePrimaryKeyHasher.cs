@@ -157,6 +157,7 @@ internal sealed class HollowWriteStateEnginePrimaryKeyHasher
 
                 case FieldType.Bytes:
                 case FieldType.String:
+                case FieldType.Decimal:
                     int fieldLength = VarInt.ReadVInt(data, offset);
                     offset += VarInt.SizeOfVInt(fieldLength) + fieldLength;
                     break;
@@ -171,10 +172,6 @@ internal sealed class HollowWriteStateEnginePrimaryKeyHasher
 
                 case FieldType.Float:
                     offset += 4;
-                    break;
-
-                case FieldType.Decimal:
-                    offset += DecimalBits.BytesPerDecimal;
                     break;
 
                 default:
@@ -228,11 +225,9 @@ internal sealed class HollowWriteStateEnginePrimaryKeyHasher
                 return data.ReadInt32Bits(offset);
 
             case FieldType.Decimal:
-                long decimalLow = data.ReadInt64Bits(offset);
-                long decimalHigh = data.ReadInt64Bits(offset + 8);
-                return DecimalBits.IsNull(decimalLow, decimalHigh)
-                    ? 0
-                    : HollowReadFieldUtils.DecimalHashCode(DecimalBits.Unpack(decimalLow, decimalHigh));
+                int decimalLength = VarInt.ReadVInt(data, offset);
+                return HollowReadFieldUtils.DecimalHashCode(
+                    DecimalEncoding.Decode(data, offset + VarInt.SizeOfVInt(decimalLength), decimalLength));
 
             default:
                 throw new ArgumentException(

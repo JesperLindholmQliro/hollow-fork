@@ -128,6 +128,64 @@ public static class VarInt
     }
 
     /// <summary>
+    /// Encodes <paramref name="value"/> at the start of <paramref name="destination"/>, returning how
+    /// many bytes it took.
+    /// </summary>
+    public static int WriteVInt(Span<byte> destination, int value) => EncodeVInt(destination, value);
+
+    /// <summary>
+    /// Encodes <paramref name="value"/> at the start of <paramref name="destination"/>, returning how
+    /// many bytes it took.
+    /// </summary>
+    public static int WriteVLong(Span<byte> destination, long value) => EncodeVLong(destination, value);
+
+    /// <summary>
+    /// Reads the variable-length integer <paramref name="source"/> begins with, and says how many bytes
+    /// it took.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The encoded value is null.</exception>
+    public static int ReadVInt(ReadOnlySpan<byte> source, out int length)
+    {
+        byte b = source[0];
+        ThrowIfNull(b, "int");
+
+        length = 1;
+        int value = b & 0x7F;
+
+        while ((b & 0x80) != 0)
+        {
+            b = source[length++];
+            value <<= 7;
+            value |= b & 0x7F;
+        }
+
+        return value;
+    }
+
+    /// <summary>
+    /// Reads the variable-length integer <paramref name="source"/> begins with, and says how many bytes
+    /// it took.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The encoded value is null.</exception>
+    public static long ReadVLong(ReadOnlySpan<byte> source, out int length)
+    {
+        byte b = source[0];
+        ThrowIfNull(b, "long");
+
+        length = 1;
+        long value = b & 0x7FL;
+
+        while ((b & 0x80) != 0)
+        {
+            b = source[length++];
+            value <<= 7;
+            value |= (uint)(b & 0x7F);
+        }
+
+        return value;
+    }
+
+    /// <summary>
     /// Determines whether the value at <paramref name="position"/> is a null variable-length integer.
     /// </summary>
     public static bool ReadVNull(IByteData data, long position)

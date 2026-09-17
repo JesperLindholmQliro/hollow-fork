@@ -224,10 +224,10 @@ public sealed partial class HollowObjectTypeDataElements : HollowTypeDataElement
             {
                 if (_unfilteredFieldIsIncluded[j])
                 {
-                    (long low, long high) =
-                        FixedLengthData!.GetWideElementValue(currentReadBit, _bitsPerUnfilteredField[j]);
-                    filteredData.SetWideElementValue(
-                        currentWriteBit, _bitsPerUnfilteredField[j], low, high);
+                    filteredData.SetElementValue(
+                        currentWriteBit,
+                        _bitsPerUnfilteredField[j],
+                        FixedLengthData!.GetLargeElementValue(currentReadBit, _bitsPerUnfilteredField[j]));
                     currentWriteBit += _bitsPerUnfilteredField[j];
                 }
 

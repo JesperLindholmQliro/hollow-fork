@@ -660,9 +660,9 @@ public class RestoreTests
         Assert.Null(state.ReadDecimal(2, amountPosition));
         Assert.Equal(decimal.MaxValue, state.ReadDecimal(3, amountPosition));
 
-        // Decimal equality ignores scale, so check the trailing zeros separately: a restore that
-        // normalised them would have changed the record and cost it its ordinal.
-        Assert.Equal("12.3400", state.ReadDecimal(0, amountPosition)!.Value.Invariant());
+        // A value is normalised before it is written, so the trailing zeros 12.3400m arrived with are
+        // not in the blob and do not come back.
+        Assert.Equal("12.34", state.ReadDecimal(0, amountPosition)!.Value.Invariant());
     }
 
     [Fact]
