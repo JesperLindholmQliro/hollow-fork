@@ -21,8 +21,8 @@ up rather than starting a new one. On the other side, `HollowConsumer` keeps a l
 dataset up to date from that blob store, following deltas where it can and loading a snapshot only
 where it must.
 
-There is **one deliberate departure from the Hollow format**: a `Decimal` field type that stores a .NET
-`decimal` exactly. It is opt-in — a dataset that declares no decimal field is byte-identical to what
+There is **one deliberate departure from the Hollow format**: a `Decimal` field type that carries a
+.NET `decimal` without loss. It is opt-in — a dataset that declares no decimal field is byte-identical to what
 Netflix Hollow produces. Read [Format extension: the `Decimal` field
 type](#format-extension-the-decimal-field-type) before changing anything in the write or read path.
 
@@ -783,10 +783,10 @@ Three things, each of which was checked to fail when the rule is broken:
 Everything else in this port aims to produce and consume exactly the bytes Netflix Hollow does. This
 does not: it adds a ninth field type, `FieldType.Decimal`, which Netflix Hollow has no equivalent of.
 
-It exists because Hollow's numeric field types cannot carry a .NET `decimal`. A `double` loses both
-precision and scale, and a `long` of minor units loses the scale and forces every consumer to agree on
-an exponent out of band. Money is the obvious case, but anything where `1.50` and `1.5` are meant to
-stay distinguishable has the same problem.
+It exists because Hollow's numeric field types cannot carry a .NET `decimal`. A `double` cannot
+represent a value as ordinary as `0.1`, and a `long` of minor units forces every consumer to agree on
+an exponent out of band and breaks the moment one type needs a different one. Money is the obvious
+case; any exact base-ten quantity has the same problem.
 
 ### The compatibility rule
 
@@ -818,30 +818,50 @@ because the field type is named in the schema rather than implied by a width.
 
 ### The encoding
 
-A decimal field is a fixed-length field of **16 bytes (128 bits)**, holding the four integers
-`decimal.GetBits` returns — the low, middle and high words of the 96-bit mantissa, then the flags word
-carrying the scale and the sign — each big-endian, in that order.
+A decimal field is **variable-length**, like a string or a byte array: the record holds a pointer into
+the type's byte store, and the value lives there encoded as the fewest bytes that can carry it. The
+first byte says which of four forms follows.
 
-It is the only field type wider than 64 bits, which is the one structural thing the rest of the code
-has to account for: an element of the fixed-length bit string is at most 64 bits, so a decimal occupies
-*two* elements, the low half at the field's bit offset and the high half 64 bits later.
-`FixedLengthDataExtensions.GetWideElementValue` and `SetWideElementValue` are how the code that handles
-fields generically — the field filter and the delta applicator — reads and writes a field without
-caring how wide it is. **Anything new that walks fields generically must use them, not
-`GetLargeElementValue`, which silently truncates at 64 bits.**
+| First byte | What follows | The form |
+| --- | --- | --- |
+| `0000 aaaa` | nothing | A. The value is the low nibble itself: a whole number from 0 to 15. |
+| `010Z ssss` | a variable-length 32-bit mantissa | B. `ssss` is the scale and `Z` the sign, set for positive. |
+| `011Z ssss` | a variable-length 64-bit mantissa | C. As B, for a mantissa past 32 bits. |
+| `1111 1110` | sixteen bytes | D. The four words of `decimal.GetBits`, big-endian, for a mantissa past 64 bits or a scale past 15. |
+| `1111 1111` | nothing | Null. |
 
-Null is all sixteen bytes set. That is not a representable decimal — the flags word may only carry a
-scale of 0 to 28 in bits 16 to 23 and a sign in bit 31 — and it is the same all-ones convention Hollow
-already uses for its other fixed-length fields.
+A small whole number — most of what a model actually holds — costs one byte, and only an awkward value
+costs the full seventeen. The fixed-length form this replaced cost sixteen bytes in every record
+whether the field held `0m` or not.
 
-### Scale is stored but ignored when comparing
+Every form is self-describing, so `DecimalEncoding.EncodedLength` can say how long a value is from its
+own bytes. Nothing in the port relies on that — every container writes a decimal behind a length, as it
+does a string — but it means the encoding stays usable somewhere that cannot.
 
-The stored form keeps the scale, so `1.50m` round-trips as `1.50m`. That is the point of the field
-type, and it means two records differing only in scale are two records, not one.
+The `1111 1111` form is likewise never written by a container. A blob marks a null variable-length
+field with the high bit of its range pointer and a flat record writes a null variable-length integer,
+both exactly as they do for a string, so a decimal needs no null convention of its own.
+`DecimalEncoding.Encode(decimal?)` writes the byte for callers outside those containers.
 
-.NET's own `==` on `decimal` ignores scale, though, so anything that hashes a decimal has to ignore it
-too, or a hash table keyed on one breaks: two values that compare equal would land in different
-buckets. `DecimalBits.CanonicalHashCode` strips trailing zeros before hashing, and the primary key
+### Scale is normalised away
+
+A value is normalised before it is written: trailing zeros come off the mantissa, so `1.000m`, `1.00m`
+and `1m` all encode as the single byte `0x01`. The encoding preserves the **value** and not the scale
+it happened to arrive with. A decimal read back compares equal to the one written but need not return
+the same `decimal.GetBits`, and two records differing only in scale are one record rather than two.
+
+Normalising is what makes the encoding compact — a scale carried only by trailing zeros would push a
+value out of form A and into a longer form for nothing — and it closes a gap that the earlier
+scale-preserving form left open: .NET's `==` on `decimal` already ignores scale, so a stored form that
+did not was a representation two equal values could disagree about.
+
+It has to hold in form D too, where the words go out as `decimal.GetBits` returns them. They are
+rebuilt from the normalised mantissa, scale and sign rather than taken from the value as it arrived, or
+two spellings of one value could produce different bytes. `-0m` normalises to `0m` for the same reason:
+they compare equal, so they have to encode — and hash — equally.
+
+Anything that hashes a decimal normalises first, or a hash table keyed on one breaks, two equal values
+landing in different buckets. `DecimalEncoding.CanonicalHashCode` is that hash, and the primary key
 index, the set and map hash keys, and `HollowReadFieldUtils` all go through it. `decimal.GetHashCode`
 would also be scale-invariant but is an implementation detail of the runtime, and a hash that decides
 where a record lands in a blob has to keep producing the same answer across runtime versions.
@@ -850,12 +870,11 @@ where a record lands in a blob has to keep producing the same answer across runt
 
 | Concern | Where |
 | --- | --- |
-| The encoding itself | `Core/Memory/Encoding/DecimalBits.cs` |
-| Fields wider than one element | `FixedLengthDataExtensions` in `Core/Memory/IFixedLengthData.cs` |
+| The encoding itself | `Core/Memory/Encoding/DecimalEncoding.cs` |
 | Writing | `HollowObjectWriteRecord.SetDecimal`, `HollowObjectTypeWriteState` |
 | Reading | `IHollowObjectTypeDataAccess.ReadDecimal`, `HollowObjectTypeReadState` |
 | Deltas | `HollowObjectTypeDataElements.ApplyDelta` |
-| Field filtering | `HollowObjectTypeDataElements.RemoveExcludedFieldsFromFixedLengthData` |
+| Flat records | `FlatRecord`, `FlatRecordReader`, `FlatRecordOrdinalReader`, `FlatRecordWriter` |
 | Hashing and comparison | `HollowReadFieldUtils`, `SetMapKeyHasher`, `HollowWriteStateEnginePrimaryKeyHasher` |
 | Indexing | `HollowPrimaryKeyIndex`, `HollowPrimaryKeyValueDeriver` |
 | Mapping a CLR `decimal` | `HollowObjectTypeMapper.ScalarFieldType`, `HollowObjectMapper.DefaultTypeName` |
@@ -2398,7 +2417,7 @@ once, so a part left without an output is refused where the caller can still do 
 | Java package | Notes |
 | --- | --- |
 | `core.memory` | `IByteData`, `ArrayByteData`, `ByteDataArray`, `SegmentedByteArray`, `SegmentedLongArray`, `ByteArrayOrdinalMap`, `FreeOrdinalTracker`, `ThreadSafeBitSet`, `IFixedLengthData`, `IVariableLengthData`, `MemoryMode`, `FixedLengthDataFactory`, `VariableLengthDataFactory` |
-| `core.memory.encoding` | `ZigZag`, `VarInt`, `HashCodes`, `FixedLengthElementArray`, `FixedLengthMultipleOccurrenceElementArray`, `MemoryMappedBlob` (Java's `BlobByteBuffer`), `EncodedLongBuffer`, `EncodedByteBuffer`, and `DecimalBits` (port-specific; see the format extension above) |
+| `core.memory.encoding` | `ZigZag`, `VarInt`, `HashCodes`, `FixedLengthElementArray`, `FixedLengthMultipleOccurrenceElementArray`, `MemoryMappedBlob` (Java's `BlobByteBuffer`), `EncodedLongBuffer`, `EncodedByteBuffer`, and `DecimalEncoding` (port-specific; see the format extension above) |
 | `core.memory.pool` | `IArraySegmentRecycler`, `WastefulRecycler`, `RecyclingRecycler` |
 | `core.schema` | `HollowSchema` and the object/list/set/map schemas, `FieldType`, `SchemaType`, `SimpleHollowDataset`, `HollowSchemaSorter`, `HollowSchemaHash` |
 | `core.index` | `FieldPaths` and the bound `FieldPath`/`FieldSegment`/`ObjectFieldSegment`/`FieldPathException` types, `HollowPrimaryKeyIndex`, `HollowUniqueKeyIndex`, `HollowHashIndex` and its builder, preindexer, field and result types, `HollowPrefixIndex` and the `TernarySearchTree` behind it, `HollowSparseIntegerSet`, `ValueFieldPath` (Java's package-private `core.index.FieldPath`), `GrowingSegmentedLongArray`, `MultiLinkedElementArray` |
@@ -2500,7 +2519,7 @@ the producer from its serialised bytes, the consumer from boxed key values — a
 between them makes a lookup work. `ObjectMapperHashKeyTests` covers the same ground from the mapper's
 side, including the keys it derives when a model declares none.
 
-`DecimalFieldTests` and `DecimalBitsTests` cover the format extension, and
+`DecimalFieldTests` and `DecimalEncodingTests` cover the format extension, and
 `FormatCompatibilityTests` pins the bytes of a dataset that does not use it — see
 [Format extension: the `Decimal` field type](#format-extension-the-decimal-field-type).
 
@@ -2633,8 +2652,9 @@ field type. Its compatibility rule — a dataset that uses no decimal field seri
 Netflix Hollow would serialise it — is enforced by `FormatCompatibilityTests` and has to survive every
 subsequent change. If you are touching the write path, the read path, the delta applicators or the
 field filter, read [Format extension: the `Decimal` field
-type](#format-extension-the-decimal-field-type) first; the trap is that a decimal field is 128 bits
-wide and every other fixed-length field is 64 or fewer.
+type](#format-extension-the-decimal-field-type) first. A decimal is variable-length, so it travels the
+paths a string travels; the thing to know is that the encoding normalises a value before writing it, so
+the bytes preserve the value and not the scale it arrived with.
 
 ### Suggested order for the remaining work
 
