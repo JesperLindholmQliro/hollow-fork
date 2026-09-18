@@ -34,6 +34,24 @@ public static class VarInt
     private const byte NullMarker = 0x80;
 
     /// <summary>
+    /// The most bytes an encoded <see cref="int"/> can take: seven bits at a time, and a negative value
+    /// written in its full width.
+    /// </summary>
+    /// <remarks>
+    /// A reader that trusts the continuation bit alone will follow one for as long as the data keeps
+    /// setting it, which on a corrupt or hostile blob is as far as the blob goes. The encoding cannot
+    /// produce more than this many bytes, so anything longer is not a value that was ever written — and
+    /// stopping here turns a scan of the whole buffer into a handful of reads.
+    /// </remarks>
+    public const int MaxVIntSize = 5;
+
+    /// <summary>
+    /// The most bytes an encoded <see cref="long"/> can take. See <see cref="MaxVIntSize"/> for why it
+    /// is enforced rather than merely true.
+    /// </summary>
+    public const int MaxVLongSize = 10;
+
+    /// <summary>
     /// Writes a null variable-length integer into <paramref name="buffer"/>.
     /// </summary>
     public static void WriteVNull(ByteDataArray buffer)
@@ -146,6 +164,8 @@ public static class VarInt
     /// <exception cref="InvalidOperationException">The encoded value is null.</exception>
     public static int ReadVInt(ReadOnlySpan<byte> source, out int length)
     {
+        ThrowIfEmpty(source, "int");
+
         byte b = source[0];
         ThrowIfNull(b, "int");
 
@@ -154,6 +174,9 @@ public static class VarInt
 
         while ((b & 0x80) != 0)
         {
+            ThrowIfTooLong(length, MaxVIntSize, "int");
+            ThrowIfTruncated(length, source.Length, "int");
+
             b = source[length++];
             value <<= 7;
             value |= b & 0x7F;
@@ -169,6 +192,8 @@ public static class VarInt
     /// <exception cref="InvalidOperationException">The encoded value is null.</exception>
     public static long ReadVLong(ReadOnlySpan<byte> source, out int length)
     {
+        ThrowIfEmpty(source, "long");
+
         byte b = source[0];
         ThrowIfNull(b, "long");
 
@@ -177,6 +202,9 @@ public static class VarInt
 
         while ((b & 0x80) != 0)
         {
+            ThrowIfTooLong(length, MaxVLongSize, "long");
+            ThrowIfTruncated(length, source.Length, "long");
+
             b = source[length++];
             value <<= 7;
             value |= (uint)(b & 0x7F);
@@ -215,8 +243,12 @@ public static class VarInt
         ThrowIfNull(b, "int");
 
         int value = b & 0x7F;
+        int length = 1;
+
         while ((b & 0x80) != 0)
         {
+            ThrowIfTooLong(length++, MaxVIntSize, "int");
+
             b = data.Get(position++);
             value <<= 7;
             value |= b & 0x7F;
@@ -237,8 +269,12 @@ public static class VarInt
         ThrowIfNull(b, "int");
 
         int value = b & 0x7F;
+        int length = 1;
+
         while ((b & 0x80) != 0)
         {
+            ThrowIfTooLong(length++, MaxVIntSize, "int");
+
             b = data[position++];
             value <<= 7;
             value |= b & 0x7F;
@@ -259,8 +295,12 @@ public static class VarInt
         ThrowIfNull(b, "int");
 
         int value = b & 0x7F;
+        int length = 1;
+
         while ((b & 0x80) != 0)
         {
+            ThrowIfTooLong(length++, MaxVIntSize, "int");
+
             b = ReadByteSafely(input);
             value <<= 7;
             value |= b & 0x7F;
@@ -359,8 +399,12 @@ public static class VarInt
         ThrowIfNull(b, "long");
 
         long value = b & 0x7FL;
+        int length = 1;
+
         while ((b & 0x80) != 0)
         {
+            ThrowIfTooLong(length++, MaxVLongSize, "long");
+
             b = data.Get(position++);
             value <<= 7;
             value |= b & 0x7FL;
@@ -381,8 +425,12 @@ public static class VarInt
         ThrowIfNull(b, "long");
 
         long value = b & 0x7FL;
+        int length = 1;
+
         while ((b & 0x80) != 0)
         {
+            ThrowIfTooLong(length++, MaxVLongSize, "long");
+
             b = data[position++];
             value <<= 7;
             value |= b & 0x7FL;
@@ -403,8 +451,12 @@ public static class VarInt
         ThrowIfNull(b, "long");
 
         long value = b & 0x7FL;
+        int length = 1;
+
         while ((b & 0x80) != 0)
         {
+            ThrowIfTooLong(length++, MaxVLongSize, "long");
+
             b = ReadByteSafely(input);
             value <<= 7;
             value |= b & 0x7FL;
@@ -429,8 +481,9 @@ public static class VarInt
         int length = 1;
         while ((b & 0x80) != 0)
         {
+            ThrowIfTooLong(length++, MaxVLongSize, "long");
+
             b = data.Get(position++);
-            length++;
         }
 
         return length;
@@ -452,8 +505,9 @@ public static class VarInt
         int length = 1;
         while ((b & 0x80) != 0)
         {
+            ThrowIfTooLong(length++, MaxVLongSize, "long");
+
             b = data[position++];
-            length++;
         }
 
         return length;
@@ -537,12 +591,6 @@ public static class VarInt
 
         return (byte)b;
     }
-
-    /// <summary>A negative long takes the full ten bytes; a null takes one.</summary>
-    private const int MaxVLongSize = 10;
-
-    /// <summary>A negative int takes the full five bytes; a null takes one.</summary>
-    private const int MaxVIntSize = 5;
 
     /// <summary>
     /// Encodes <paramref name="value"/> into <paramref name="destination"/>, returning the byte count.
@@ -642,6 +690,53 @@ public static class VarInt
         if (b == NullMarker)
         {
             throw new InvalidOperationException($"Attempting to read null value as {type}");
+        }
+    }
+
+    /// <summary>
+    /// Refuses a continuation run longer than the encoding can produce.
+    /// </summary>
+    /// <param name="length">How many bytes have been consumed so far.</param>
+    /// <param name="maximum">The most this encoding could ever take.</param>
+    /// <param name="type">What is being read, for the message.</param>
+    /// <exception cref="InvalidDataException">The run is longer than the encoding allows.</exception>
+    /// <remarks>
+    /// Without this, a reader follows the continuation bit for as far as the data keeps setting it —
+    /// across a whole blob, given bytes that were never a variable-length integer — and then returns a
+    /// number built from the last few bytes of whatever it walked through. Stopping at the limit the
+    /// format guarantees turns both of those into one exception after a handful of reads.
+    /// </remarks>
+    private static void ThrowIfTooLong(int length, int maximum, string type)
+    {
+        if (length >= maximum)
+        {
+            throw new InvalidDataException(
+                $"a variable-length {type} cannot be longer than {maximum} bytes, and this one is");
+        }
+    }
+
+    /// <summary>
+    /// Refuses a value that runs off the end of the bytes it was read from.
+    /// </summary>
+    /// <exception cref="InvalidDataException">The value is cut short.</exception>
+    private static void ThrowIfTruncated(int length, int available, string type)
+    {
+        if (length >= available)
+        {
+            throw new InvalidDataException(
+                $"a variable-length {type} continues past the end of the {available} bytes holding it");
+        }
+    }
+
+    /// <summary>
+    /// Refuses a read from no bytes at all, which is a length somewhere saying zero rather than a value.
+    /// </summary>
+    /// <exception cref="InvalidDataException">There is nothing to read.</exception>
+    private static void ThrowIfEmpty(ReadOnlySpan<byte> source, string type)
+    {
+        if (source.IsEmpty)
+        {
+            throw new InvalidDataException($"there are no bytes to read a variable-length {type} from");
         }
     }
 }

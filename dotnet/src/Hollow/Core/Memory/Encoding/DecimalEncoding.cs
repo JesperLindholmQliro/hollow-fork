@@ -169,12 +169,26 @@ public static class DecimalEncoding
     /// <summary>
     /// How many bytes the value beginning at <paramref name="source"/> takes, without decoding it.
     /// </summary>
+    /// <exception cref="InvalidDataException">
+    /// <paramref name="source"/> is empty, does not begin a form this format defines, or holds a value
+    /// that runs past its end or past the length the format allows. None of these can come out of a
+    /// well-formed blob.
+    /// </exception>
+    /// <remarks>
+    /// Every bound here is one the format already guarantees, enforced rather than assumed. A reader
+    /// that followed the continuation bits alone would walk the whole of whatever it was handed — a
+    /// gigabyte of it, given a gigabyte — to answer a question whose answer is at most seventeen.
+    /// </remarks>
     public static int EncodedLength(ReadOnlySpan<byte> source)
     {
+        ThrowIfEmpty(source);
+
         byte marker = source[0];
 
         if (marker == FormDMarker)
         {
+            ThrowIfFormDIsTruncated(source);
+
             return MaxEncodedLength;
         }
 
@@ -183,26 +197,46 @@ public static class DecimalEncoding
             return 1;
         }
 
+        int maxMantissaLength = MantissaLimit(marker);
+
         // Forms B and C: the marker, then a variable-length integer, every byte of which but the last
         // carries a set high bit.
         int trailing = 0;
-        while ((source[1 + trailing] & 0x80) != 0)
-        {
-            trailing++;
-        }
 
-        return trailing + 2;
+        while (true)
+        {
+            if (1 + trailing >= source.Length)
+            {
+                throw new InvalidDataException(
+                    $"an encoded decimal continues past the end of the {source.Length} bytes holding it");
+            }
+
+            if ((source[1 + trailing] & 0x80) == 0)
+            {
+                return trailing + 2;
+            }
+
+            if (++trailing == maxMantissaLength)
+            {
+                throw new InvalidDataException(
+                    $"the mantissa of an encoded decimal cannot be longer than {maxMantissaLength} bytes,"
+                    + " and this one is");
+            }
+        }
     }
 
     /// <summary>
     /// Decodes the value <paramref name="source"/> begins with, and says how many bytes it took.
     /// </summary>
     /// <exception cref="InvalidDataException">
-    /// The first byte is not one this format defines. A well-formed blob never produces this: it means
-    /// the field holds something other than an encoded decimal.
+    /// <paramref name="source"/> is empty, the first byte is not one this format defines, or the value
+    /// runs past the end of the bytes holding it. A well-formed blob never produces any of these: they
+    /// mean the field holds something other than an encoded decimal.
     /// </exception>
     public static decimal? Decode(ReadOnlySpan<byte> source, out int length)
     {
+        ThrowIfEmpty(source);
+
         byte marker = source[0];
 
         if (marker == NullMarker)
@@ -214,6 +248,8 @@ public static class DecimalEncoding
 
         if (marker == FormDMarker)
         {
+            ThrowIfFormDIsTruncated(source);
+
             length = MaxEncodedLength;
 
             ReadOnlySpan<int> bits =
@@ -224,7 +260,19 @@ public static class DecimalEncoding
                 BinaryPrimitives.ReadInt32BigEndian(source[13..]),
             ];
 
-            return new decimal(bits);
+            try
+            {
+                return new decimal(bits);
+            }
+            catch (ArgumentException e)
+            {
+                // Only some of the 2^32 flag words name a decimal: a scale past 28, or a reserved bit
+                // set, is not one. Rather than restate that rule here and risk restating it wrongly, the
+                // constructor is asked and its refusal is reported as what it means — bytes that were
+                // never written by the encoder.
+                throw new InvalidDataException(
+                    "the sixteen bytes of this decimal do not describe one", e);
+            }
         }
 
         if ((marker & 0xF0) == 0x00)
@@ -270,6 +318,12 @@ public static class DecimalEncoding
     {
         ArgumentNullException.ThrowIfNull(data);
 
+        if (length <= 0)
+        {
+            throw new InvalidDataException(
+                $"a decimal field cannot be {length} bytes long, and the blob says this one is");
+        }
+
         Span<byte> buffer = stackalloc byte[MaxEncodedLength];
         int available = Math.Min(length, MaxEncodedLength);
 
@@ -311,6 +365,49 @@ public static class DecimalEncoding
         hash = (hash * 31) ^ scale;
 
         return isNegative ? ~hash : hash;
+    }
+
+    /// <summary>
+    /// The most bytes the mantissa of <paramref name="marker"/>'s form can take, which is the limit of
+    /// the variable-length integer it is written as.
+    /// </summary>
+    /// <exception cref="InvalidDataException"><paramref name="marker"/> begins no form.</exception>
+    private static int MantissaLimit(byte marker) => (marker & 0xE0) switch
+    {
+        0x40 => VarInt.MaxVIntSize,
+        0x60 => VarInt.MaxVLongSize,
+        _ => throw new InvalidDataException(
+            $"0x{marker:X2} does not begin any form of an encoded decimal."),
+    };
+
+    /// <summary>
+    /// Refuses a sixteen-byte form that has fewer than sixteen bytes after its marker.
+    /// </summary>
+    /// <exception cref="InvalidDataException">The value is cut short.</exception>
+    /// <remarks>
+    /// Checked by the length reader as well as the decoder: a caller that skipped forward by a length
+    /// longer than the bytes it was given would be reading the next field from somewhere past the end.
+    /// </remarks>
+    private static void ThrowIfFormDIsTruncated(ReadOnlySpan<byte> source)
+    {
+        if (source.Length < MaxEncodedLength)
+        {
+            throw new InvalidDataException(
+                $"a decimal in the sixteen-byte form needs {MaxEncodedLength} bytes and has "
+                + $"{source.Length}");
+        }
+    }
+
+    /// <summary>
+    /// Refuses a read from no bytes at all, which is a length somewhere saying zero rather than a value.
+    /// </summary>
+    /// <exception cref="InvalidDataException">There is nothing to read.</exception>
+    private static void ThrowIfEmpty(ReadOnlySpan<byte> source)
+    {
+        if (source.IsEmpty)
+        {
+            throw new InvalidDataException("there are no bytes to read an encoded decimal from");
+        }
     }
 
     /// <summary>

@@ -144,7 +144,11 @@ public static class OrdinalEnumerables
 
         int bucket = HashCodes.HashInt(hashCode) & (numBuckets - 1);
 
-        while (true)
+        // A table Hollow wrote always has room to spare, so the run from the hashed bucket reaches an
+        // empty one before it gets back to where it started. Counting the buckets rather than trusting
+        // that turns a table with no empty bucket in it — which only corrupt data produces — into an
+        // exception instead of a walk round the ring for ever, yielding the same elements each time.
+        for (int probed = 0; probed < numBuckets; probed++)
         {
             int bucketValue = dataAccess.RelativeBucketValue(ordinal, bucket);
 
@@ -157,6 +161,10 @@ public static class OrdinalEnumerables
 
             bucket = (bucket + 1) & (numBuckets - 1);
         }
+
+        throw new InvalidDataException(
+            $"the set at ordinal {ordinal} has no empty bucket in its {numBuckets}, so it is not a hash "
+            + "table this wrote");
     }
 
     /// <summary>
@@ -196,7 +204,8 @@ public static class OrdinalEnumerables
 
         int bucket = HashCodes.HashInt(hashCode) & (numBuckets - 1);
 
-        while (true)
+        // Bounded for the same reason as the set probe above.
+        for (int probed = 0; probed < numBuckets; probed++)
         {
             long entry = dataAccess.RelativeBucket(ordinal, bucket);
 
@@ -209,6 +218,10 @@ public static class OrdinalEnumerables
 
             bucket = (bucket + 1) & (numBuckets - 1);
         }
+
+        throw new InvalidDataException(
+            $"the map at ordinal {ordinal} has no empty bucket in its {numBuckets}, so it is not a hash "
+            + "table this wrote");
     }
 
     /// <summary>

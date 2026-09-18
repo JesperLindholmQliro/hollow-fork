@@ -1303,6 +1303,39 @@ protect.
 Java's deprecated `HollowIncrementalProducer`, the standalone class that predates
 `HollowProducer.Incremental`, is not ported.
 
+### A decoder cannot be walked off the end of a buffer
+
+Every variable-length format Hollow reads says where it ends with a continuation bit rather than a
+length: a byte with its high bit set means another follows. Java reads them exactly that way, and so
+did this port at first — the loop's only stopping condition is a byte that clears the bit.
+
+That is fine for bytes the encoder wrote and wrong for anything else. Given a blob that is corrupt,
+truncated or hostile, the loop follows the bit as far as the data keeps setting it: across the whole
+blob, at whatever cost that is, and then returns a number assembled from the last few bytes it walked
+through. `DecimalEncoding.EncodedLength` was the clearest case — handed a gigabyte, it would read a
+gigabyte to answer a question whose answer is at most seventeen.
+
+So each decoder now enforces the bound its own format already guarantees. `VarInt.MaxVIntSize` is five
+bytes and `MaxVLongSize` is ten, because that is all seven-bits-at-a-time can take for those widths;
+a decimal's mantissa is one of those two, so it cannot exceed them either; the sixteen-byte decimal
+form needs sixteen bytes to be there. A run longer than that is not a value anything wrote, and it is
+reported as `InvalidDataException` after a handful of reads rather than after a scan. The same applies
+to reading from nothing at all: an empty span means a length somewhere said zero, which is malformed
+data and not a reason to index into it.
+
+Two related bounds came with it. The set and map bucket probes in `OrdinalEnumerables` walk from the
+hashed bucket until they find an empty one; a table with no empty bucket — which only corrupt data
+produces — sent them round the ring for ever, yielding the same elements each time, so they now count
+the buckets. And the sixteen-byte decimal form hands its four words to `decimal`'s own constructor,
+which refuses flag words that name no decimal; that refusal is translated, so malformed data leaves
+the read path as malformed data rather than as an `ArgumentException` from underneath it.
+
+`MalformedInputTests` is the counterpart: empty spans, truncated values, endless continuations, every
+possible first byte, and twenty thousand random buffers, asserting that each decode either returns a
+value or throws one of the two exceptions the read path expects — and that a thousand refusals over an
+eight-megabyte buffer take no measurable time, which is the bound restated as something that fails if
+it is removed.
+
 ### An incremental cycle's changes are collected before any of them are applied
 
 Java's incremental write state writes into a `ConcurrentHashMap` and so does this one, which is what
