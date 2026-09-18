@@ -23,7 +23,8 @@ using Microsoft.Extensions.Logging;
 namespace Hollow.Reference.Consumer;
 
 /// <summary>
-/// Keeps a <see cref="HollowHistory"/> in step with the consumer it was built from.
+/// Keeps a <see cref="HollowHistory"/> in step with the consumer it was built from, and says out loud
+/// what it saw.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -36,16 +37,23 @@ namespace Hollow.Reference.Consumer;
 /// A history remembers what each transition changed, which means holding on to records the new version
 /// no longer has. That memory is the reason <c>MaxHistoricalStates</c> exists.
 /// </para>
+/// <para>
+/// It also logs a line per version picked up. That is not something a real service would want — it
+/// would count the transition and move on — but a reference implementation whose console goes quiet
+/// after start-up reads like one that has stopped watching, and it is the thing worth watching happen.
+/// </para>
 /// </remarks>
 internal sealed class CatalogueHistory : HollowRefreshListener
 {
     private readonly HollowHistory _history;
     private readonly ILogger _logger;
+    private readonly string _historyBasePath;
 
-    internal CatalogueHistory(HollowHistory history, ILogger logger)
+    internal CatalogueHistory(HollowHistory history, ILogger logger, string historyBasePath)
     {
         _history = history;
         _logger = logger;
+        _historyBasePath = historyBasePath;
     }
 
     public override void DeltaUpdateOccurred(HollowReadStateEngine stateEngine, long version)
@@ -78,4 +86,30 @@ internal sealed class CatalogueHistory : HollowRefreshListener
         _logger.LogInformation(
             "Loaded a whole snapshot of version {Version}; the history restarts from it.", version);
     }
+
+    public override void RefreshSuccessful(long beforeVersion, long afterVersion, long requestedVersion)
+    {
+        if (beforeVersion == afterVersion)
+        {
+            // A refresh that found nothing new. The watcher fires on any change to the folder it is
+            // watching, so this is the common case and not worth a line.
+            return;
+        }
+
+        int states = _history.NumberOfHistoricalStates;
+
+        _logger.LogInformation(
+            "Picked up version {Version} ({Records}). The history now holds {States} — see {HistoryPath}.",
+            afterVersion,
+            RecordCounts(),
+            states == 1 ? "1 past version" : $"{states} past versions",
+            _historyBasePath);
+    }
+
+    private string RecordCounts() =>
+        string.Join(
+            ", ",
+            _history.LatestState.TypeStates.Values
+                .OrderBy(type => type.Schema.Name, StringComparer.Ordinal)
+                .Select(type => $"{type.Schema.Name} {type.PopulatedOrdinals.Cardinality()}"));
 }

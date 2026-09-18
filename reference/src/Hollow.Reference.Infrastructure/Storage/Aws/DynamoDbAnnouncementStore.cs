@@ -65,6 +65,10 @@ public sealed class DynamoDbAnnouncementStore : IHollowAnnouncementStore
         _blobNamespace = blobNamespace;
     }
 
+    /// <inheritdoc />
+    public string Description =>
+        $"DynamoDB table '{_tableName}', the row with namespace '{_blobNamespace}'";
+
     public async Task AnnounceAsync(
         long version,
         IReadOnlyDictionary<string, string> metadata,

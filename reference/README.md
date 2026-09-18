@@ -26,17 +26,39 @@ dotnet run --project src/Hollow.Reference.Producer     # publishes a catalogue e
 dotnet run --project src/Hollow.Reference.Consumer     # follows it, and serves the UIs
 ```
 
-Then open <http://127.0.0.1:7780>. The consumer's home page says which version it is on, and links to:
+Both print where they are reading and writing before they do anything:
+
+```
+I am the producer. I will publish to:
+  mode          Local
+  namespace     hollow-reference
+  blobs         /tmp/hollow-reference/blobs, under 'hollow-reference/'
+  announcements /tmp/hollow-reference/watching (consumers watch it for new files rather than polling it)
+```
+
+That directory under the system temporary folder is how the two processes find each other with nothing
+configured — the same trick the Java original plays with `java.io.tmpdir`. Delete it to start over, or
+set `Hollow:Local:RootPath` to put it somewhere you chose.
+
+The consumer then prints where its two UIs are and goes on logging a line for every version it picks up:
+
+```
+Ready. Watching for new versions; each one the producer announces is logged below as it arrives.
+  home      http://127.0.0.1:7780
+  explorer  http://127.0.0.1:7780/explorer — every record in the version currently held
+  history   http://127.0.0.1:7780/history — what each cycle changed, growing as the producer runs
+
+Picked up version 20260101120010002 (Actor 999, Movie 10001, SetOfActor 10001, String 11002).
+The history now holds 1 past version — see /history.
+```
 
 - **`/explorer`** — every type and every record in the version currently held.
-- **`/history`** — what each cycle changed, and everything that ever happened to one film.
+- **`/history`** — what each cycle changed, and everything that ever happened to one film. This is the
+  page to leave open: it grows a state every cycle, so it shows the delta chain arriving rather than
+  just the latest state of it.
 
-Both refresh as the producer cycles. The producer restores the last announced version at start-up, so
-stopping and restarting it continues the delta chain rather than beginning a new one.
-
-The first run writes to `<temp>/hollow-reference`, which is how the two processes find each other with
-nothing configured — the same trick the Java original plays with `java.io.tmpdir`. Delete that directory
-to start over.
+The producer restores the last announced version at start-up, so stopping and restarting it continues
+the delta chain rather than beginning a new one.
 
 Smaller and faster, for trying things out:
 
@@ -182,6 +204,8 @@ once against two small interfaces, and each mode implements them:
 - **`IHollowAnnouncementStore`** — announce, read, and optionally *subscribe*. Only the local mode
   implements subscription; the cloud modes return `null` from it and are polled.
 
+Both also carry a `Description`, which is what the start-up summary above is made of.
+
 Over those sit the four things Hollow actually asks for, in `Adapters/`, ported from the Java classes
 named beside them:
 
@@ -233,8 +257,8 @@ cd reference
 dotnet test
 ```
 
-47 tests covering the snapshot index encoding, the blob key layout, the local blob and announcement
-stores, the shipped configuration, and a round trip: the producer publishes, the consumer reads it back
+50 tests covering the snapshot index encoding, the blob key layout, the local blob and announcement
+stores, the shipped configuration, the start-up summary, and a round trip: the producer publishes, the consumer reads it back
 through the same adapters the applications use, follows a second version over the `FileSystemWatcher`,
 reaches a version that has no snapshot of its own through the index, and stays put when pinned.
 

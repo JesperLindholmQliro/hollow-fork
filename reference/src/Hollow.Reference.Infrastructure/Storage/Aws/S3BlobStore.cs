@@ -54,6 +54,9 @@ public sealed class S3BlobStore : IHollowBlobStore
         _bucketName = bucketName;
     }
 
+    /// <inheritdoc />
+    public string Description => $"s3://{_bucketName}";
+
     public async Task WriteAsync(
         string key,
         Stream content,

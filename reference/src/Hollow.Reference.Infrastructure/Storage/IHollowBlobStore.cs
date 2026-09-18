@@ -41,6 +41,17 @@ namespace Hollow.Reference.Infrastructure.Storage;
 /// </remarks>
 public interface IHollowBlobStore
 {
+    /// <summary>
+    /// Where this store keeps things, in a form somebody can go and look at: a directory path, a
+    /// bucket, a container URL.
+    /// </summary>
+    /// <remarks>
+    /// Only ever printed. It is here because the first question anyone running the reference
+    /// implementation asks is where the blobs went, and the answer in the local mode is a temporary
+    /// directory nobody chose.
+    /// </remarks>
+    string Description { get; }
+
     /// <summary>Writes <paramref name="content"/> to <paramref name="key"/>, replacing what is there.</summary>
     /// <remarks>
     /// <paramref name="content"/> is read to its end and left open; the caller owns it.

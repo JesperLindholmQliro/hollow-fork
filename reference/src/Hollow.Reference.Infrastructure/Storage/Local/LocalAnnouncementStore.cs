@@ -72,6 +72,9 @@ public sealed class LocalAnnouncementStore : IHollowAnnouncementStore
     /// <summary>The folder announcements appear in, and the one the watcher is pointed at.</summary>
     public string WatchingDirectory => _watchingDirectory;
 
+    /// <inheritdoc />
+    public string Description => Path.GetFullPath(_watchingDirectory);
+
     public async Task AnnounceAsync(
         long version,
         IReadOnlyDictionary<string, string> metadata,

@@ -62,6 +62,15 @@ public readonly record struct AnnouncedVersions(
 /// </remarks>
 public interface IHollowAnnouncementStore
 {
+    /// <summary>
+    /// Where the announced version is kept, in a form somebody can go and look at.
+    /// </summary>
+    /// <remarks>
+    /// Only ever printed. In the local mode it is the folder a producer and a consumer rendezvous in,
+    /// which is worth saying out loud rather than leaving to be discovered.
+    /// </remarks>
+    string Description { get; }
+
     /// <summary>Records <paramref name="version"/> as the announced one.</summary>
     Task AnnounceAsync(
         long version,

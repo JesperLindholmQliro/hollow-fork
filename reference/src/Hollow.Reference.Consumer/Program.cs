@@ -45,9 +45,11 @@ WebApplicationBuilder builder = WebApplication.CreateBuilder(new WebApplicationO
 
 // Logging for the parts that are built before the application is: the announcement watcher, and the
 // wait for the producer's first version. Disposed when the process ends, after app.RunAsync returns.
+// Left multi-line on purpose: the two things worth reading here — where the data is coming from, and
+// where the UIs are — are lists, and squeezing a list onto one line is how it stops being read.
 using ILoggerFactory startupLogging = LoggerFactory.Create(logging => logging
     .AddConfiguration(builder.Configuration.GetSection("Logging"))
-    .AddSimpleConsole(console => console.SingleLine = true));
+    .AddSimpleConsole());
 
 ILogger logger = startupLogging.CreateLogger("Hollow.Reference.Consumer");
 
@@ -58,10 +60,12 @@ ILogger logger = startupLogging.CreateLogger("Hollow.Reference.Consumer");
 using HollowReferenceInfrastructure infrastructure =
     HollowReferenceInfrastructure.Create(builder.Configuration, startupLogging);
 
+// Where everything is being read from, before anything is read. In the local mode this is the only
+// way to find out which temporary directory the producer and this process rendezvous in.
 logger.LogInformation(
-    "Consuming from the {Mode} infrastructure, under the namespace {Namespace}.",
-    infrastructure.Options.Mode,
-    infrastructure.Options.Namespace);
+    "I am the consumer. I will read from:{Newline}{Infrastructure}",
+    Environment.NewLine,
+    string.Join(Environment.NewLine, infrastructure.Describe().Select(line => "  " + line)));
 
 // ── The consumer ──────────────────────────────────────────────────────────────────────────────────
 
@@ -95,7 +99,8 @@ HollowHistory history = new(
     consumer.CurrentVersionId,
     infrastructure.Options.Consumer.MaxHistoricalStates);
 
-consumer.AddRefreshListener(new CatalogueHistory(history, logger));
+consumer.AddRefreshListener(
+    new CatalogueHistory(history, logger, infrastructure.Options.Consumer.HistoryBasePath));
 
 HollowHistoryUI historyUI = new(history);
 
@@ -120,6 +125,9 @@ app.MapGet("/", () => Results.Content(HomePage(consumer, history, infrastructure
 
 app.MapHollowExplorer();
 app.MapHollowHistoryUI();
+
+// Said once the server is actually listening, because until then there is no address to print.
+app.Lifetime.ApplicationStarted.Register(() => SayWhereToLook(app, logger, infrastructure));
 
 await app.RunAsync().ConfigureAwait(false);
 
@@ -161,6 +169,31 @@ static async Task WaitForFirstVersionAsync(HollowConsumer consumer, ILogger logg
     }
 }
 
+/// <summary>
+/// Says where the UIs are and what to expect from here on, once the server is listening.
+/// </summary>
+/// <remarks>
+/// The start-up log ends here, and everything after it is a version arriving. Saying so is worth a few
+/// lines: a console that goes quiet after printing a catalogue reads like a consumer that has stopped
+/// watching, which is exactly the opposite of what it is doing.
+/// </remarks>
+static void SayWhereToLook(
+    WebApplication app, ILogger logger, HollowReferenceInfrastructure infrastructure)
+{
+    string home = app.Urls.FirstOrDefault() ?? "http://127.0.0.1:7780";
+
+    logger.LogInformation(
+        """
+        Ready. Watching for new versions; each one the producer announces is logged below as it arrives.
+          home      {Home}
+          explorer  {ExplorerUrl} — every record in the version currently held
+          history   {HistoryUrl} — what each cycle changed, growing as the producer runs
+        """,
+        home,
+        home + infrastructure.Options.Consumer.ExplorerBasePath,
+        home + infrastructure.Options.Consumer.HistoryBasePath);
+}
+
 /// <summary>The application's own page, which is somewhere to come back to from the two UIs.</summary>
 static string HomePage(
     HollowConsumer consumer, HollowHistory history, HollowReferenceInfrastructure infrastructure)
@@ -182,10 +215,8 @@ static string HomePage(
         <head><title>Hollow reference implementation</title></head>
         <body>
             <h1>Hollow reference implementation</h1>
-            <p>
-                Reading from the <b>{infrastructure.Options.Mode}</b> infrastructure, namespace
-                <b>{infrastructure.Options.Namespace}</b>.
-            </p>
+            <p>Reading from:</p>
+            <pre>{string.Join("\n", infrastructure.Describe())}</pre>
             <p>
                 Currently on version <b>{consumer.CurrentVersionId.ToString(CultureInfo.InvariantCulture)}</b>,
                 holding {CatalogueQueries.Describe(consumer)}.

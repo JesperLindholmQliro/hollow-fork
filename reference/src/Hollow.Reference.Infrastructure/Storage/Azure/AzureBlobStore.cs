@@ -52,6 +52,9 @@ public sealed class AzureBlobStore : IHollowBlobStore, IDisposable
         _container = container;
     }
 
+    /// <inheritdoc />
+    public string Description => _container.Uri.ToString();
+
     public async Task WriteAsync(
         string key,
         Stream content,

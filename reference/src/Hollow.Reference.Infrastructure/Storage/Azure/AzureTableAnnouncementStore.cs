@@ -72,6 +72,11 @@ public sealed class AzureTableAnnouncementStore : IHollowAnnouncementStore, IDis
         _blobNamespace = blobNamespace;
     }
 
+    /// <inheritdoc />
+    public string Description =>
+        $"Azure Table Storage table '{_table.Name}' in account '{_table.AccountName}', "
+        + $"the row with partition '{PartitionKey}' and row key '{_blobNamespace}'";
+
     public async Task AnnounceAsync(
         long version,
         IReadOnlyDictionary<string, string> metadata,

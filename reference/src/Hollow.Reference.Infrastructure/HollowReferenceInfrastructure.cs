@@ -108,6 +108,32 @@ public sealed class HollowReferenceInfrastructure : IDisposable
         return new HollowReferenceInfrastructure(options, loggerFactory);
     }
 
+    /// <summary>
+    /// Where this process is about to read and write, in enough detail to go and look.
+    /// </summary>
+    /// <remarks>
+    /// Printed by both applications at start-up. In the local mode the blobs and the rendezvous folder
+    /// are under a temporary directory nobody chose and nothing mentions, and "it worked but I could
+    /// not tell where anything went" is a bad first ten minutes.
+    /// </remarks>
+    public IReadOnlyList<string> Describe()
+    {
+        string announcements = AnnouncementStore.Description;
+
+        if (AnnouncementWatcher is HollowAnnouncementStoreWatcher { IsPushBased: true })
+        {
+            announcements += " (consumers watch it for new files rather than polling it)";
+        }
+
+        return
+        [
+            $"mode          {Options.Mode}",
+            $"namespace     {Options.Namespace}",
+            $"blobs         {BlobStore.Description}, under '{Options.Namespace}/'",
+            $"announcements {announcements}",
+        ];
+    }
+
     public void Dispose()
     {
         // In reverse, so the watcher stops before the store it reads from goes away.

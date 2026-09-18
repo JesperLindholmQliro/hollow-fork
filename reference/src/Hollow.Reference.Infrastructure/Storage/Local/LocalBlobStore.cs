@@ -58,6 +58,9 @@ public sealed class LocalBlobStore : IHollowBlobStore
     /// <summary>The directory blobs are kept in, for anything that wants to say where they went.</summary>
     public string BlobDirectory => _blobDirectory;
 
+    /// <inheritdoc />
+    public string Description => Path.GetFullPath(_blobDirectory);
+
     public async Task WriteAsync(
         string key,
         Stream content,

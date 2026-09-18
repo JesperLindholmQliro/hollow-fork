@@ -15,6 +15,7 @@
  *
  */
 
+using System.Globalization;
 using Hollow.Api.Consumer;
 using Hollow.Api.Producer;
 using Hollow.Api.Producer.Listener;
@@ -53,6 +54,7 @@ internal sealed class PublishingService : BackgroundService
     private readonly IAnnouncer _announcer;
     private readonly IBlobRetriever _blobRetriever;
     private readonly IAnnouncementWatcher _announcementWatcher;
+    private readonly HollowReferenceInfrastructure _infrastructure;
     private readonly HollowReferenceOptions _options;
     private readonly ILogger<PublishingService> _logger;
 
@@ -61,6 +63,7 @@ internal sealed class PublishingService : BackgroundService
         IAnnouncer announcer,
         IBlobRetriever blobRetriever,
         IAnnouncementWatcher announcementWatcher,
+        HollowReferenceInfrastructure infrastructure,
         HollowReferenceOptions options,
         ILogger<PublishingService> logger)
     {
@@ -68,16 +71,19 @@ internal sealed class PublishingService : BackgroundService
         _announcer = announcer;
         _blobRetriever = blobRetriever;
         _announcementWatcher = announcementWatcher;
+        _infrastructure = infrastructure;
         _options = options;
         _logger = logger;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        // Where everything is going, before anything goes there. In the local mode this is the only
+        // way to find out which temporary directory the consumer will have to be pointed at.
         _logger.LogInformation(
-            "Producing into the {Mode} infrastructure, under the namespace {Namespace}.",
-            _options.Mode,
-            _options.Namespace);
+            "I am the producer. I will publish to:{Newline}{Infrastructure}",
+            Environment.NewLine,
+            string.Join(Environment.NewLine, _infrastructure.Describe().Select(line => "  " + line)));
 
         HollowProducer producer = new HollowProducerBuilder()
             .WithPublisher(_publisher)
@@ -209,7 +215,7 @@ internal sealed class PublishingService : BackgroundService
             }
         }
 
-        _logger.LogInformation("Ran {Cycles} cycles, which is all that was asked for.", maxCycles);
+        _logger.LogInformation("Ran every cycle that was asked for ({Cycles}).", maxCycles);
     }
 
     /// <summary>Says what each cycle did, which is the whole of the producer's output.</summary>
